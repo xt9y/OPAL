@@ -49,9 +49,10 @@ static int run_with(const std::string&input,std::string*out=nullptr){
 int main(){
     {
         auto p=fresh("opal-setup-host-test");reset_calls();std::string out;
-        assert(run_with("1\ny\nn\n",&out)==0);
+        assert(run_with("1\ny\n",&out)==0);
         opal::Ini c;assert(c.load(p/"config.ini"));assert(c.get("opal","role")=="host");
-        assert(opal::host_setup_calls==1);assert(opal::tunnel_setup_calls==1);assert(opal::tunnel_start_calls==1);assert(opal::host_run_calls==1);
+        assert(opal::host_setup_calls==1);assert(opal::tunnel_setup_calls==1);
+        assert(opal::host_service_calls==1);assert(opal::tunnel_start_calls==0);assert(opal::host_run_calls==0);
         assert(out.find("opal:control-token,video-token")!=std::string::npos);
     }
     {
@@ -62,7 +63,7 @@ int main(){
     }
     {
         auto p=fresh("opal-auto-host-test");reset_calls();opal::Ini c;c.set("opal","role","host");c.save(p/"config.ini");
-        assert(run_with("")==0);assert(opal::tunnel_start_calls==1);assert(opal::host_run_calls==1);
+        assert(run_with("")==0);assert(opal::host_service_calls==1);assert(opal::tunnel_start_calls==0);assert(opal::host_run_calls==0);
     }
     {
         auto p=fresh("opal-auto-client-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.save(p/"hosts.ini");
