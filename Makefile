@@ -13,7 +13,8 @@ PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/net.cpp src/tunnel.cpp src/system.cpp $(CORE_SRCS)
+INPUT_SRCS := src/input.cpp
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/net.cpp src/tunnel.cpp src/system.cpp $(CORE_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
 
@@ -35,7 +36,7 @@ test-media: | $(BUILD)
 	$(BUILD)/test-media
 
 test-input: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp src/input.cpp -o $(BUILD)/test-input
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp $(INPUT_SRCS) -o $(BUILD)/test-input
 	$(BUILD)/test-input
 
 test-setup: | $(BUILD)
