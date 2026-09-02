@@ -1,4 +1,5 @@
 #include <opal/tunnel.hpp>
+#include <arpa/inet.h>
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -6,7 +7,9 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -30,7 +33,7 @@ printf '%s\n' "$*" >> "$ZROK_TEST_LOG"
 case "$1" in
   status)
     echo 'Config:'
-    if [ "$ZROK_TEST_MODE" = enabled ] || [ -f "$ZROK_TEST_MARKER" ]; then
+    if [ "$ZROK_TEST_MODE" = enabled ] || [ "$ZROK_TEST_MODE" = access-delayed ] || [ -f "$ZROK_TEST_MARKER" ]; then
       echo 'Environment:'
       echo 'EnvZId <<SET>>'
     else
@@ -62,6 +65,33 @@ case "$1" in
     sleep 2
     exit 0
     ;;
+  access)
+    [ "$ZROK_TEST_MODE" = access-delayed ] || exit 0
+    case "$*" in
+      *127.0.0.1:47990*) port=47990; delay=1 ;;
+      *127.0.0.1:47991*) port=47991; delay=2 ;;
+      *) exit 81 ;;
+    esac
+    sleep "$delay"
+    exec python3 - "$port" <<'PY'
+import socket
+import sys
+import time
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', port))
+s.listen(8)
+s.settimeout(0.25)
+end = time.time() + 6
+while time.time() < end:
+    try:
+        conn, _ = s.accept()
+        conn.close()
+    except socket.timeout:
+        pass
+PY
+    ;;
 esac
 exit 0
 )SH";
@@ -73,6 +103,18 @@ exit 0
 static std::string read_all(const fs::path &path) {
     std::ifstream in(path);
     return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+}
+
+static bool can_connect(uint16_t port) {
+    int fd=socket(AF_INET,SOCK_STREAM,0);
+    if(fd<0) return false;
+    sockaddr_in addr{};
+    addr.sin_family=AF_INET;
+    addr.sin_port=htons(port);
+    inet_pton(AF_INET,"127.0.0.1",&addr.sin_addr);
+    bool ok=connect(fd,reinterpret_cast<sockaddr*>(&addr),sizeof(addr))==0;
+    close(fd);
+    return ok;
 }
 
 int main() {
@@ -114,6 +156,13 @@ int main() {
         log=read_all(root/"zrok.log");
         assert(log.find("share private --headless --share-token opal-ctl-")!=std::string::npos);
         assert(log.find("share private --headless --share-token opal-vid-")!=std::string::npos);
+    }
+
+    {
+        make_fake_zrok("opal-zrok-access-readiness-test","access-delayed");
+        assert(opal::tunnel_access("control-token","video-token"));
+        assert(can_connect(47990));
+        assert(can_connect(47991));
     }
 
     std::cout << "tunnel tests passed\n";
