@@ -23,16 +23,16 @@ namespace {
 int set_cloexec(int fd){if(fd<0)return -1;int f=fcntl(fd,F_GETFD,0);return f<0||fcntl(fd,F_SETFD,f|FD_CLOEXEC)<0?-1:0;}
 int make_socket(int family,int type,int protocol){
 #ifdef SOCK_CLOEXEC
-    int fd=socket(family,type|SOCK_CLOEXEC,protocol);
-    if(fd>=0)return fd;
+    int cloexec_fd=socket(family,type|SOCK_CLOEXEC,protocol);
+    if(cloexec_fd>=0)return cloexec_fd;
     if(errno!=EINVAL&&errno!=EPROTONOSUPPORT)return -1;
 #endif
     int fd=socket(family,type,protocol);if(fd>=0&&set_cloexec(fd)!=0){close(fd);return -1;}return fd;
 }
 int accept_socket(int lfd){
 #ifdef __linux__
-    int fd=accept4(lfd,nullptr,nullptr,SOCK_CLOEXEC);
-    if(fd>=0)return fd;
+    int cloexec_fd=accept4(lfd,nullptr,nullptr,SOCK_CLOEXEC);
+    if(cloexec_fd>=0)return cloexec_fd;
     if(errno!=ENOSYS&&errno!=EINVAL)return -1;
 #endif
     int fd=accept(lfd,nullptr,nullptr);if(fd>=0&&set_cloexec(fd)!=0){close(fd);return -1;}return fd;
