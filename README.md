@@ -48,6 +48,18 @@ The first host setup creates two persistent private zrok2 shares and prints one 
 
 If zrok2 is installed but not enabled, OPAL asks for your zrok enable token and runs `zrok2 enable` for you.
 
+## Clean local OPAL state
+
+To completely reset OPAL and its zrok tunnels on the current computer:
+
+```bash
+opal clean
+```
+
+This stops and disables the local OPAL host/bridge services, terminates local zrok2 private share/access tunnel processes, deletes the persistent zrok shares created by this computer's OPAL host setup, and removes `~/.opal` including saved hosts, pairings, identities, connection codes, and OPAL configuration.
+
+`opal clean` intentionally does **not** run `zrok2 disable` and does not remove `~/.zrok2`, so the zrok2 environment/login stays enabled. The next `opal` run starts as a fresh OPAL setup without requiring you to link/login to zrok again.
+
 For advanced and scripting commands:
 
 ```bash
