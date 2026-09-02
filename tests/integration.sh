@@ -22,7 +22,7 @@ exit 0
 EOF
 chmod +x "$base/bin/ffplay"
 
-OPAL_HOME="$server" "$BIN" host setup >"$base/setup"
+OPAL_HOME="$server" "$BIN" --internal-host-setup >"$base/setup"
 password="$(sed -n 's/^Pairing password: //p' "$base/setup")"
 test -n "$password"
 
@@ -32,11 +32,11 @@ OPAL_INPUT_HELPER="$INPUT_BIN" \
 OPAL_TEST_CONTROL_CLOSE_AFTER_PINGS=1 \
 OPAL_TEST_AUTH_LOG="$base/auth.log" \
 OPAL_TEST_VIDEO_TOKEN_LOG="$base/video-tokens.log" \
-"$BIN" host >"$base/host.log" 2>&1 & hp=$!
+"$BIN" --internal-host-run >"$base/host.log" 2>&1 & hp=$!
 sleep 0.5
 ! grep -q '^Password ' "$base/host.log"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
+OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" --internal-connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
 recovered=0
 i=0
 while test "$i" -lt 140; do
@@ -76,7 +76,7 @@ kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
 sleep 0.2
 kill -0 "$hp"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
+OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" --internal-connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
 second_connected=0
 i=0
 while test "$i" -lt 100; do
