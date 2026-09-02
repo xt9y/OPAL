@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 : "${MAKE:=make}"
+# A real install must apply uinput access immediately, without requiring reboot/logout.
 base="$(mktemp -d)"
 trap 'rm -rf "$base"' EXIT
 mkdir -p "$base/bin" "$base/prefix" "$base/udev"
