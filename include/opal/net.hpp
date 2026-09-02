@@ -17,6 +17,7 @@ bool tls_write_all(SSL *ssl,const void *data,size_t size);
 bool tls_write_all_timeout(SSL *ssl,const void *data,size_t size,int timeout_ms);
 bool tls_write_line(SSL *ssl,const std::string &line);
 bool tls_read_line(SSL *ssl,std::string &line,size_t limit=8192);
+bool tls_read_line_timeout(SSL *ssl,std::string &line,int timeout_ms,size_t limit=8192);
 std::string peer_fingerprint(SSL *ssl);
 std::string primary_ipv4();
 }
