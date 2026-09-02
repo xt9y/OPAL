@@ -34,6 +34,7 @@ OPAL_TEST_AUTH_LOG="$base/auth.log" \
 OPAL_TEST_VIDEO_TOKEN_LOG="$base/video-tokens.log" \
 "$BIN" host >"$base/host.log" 2>&1 & hp=$!
 sleep 0.5
+! grep -q '^Password ' "$base/host.log"
 
 OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 SDL_VIDEODRIVER=wayland "$BIN" connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
 recovered=0

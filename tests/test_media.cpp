@@ -1,6 +1,7 @@
 #include <opal/media.hpp>
 #include <cassert>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -14,6 +15,7 @@ int main() {
         auto capture=opal::start_capture("printf MEDIA");
         assert(capture.pid>0);
         assert(capture.fd>=0);
+        int flags=fcntl(capture.fd,F_GETFD,0);assert(flags>=0);assert((flags&FD_CLOEXEC)!=0);
         char buf[16]{};
         int n=opal::read_capture(capture,buf,sizeof(buf),1000);
         assert(n==5);

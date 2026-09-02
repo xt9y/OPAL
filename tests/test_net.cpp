@@ -8,6 +8,8 @@
 #include <vector>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 
 namespace fs = std::filesystem;
@@ -27,6 +29,12 @@ static uint16_t free_port() {
     return port;
 }
 
+static void assert_cloexec(int fd){
+    int flags=fcntl(fd,F_GETFD,0);
+    assert(flags>=0);
+    assert((flags&FD_CLOEXEC)!=0);
+}
+
 int main() {
     auto root=fs::temp_directory_path()/"opal-net-retry-test";
     fs::remove_all(root);
@@ -44,8 +52,10 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         int listen_fd=opal::listen_tcp(port,"127.0.0.1");
         assert(listen_fd>=0);
+        assert_cloexec(listen_fd);
         auto c=opal::accept_tls(server_ctx,listen_fd);
         assert(c.ssl);
+        assert_cloexec(c.fd);
         assert(opal::tls_write_line(c.ssl,"READY"));
         opal::close_tls(c);
         close(listen_fd);
@@ -57,6 +67,10 @@ int main() {
     assert(c.ssl);
     assert(elapsed>=350);
     assert(elapsed<2500);
+    assert_cloexec(c.fd);
+    int nodelay=0;socklen_t nodelay_len=sizeof(nodelay);
+    assert(getsockopt(c.fd,IPPROTO_TCP,TCP_NODELAY,&nodelay,&nodelay_len)==0);
+    assert(nodelay==1);
     std::string line;
     assert(opal::tls_read_line(c.ssl,line));
     assert(line=="READY");

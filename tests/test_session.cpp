@@ -1,15 +1,19 @@
 #include <opal/session.hpp>
 #include <opal/crypto.hpp>
 #include <opal/net.hpp>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
 #include <mutex>
 #include <poll.h>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -36,12 +40,19 @@ static bool wait_until(const std::function<bool()>&pred,int timeout_ms){
 
 static int line_count(const fs::path&p){std::ifstream in(p);int n=0;std::string s;while(std::getline(in,s))++n;return n;}
 static std::string read_all(const fs::path&p){std::ifstream in(p);return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());}
+static std::string cert_fingerprint(const std::string&path){
+    FILE*f=std::fopen(path.c_str(),"r");assert(f);
+    X509*x=PEM_read_X509(f,nullptr,nullptr,nullptr);std::fclose(f);assert(x);
+    unsigned char md[EVP_MAX_MD_SIZE];unsigned int n=0;assert(X509_digest(x,EVP_sha256(),md,&n)==1);X509_free(x);
+    return opal::hex(md,n);
+}
 
 int main(){
     auto root=fs::temp_directory_path()/"opal-session-supervisor-test";
     fs::remove_all(root);fs::create_directories(root);
     auto cert=(root/"cert.pem").string(),key=(root/"key.pem").string();
     assert(opal::ensure_tls_certificate(cert,key));
+    const auto server_fp=cert_fingerprint(cert);
     auto priv=root/"client.key",pub=root/"client.pub";assert(opal::ensure_identity(priv,pub));
     auto public_hex=opal::public_key_hex(pub);assert(!public_hex.empty());
 
@@ -75,12 +86,16 @@ int main(){
             auto c=opal::accept_tls(server_ctx,lfd);if(!c.ssl)continue;
             ++generation;++control_accepts;
             std::string nonce="nonce-"+std::to_string(generation);
-            // Geometry is part of the opaque signed challenge so old clients
-            // remain compatible while new clients can discover host aspect.
-            assert(opal::tls_write_line(c.ssl,"CHALLENGE "+nonce+" 1920 1080"));
+            std::string challenge=nonce+" 1920 1080";
+            assert(opal::tls_write_line(c.ssl,"CHALLENGE "+challenge));
             std::string line;assert(opal::tls_read_line_timeout(c.ssl,line,3000));
-            if(generation==1){assert(line.rfind("PAIR ",0)==0);++pair_count;}
-            else{assert(line.rfind("AUTH ",0)==0);++auth_count;}
+            if(generation==1){
+                std::istringstream auth(line);std::string mode,pubkey,proof;auth>>mode>>pubkey>>proof;
+                assert(mode=="PAIR");assert(pubkey==public_hex);
+                auto transcript="OPAL-PAIR-v2\n"+server_fp+"\n"+challenge+"\n"+pubkey;
+                assert(proof==opal::hmac_sha256_hex("test-password",transcript));
+                ++pair_count;
+            }else{assert(line.rfind("AUTH ",0)==0);++auth_count;}
             std::string token="video-token-"+std::to_string(generation);
             assert(opal::tls_write_line(c.ssl,"OK "+token));
             while(run.load()){
@@ -148,7 +163,10 @@ int main(){
         return first&&second;
     },5000));
     assert(video_accepts.load()>=3);
+    auto input_started=std::chrono::steady_clock::now();
     assert(session.send_input("MOUSE 1 2"));
+    auto input_elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-input_started).count();
+    assert(input_elapsed<100);
 
     session.stop();run.store(false);
     control_server.join();video_server.join();SSL_CTX_free(server_ctx);
