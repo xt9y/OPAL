@@ -160,8 +160,7 @@ bool local_port_ready(uint16_t port) {
     return ready;
 }
 
-bool wait_for_access_endpoints(pid_t &control_pid,pid_t &video_pid) {
-    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+bool wait_for_access_endpoints(pid_t &control_pid,pid_t &video_pid,std::chrono::steady_clock::time_point deadline) {
     bool control_ready=false;
     bool video_ready=false;
     while(std::chrono::steady_clock::now()<deadline) {
@@ -284,6 +283,21 @@ void record_pids(const std::filesystem::path &path,const std::vector<pid_t> &pid
     }
 }
 
+bool recorded_processes_healthy(const std::filesystem::path &path,size_t expected) {
+    std::ifstream in(path);
+    if(!in) return false;
+    size_t count=0;
+    pid_t pid=0;
+    unsigned long long start=0;
+    while(in>>pid>>start) {
+        ++count;
+        if(pid<=0||!start) return false;
+        if(process_start_time(pid)!=start) return false;
+        if(!pid_exists(pid)||!is_zrok_private_process(pid,true)) return false;
+    }
+    return count==expected;
+}
+
 void stop_recorded(const std::filesystem::path &path) {
     std::ifstream in(path);
     std::vector<pid_t> pids;
@@ -393,17 +407,34 @@ int tunnel_host_start() {
     return 0;
 }
 
-bool tunnel_access(const std::string &control_token,const std::string &video_token) {
+bool tunnel_host_healthy() {
+    return recorded_processes_healthy(pid_file("host"),2);
+}
+
+int tunnel_host_ensure_running() {
+    if(tunnel_host_healthy()) return 0;
+    return tunnel_host_start();
+}
+
+bool tunnel_access(const std::string &control_token,const std::string &video_token,int timeout_ms) {
     if(!ensure_zrok2()) return false;
     stop_opal_tunnel_processes();
-    auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"},true);
-    auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"},true);
-    if(!wait_for_access_endpoints(control_pid,video_pid)) {
+    if(timeout_ms<1) timeout_ms=1;
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(timeout_ms);
+    while(std::chrono::steady_clock::now()<deadline) {
+        auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"},true);
+        auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"},true);
+        auto attempt_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        if(attempt_deadline>deadline) attempt_deadline=deadline;
+        if(wait_for_access_endpoints(control_pid,video_pid,attempt_deadline)) {
+            record_pids(pid_file("access"),{control_pid,video_pid});
+            return true;
+        }
         terminate_pids({control_pid,video_pid});
-        return false;
+        if(std::chrono::steady_clock::now()>=deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-    record_pids(pid_file("access"),{control_pid,video_pid});
-    return true;
+    return false;
 }
 
 int tunnel_clean_local() {
