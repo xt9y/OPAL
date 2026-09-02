@@ -33,6 +33,7 @@ int main() {
     assert(!opal::secure_equal(proof, opal::hmac_sha256_hex("wrong", nonce)));
 
     unsetenv("WAYLAND_DISPLAY");
+    unsetenv("OPAL_DEBUG");
     auto cmd = opal::capture_command(true, 60, 20000, true);
     assert(cmd.find("gpu-screen-recorder") != std::string::npos);
     assert(cmd.find(" -w screen ") != std::string::npos);
@@ -45,8 +46,14 @@ int main() {
     assert(cmd.find(" -a default_output") != std::string::npos);
     assert(cmd.find(" -c flv ") != std::string::npos);
     assert(cmd.find(" -o -") != std::string::npos);
+    assert(cmd.find("2>/dev/null") != std::string::npos);
     assert(cmd.find("WAYLAND_DISPLAY:-screen") == std::string::npos);
     assert(cmd.find("portalwayland") == std::string::npos);
+
+    setenv("OPAL_DEBUG", "1", 1);
+    auto debug_cmd = opal::capture_command(true, 60, 20000, false);
+    assert(debug_cmd.find("2>/dev/null") == std::string::npos);
+    unsetenv("OPAL_DEBUG");
 
     setenv("WAYLAND_DISPLAY", "wayland-0", 1);
     auto wayland_cmd = opal::capture_command(true, 60, 20000, false);
