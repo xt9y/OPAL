@@ -8,8 +8,10 @@
 #include <sys/socket.h>
 #include <ifaddrs.h>
 #include <unistd.h>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <thread>
 
 namespace opal {
 int listen_tcp(uint16_t port,const std::string&bind_address){addrinfo hints{},*res=nullptr;hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;hints.ai_flags=AI_PASSIVE;std::string ps=std::to_string(port);const char*host=(bind_address=="0.0.0.0"||bind_address.empty())?nullptr:bind_address.c_str();if(getaddrinfo(host,ps.c_str(),&hints,&res)!=0)return -1;int fd=-1;for(auto*p=res;p;p=p->ai_next){fd=socket(p->ai_family,p->ai_socktype,p->ai_protocol);if(fd<0)continue;int yes=1;setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes));if(bind(fd,p->ai_addr,p->ai_addrlen)==0&&listen(fd,32)==0)break;close(fd);fd=-1;}freeaddrinfo(res);return fd;}
@@ -19,6 +21,7 @@ SSL_CTX*server_tls_context(const std::string&cert,const std::string&key){SSL_CTX
 SSL_CTX*client_tls_context(){SSL_CTX*c=SSL_CTX_new(TLS_client_method());if(!c)return nullptr;SSL_CTX_set_min_proto_version(c,TLS1_3_VERSION);SSL_CTX_set_verify(c,SSL_VERIFY_NONE,nullptr);return c;}
 TlsConn accept_tls(SSL_CTX*ctx,int lfd){TlsConn c;c.fd=accept(lfd,nullptr,nullptr);if(c.fd<0)return c;c.ssl=SSL_new(ctx);SSL_set_fd(c.ssl,c.fd);if(SSL_accept(c.ssl)!=1){close_tls(c);}return c;}
 TlsConn connect_tls(SSL_CTX*ctx,const std::string&host,uint16_t port){TlsConn c;c.fd=connect_tcp(host,port);if(c.fd<0)return c;c.ssl=SSL_new(ctx);SSL_set_fd(c.ssl,c.fd);SSL_set_tlsext_host_name(c.ssl,host.c_str());if(SSL_connect(c.ssl)!=1)close_tls(c);return c;}
+TlsConn connect_tls_retry(SSL_CTX*ctx,const std::string&host,uint16_t port,int timeout_ms,int retry_ms){timeout_ms=std::max(0,timeout_ms);retry_ms=std::max(1,retry_ms);auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(timeout_ms);for(;;){auto c=connect_tls(ctx,host,port);if(c.ssl)return c;auto now=std::chrono::steady_clock::now();if(now>=deadline)return{};auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now);std::this_thread::sleep_for(std::min(std::chrono::milliseconds(retry_ms),remaining));}}
 void close_tls(TlsConn&c){if(c.ssl){SSL_shutdown(c.ssl);SSL_free(c.ssl);c.ssl=nullptr;}if(c.fd>=0){close(c.fd);c.fd=-1;}}
 bool tls_write_all(SSL*s,const void*d,size_t n){auto*p=static_cast<const unsigned char*>(d);while(n){int w=SSL_write(s,p,static_cast<int>(std::min<size_t>(n,1<<20)));if(w<=0)return false;p+=w;n-=static_cast<size_t>(w);}return true;}
 bool tls_write_line(SSL*s,const std::string&line){std::string x=line;if(x.empty()||x.back()!='\n')x+='\n';return tls_write_all(s,x.data(),x.size());}
