@@ -24,17 +24,14 @@ static std::string motion_command(double dx,double dy){
 }
 std::string raw_motion_command(double dx,double dy){return motion_command(dx,dy);}
 
-double mouse_normalization_scale(int resolution){
-    if(resolution<5000||resolution>400000)return 1.0;
-    constexpr double target_counts_per_meter=1000.0/0.0254;
-    return std::clamp(target_counts_per_meter/static_cast<double>(resolution),0.25,4.0);
-}
+// XI2 RawMotion values are already device-relative counts. Re-scaling those
+// counts from XI2 resolution metadata changes the physical motion rate and
+// makes the remote pointer intrinsically faster/slower than the source.
+double mouse_normalization_scale(int){return 1.0;}
 
 double clamp_mouse_sensitivity(double sensitivity){return std::clamp(sensitivity,0.1,4.0);}
 
-std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y,double sensitivity){
-    dx*=mouse_normalization_scale(resolution_x);
-    dy*=mouse_normalization_scale(resolution_y);
+std::string normalized_motion_command(double dx,double dy,int,int,double sensitivity){
     const double user_scale=clamp_mouse_sensitivity(sensitivity);
     dx*=user_scale;
     dy*=user_scale;
