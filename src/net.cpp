@@ -66,6 +66,33 @@ bool tls_write_all_timeout(SSL*s,const void*d,size_t n,int timeout_ms){
 
 bool tls_write_line(SSL*s,const std::string&line){std::string x=line;if(x.empty()||x.back()!='\n')x+='\n';return tls_write_all(s,x.data(),x.size());}
 bool tls_read_line(SSL*s,std::string&line,size_t limit){line.clear();char ch;while(line.size()<limit){int n=SSL_read(s,&ch,1);if(n<=0)return false;if(ch=='\n')return true;if(ch!='\r')line+=ch;}return false;}
+
+bool tls_read_line_timeout(SSL*s,std::string&line,int timeout_ms,size_t limit){
+    line.clear();
+    if(!s)return false;
+    int fd=SSL_get_fd(s);
+    if(fd<0)return false;
+    int flags=fcntl(fd,F_GETFL,0);
+    if(flags<0||fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0)return false;
+    auto restore=[&]{fcntl(fd,F_SETFL,flags);};
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(std::max(0,timeout_ms));
+    while(line.size()<limit){
+        char ch=0;
+        int n=SSL_read(s,&ch,1);
+        if(n>0){
+            if(ch=='\n'){restore();return true;}
+            if(ch!='\r')line+=ch;
+            continue;
+        }
+        int err=SSL_get_error(s,n);
+        if(err!=SSL_ERROR_WANT_READ&&err!=SSL_ERROR_WANT_WRITE){restore();return false;}
+        short events=err==SSL_ERROR_WANT_WRITE?POLLOUT:POLLIN;
+        if(!wait_for_ssl_fd(fd,events,deadline)){restore();return false;}
+    }
+    restore();
+    return false;
+}
+
 std::string peer_fingerprint(SSL*s){X509*c=SSL_get1_peer_certificate(s);if(!c)return{};unsigned char md[EVP_MAX_MD_SIZE];unsigned int n=0;std::string out;if(X509_digest(c,EVP_sha256(),md,&n)==1)out=hex(md,n);X509_free(c);return out;}
 std::string primary_ipv4(){ifaddrs*list=nullptr;if(getifaddrs(&list)!=0)return"127.0.0.1";std::string out="127.0.0.1";for(auto*p=list;p;p=p->ifa_next){if(!p->ifa_addr||p->ifa_addr->sa_family!=AF_INET)continue;auto*a=reinterpret_cast<sockaddr_in*>(p->ifa_addr);char buf[INET_ADDRSTRLEN]{};if(!inet_ntop(AF_INET,&a->sin_addr,buf,sizeof(buf)))continue;std::string ip=buf;if(ip.rfind("127.",0)!=0){out=ip;break;}}freeifaddrs(list);return out;}
 }
