@@ -3,26 +3,36 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
+#include <filesystem>
 #include <poll.h>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 
 namespace opal {
-std::string capture_command(bool gsr,int fps,int bitrate,bool audio){
+static std::string quote_arg(const std::string&s){std::string out="'";for(char c:s){if(c=='\'')out+="'\\''";else out+=c;}out+="'";return out;}
+
+std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::string &portal_token_file){
     fps=std::clamp(fps,15,240);
     bitrate=std::clamp(bitrate,1000,100000);
     if(gsr){
         const char *wayland=std::getenv("WAYLAND_DISPLAY");
         const char *debug=std::getenv("OPAL_DEBUG");
-        const std::string source=(wayland&&*wayland)?"portal":"screen";
+        const bool portal=wayland&&*wayland;
+        const std::string source=portal?"portal":"screen";
         const bool debug_enabled=debug&&*debug&&std::string(debug)!="0";
+        std::string portal_args;
+        if(portal&&!portal_token_file.empty()){
+            portal_args+=" -portal-session-token-filepath "+quote_arg(portal_token_file);
+            if(std::filesystem::exists(portal_token_file))portal_args+=" -restore-portal-session yes";
+        }
         return "gpu-screen-recorder -w "+source+
             " -f "+std::to_string(fps)+
             " -fm cfr -keyint 1"
             " -k h264 -fallback-cpu-encoding yes -bm cbr -q "+std::to_string(bitrate)+
             " -v no"+
             (audio?" -a default_output":"")+
+            portal_args+
             " -c flv"+
             (debug_enabled?"":" 2>/dev/null");
     }
