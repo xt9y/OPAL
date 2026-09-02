@@ -18,7 +18,7 @@ Advanced commands:
   opal setup
   opal init
   opal clean
-  opal host [setup|enable|disable]
+  opal host [setup|enable|disable|daemon]
   opal connect <host|ip|zrok:CONTROL,VIDEO> [password]
   opal hosts [list|add <name> <address> [mac]]
   opal wake <saved-host>
@@ -48,6 +48,7 @@ int main(int argc,char **argv) {
         if(argc>=3&&std::string(argv[2])=="setup") return opal::host_setup();
         if(argc>=3&&std::string(argv[2])=="enable") return opal::host_service(true);
         if(argc>=3&&std::string(argv[2])=="disable") return opal::host_service(false);
+        if(argc>=3&&std::string(argv[2])=="daemon") return opal::host_daemon();
         return opal::host_run();
     }
     if(a=="connect"&&argc>=3) return opal::client_connect(argv[2],argc>=4?argv[3]:"");
