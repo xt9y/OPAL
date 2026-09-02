@@ -7,6 +7,8 @@ OPAL_HOME="$tmp/.opal" "$BIN" version | grep -q '^OPAL 0.1.0$'
 OPAL_HOME="$tmp/.opal" "$BIN" help >"$tmp/help.txt"
 grep -q 'Advanced commands:' "$tmp/help.txt"
 grep -q 'opal host' "$tmp/help.txt"
+OPAL_HOME="$tmp/.opal" "$BIN" doctor >"$tmp/doctor.txt"
+grep -q 'XInput2 raw client input' "$tmp/doctor.txt"
 
 printf '3\n' | OPAL_HOME="$tmp/fresh" "$BIN" >"$tmp/default.txt"
 grep -q '^OPAL SETUP$' "$tmp/default.txt"
