@@ -31,10 +31,12 @@ printf '%s\n' "$*" >>"$OPAL_TEST_SYSTEMCTL_LOG"
 EOF
 chmod +x "$tmp/bin/systemctl"
 : >"$tmp/systemctl.log"
+touch "$tmp/.opal/restart-sentinel"
 PATH="$tmp/bin:$PATH" OPAL_TEST_SYSTEMCTL_LOG="$tmp/systemctl.log" OPAL_HOME="$tmp/.opal" "$BIN" restart >"$tmp/restart.txt"
 grep -Fxq -- '--user daemon-reload' "$tmp/systemctl.log"
 grep -Fxq -- '--user try-restart opal-host.service' "$tmp/systemctl.log"
 grep -Fxq -- '--user try-restart opal-bridge.service' "$tmp/systemctl.log"
+test -f "$tmp/.opal/restart-sentinel"
 
 "$INPUT_BIN" </dev/null >/dev/null 2>&1 || true
 echo 'smoke tests passed'
