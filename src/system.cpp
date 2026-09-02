@@ -35,7 +35,8 @@ int clean(){
 
     int access_rc=clean_zrok_accesses();
     int share_rc=tunnel_clean_local();
-    if(access_rc!=0||share_rc!=0){
+    int verify_rc=verify_zrok_host_shares_absent();
+    if(access_rc!=0||share_rc!=0||verify_rc!=0){
         std::cerr<<"OPAL cleanup incomplete. Local OPAL state was preserved so cleanup can be retried.\n";
         return 1;
     }
