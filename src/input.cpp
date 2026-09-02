@@ -16,10 +16,19 @@ int linux_keycode_from_x11(unsigned int keycode){
 }
 
 static long rounded_delta(double value){return value>=0.0?static_cast<long>(value+0.5):static_cast<long>(value-0.5);}
-std::string raw_motion_command(double dx,double dy){
+static std::string motion_command(double dx,double dy){
     long x=rounded_delta(dx),y=rounded_delta(dy);
     if(x==0&&y==0)return{};
     return "MOUSE "+std::to_string(x)+" "+std::to_string(y);
+}
+std::string raw_motion_command(double dx,double dy){return motion_command(dx,dy);}
+std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y){
+    constexpr double target_counts_per_meter=1000.0/0.0254;
+    // XI2/XWayland may expose synthetic resolutions such as 0 or 1. Only
+    // treat a value as physical sensor resolution when it is plausible.
+    if(resolution_x>=1000)dx=dx*target_counts_per_meter/static_cast<double>(resolution_x);
+    if(resolution_y>=1000)dy=dy*target_counts_per_meter/static_cast<double>(resolution_y);
+    return motion_command(dx,dy);
 }
 
 bool HeldInputState::press_key(int code){if(code<=0)return false;return keys_.insert(code).second;}
