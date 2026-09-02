@@ -1,6 +1,8 @@
 #include <opal/tunnel.hpp>
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -118,6 +120,41 @@ bool child_started(pid_t pid) {
     return rc==0;
 }
 
+bool child_alive(pid_t &pid) {
+    if(pid<0) return false;
+    int status=0;
+    pid_t rc=waitpid(pid,&status,WNOHANG);
+    if(rc==0) return true;
+    if(rc==pid) pid=-1;
+    return false;
+}
+
+bool local_port_ready(uint16_t port) {
+    int fd=socket(AF_INET,SOCK_STREAM,0);
+    if(fd<0) return false;
+    sockaddr_in addr{};
+    addr.sin_family=AF_INET;
+    addr.sin_port=htons(port);
+    inet_pton(AF_INET,"127.0.0.1",&addr.sin_addr);
+    bool ready=connect(fd,reinterpret_cast<sockaddr*>(&addr),sizeof(addr))==0;
+    close(fd);
+    return ready;
+}
+
+bool wait_for_access_endpoints(pid_t &control_pid,pid_t &video_pid) {
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    bool control_ready=false;
+    bool video_ready=false;
+    while(std::chrono::steady_clock::now()<deadline) {
+        if(!child_alive(control_pid)||!child_alive(video_pid)) return false;
+        if(!control_ready) control_ready=local_port_ready(47990);
+        if(!video_ready) video_ready=local_port_ready(47991);
+        if(control_ready&&video_ready) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return false;
+}
+
 std::string make_token(const char *kind) {
     return std::string("opal-")+kind+"-"+random_hex(5);
 }
@@ -199,7 +236,7 @@ bool tunnel_access(const std::string &control_token,const std::string &video_tok
     if(!ensure_zrok2()) return false;
     auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"});
     auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"});
-    if(!child_started(control_pid)||!child_started(video_pid)) {
+    if(!wait_for_access_endpoints(control_pid,video_pid)) {
         if(control_pid>0) kill(control_pid,SIGTERM);
         if(video_pid>0) kill(video_pid,SIGTERM);
         return false;
