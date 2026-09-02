@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -87,7 +88,7 @@ s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('127.0.0.1', port))
 s.listen(8)
 s.settimeout(0.25)
-end = time.time() + 6
+end = time.time() + 12
 while time.time() < end:
     try:
         conn, _ = s.accept()
@@ -121,10 +122,20 @@ static bool can_connect(uint16_t port) {
     return ok;
 }
 
-static void stop_fake_zrok(const fs::path &root) {
+static std::vector<pid_t> read_pids(const fs::path &root) {
     std::ifstream in(root/"pids");
+    std::vector<pid_t> pids;
     pid_t pid=0;
-    while(in>>pid) {
+    while(in>>pid) pids.push_back(pid);
+    return pids;
+}
+
+static bool process_alive(pid_t pid) {
+    return pid>0 && kill(pid,0)==0;
+}
+
+static void stop_fake_zrok(const fs::path &root) {
+    for(auto pid:read_pids(root)) {
         kill(pid,SIGTERM);
         waitpid(pid,nullptr,0);
     }
@@ -173,9 +184,19 @@ int main() {
 
     {
         auto root=make_fake_zrok("opal-zrok-access-readiness-test","access-delayed");
-        assert(opal::tunnel_access("control-token","video-token"));
+        assert(opal::tunnel_access("old-control-token","old-video-token"));
         assert(can_connect(47990));
         assert(can_connect(47991));
+        auto old_pids=read_pids(root);
+        assert(old_pids.size()==2);
+        assert(process_alive(old_pids[0]));
+        assert(process_alive(old_pids[1]));
+
+        assert(opal::tunnel_access("new-control-token","new-video-token"));
+        for(auto pid:old_pids) assert(!process_alive(pid));
+        auto log=read_all(root/"zrok.log");
+        assert(log.find("access private new-control-token")!=std::string::npos);
+        assert(log.find("access private new-video-token")!=std::string::npos);
         stop_fake_zrok(root);
     }
 
