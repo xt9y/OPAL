@@ -17,7 +17,13 @@ control_token=opal-ctl-clean-test
 video_token=opal-vid-clean-test
 mode=zrok2-private
 EOF
-printf '[desktop]\naddress=opal:remote-control,remote-video\n' > "$opal_home/hosts.ini"
+cat > "$opal_home/hosts.ini" <<'EOF'
+[desktop]
+address=opal:remote-control,remote-video
+
+[lan-only]
+address=192.0.2.10
+EOF
 printf 'identity\n' > "$opal_home/identity.key"
 
 cat > "$bin/systemctl" <<'EOF'
@@ -34,7 +40,24 @@ case "$1 $2" in
   'access private'|'share private')
     while :; do sleep 1; done
     ;;
-  'delete share')
+  'list accesses')
+    token=''
+    prev=''
+    for arg in "$@"; do
+      if [ "$prev" = --share-token ]; then token="$arg"; break; fi
+      prev="$arg"
+    done
+    case "$token" in
+      opal-ctl-clean-test) front='front-host-control' ;;
+      opal-vid-clean-test) front='front-host-video' ;;
+      remote-control) front='front-remote-control' ;;
+      remote-video) front='front-remote-video' ;;
+      *) printf '{"accesses":[]}\n'; exit 0 ;;
+    esac
+    printf '{"accesses":[{"frontendToken":"%s","shareToken":"%s"}]}\n' "$front" "$token"
+    exit 0
+    ;;
+  'delete access'|'delete share')
     exit 0
     ;;
 esac
@@ -69,11 +92,19 @@ share_pid=""
 
 test ! -e "$opal_home"
 test -f "$home/.zrok2/environment"
+for token in opal-ctl-clean-test opal-vid-clean-test remote-control remote-video; do
+    grep -q "^list accesses --share-token $token --json$" "$base/zrok.log"
+done
+for frontend in front-host-control front-host-video front-remote-control front-remote-video; do
+    grep -q "^delete access $frontend$" "$base/zrok.log"
+done
 grep -q '^delete share opal-ctl-clean-test$' "$base/zrok.log"
 grep -q '^delete share opal-vid-clean-test$' "$base/zrok.log"
+! grep -q '^delete share remote-control$' "$base/zrok.log"
+! grep -q '^delete share remote-video$' "$base/zrok.log"
 ! grep -q '^disable' "$base/zrok.log"
 grep -q '^--user disable --now opal-host.service$' "$base/systemctl.log"
 grep -q '^--user disable --now opal-bridge.service$' "$base/systemctl.log"
-grep -q 'OPAL local state cleaned' "$base/clean.out"
+grep -q 'OPAL state cleaned' "$base/clean.out"
 
 echo 'clean tests passed'
