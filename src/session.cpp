@@ -23,7 +23,7 @@
 namespace opal { namespace {
 using namespace std::chrono_literals;
 bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");if(!v||!*v)return false;std::string x=v;return x!="0"&&x!="false"&&x!="FALSE"&&x!="off"&&x!="OFF";}
-std::string player_command(){if(const char*e=std::getenv("OPAL_PLAYER_CMD");e&&*e)return e;std::string cmd=debug_enabled()?"ffplay -hide_banner -loglevel warning -flags low_delay -framedrop -fs -autoexit -i pipe:0":"ffplay -hide_banner -loglevel quiet -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1";if(const char*wayland=std::getenv("WAYLAND_DISPLAY");wayland&&*wayland)cmd="SDL_VIDEODRIVER=wayland "+cmd;else if(const char*display=std::getenv("DISPLAY");display&&*display)cmd="SDL_VIDEODRIVER=x11 "+cmd;return cmd;}
+std::string player_command(){if(const char*e=std::getenv("OPAL_PLAYER_CMD");e&&*e)return e;std::string cmd=debug_enabled()?"ffplay -hide_banner -loglevel warning -flags low_delay -framedrop -fs -autoexit -i pipe:0":"ffplay -hide_banner -loglevel quiet -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1";if(const char*display=std::getenv("DISPLAY");display&&*display)cmd="SDL_VIDEODRIVER=x11 "+cmd;return cmd;}
 bool wait_for_input(int fd,int timeout_ms){pollfd p{fd,POLLIN,0};for(;;){int rc=poll(&p,1,timeout_ms);if(rc<0&&errno==EINTR)continue;if(rc<=0)return false;if(p.revents&(POLLERR|POLLHUP|POLLNVAL))return false;return(p.revents&POLLIN)!=0;}}
 bool pointer_command(const std::string&s){return s.rfind("POINTER ",0)==0;}
 bool valid_mac(const std::string&s){if(s.size()!=17)return false;for(size_t i=0;i<s.size();++i){if((i+1)%3==0){if(s[i]!=':')return false;}else if(!std::isxdigit(static_cast<unsigned char>(s[i])))return false;}return true;}
