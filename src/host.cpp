@@ -3,6 +3,7 @@
 #include <opal/crypto.hpp>
 #include <opal/media.hpp>
 #include <opal/net.hpp>
+#include <opal/tunnel.hpp>
 #include <atomic>
 #include <cstdio>
 #include <fstream>
@@ -32,4 +33,5 @@ static void video_client(TlsConn c){if(!c.ssl)return;std::string line;if(!tls_re
 static void video_loop(SSL_CTX*ctx,int lfd){for(;;){auto c=accept_tls(ctx,lfd);if(c.ssl)std::thread(video_client,c).detach();}}
 int host_setup(){G=Paths::load();if(!ensure_layout(G))return 1;if(!ensure_identity(G.identity_key,G.identity_pub)){std::cerr<<"identity generation failed\n";return 1;}if(!ensure_tls_certificate(G.cert.string(),G.cert_key.string())){std::cerr<<"TLS certificate generation failed (openssl CLI required)\n";return 1;}Ini cfg;if(std::filesystem::exists(G.host))cfg.load(G.host);if(cfg.get("host","password").empty())cfg.set("host","password",pairing_code());cfg.set("host","port","47990");cfg.set("host","video_port","47991");cfg.set("video","fps",cfg.get("video","fps","60"));cfg.set("video","bitrate_kbps",cfg.get("video","bitrate_kbps","20000"));cfg.set("audio","enabled",cfg.get("audio","enabled","true"));if(!cfg.save(G.host))return 1;std::cout<<"OPAL host configured\nPairing password: "<<cfg.get("host","password")<<"\nConfig: "<<G.host<<"\n";return 0;}
 int host_run(){G=Paths::load();ensure_layout(G);if(!host_cfg.load(G.host)){if(host_setup()!=0)return 1;host_cfg.load(G.host);}ensure_identity(G.identity_key,G.identity_pub);ensure_tls_certificate(G.cert.string(),G.cert_key.string());SSL_CTX*ctx=server_tls_context(G.cert.string(),G.cert_key.string());if(!ctx){std::cerr<<"cannot create TLS context\n";return 1;}int cp=host_cfg.get_int("host","port",47990),vp=host_cfg.get_int("host","video_port",47991);int lc=listen_tcp(static_cast<uint16_t>(cp)),lv=listen_tcp(static_cast<uint16_t>(vp));if(lc<0||lv<0){std::cerr<<"cannot bind OPAL ports\n";return 1;}std::cout<<"OPAL HOST\nAddress  "<<primary_ipv4()<<":"<<cp<<"\nControl  0.0.0.0:"<<cp<<"\nVideo    0.0.0.0:"<<vp<<"\nPassword "<<host_cfg.get("host","password")<<"\nWaiting for client...\n";std::thread t(control_loop,ctx,lc);video_loop(ctx,lv);t.join();SSL_CTX_free(ctx);return 0;}
+int host_daemon(){if(tunnel_host_start()!=0)return 1;return host_run();}
 }
