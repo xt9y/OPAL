@@ -4,11 +4,13 @@
 #include <opal/host.hpp>
 #include <opal/system.hpp>
 #include <opal/tunnel.hpp>
+#include <opal/wake.hpp>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace opal {
 namespace {
@@ -34,6 +36,37 @@ bool save_role(const std::string &role,const std::string &default_host={}) {
     return cfg.save(p.config);
 }
 
+std::vector<std::string> host_names(const Ini &hosts) {
+    std::vector<std::string> names;
+    for(const auto &[name,values]:hosts.sections()) {
+        (void)values;
+        if(!name.empty()) names.push_back(name);
+    }
+    return names;
+}
+
+std::string choose_host(const Ini &hosts,const char *title) {
+    auto names=host_names(hosts);
+    if(names.empty()) {
+        std::cout<<"No saved hosts.\n";
+        return {};
+    }
+    std::cout<<title<<"\n--------------------------------\n";
+    for(size_t i=0;i<names.size();++i) std::cout<<(i+1)<<"  "<<names[i]<<"\n";
+    std::cout<<"> ";
+    std::string choice;
+    if(!std::getline(std::cin,choice)) return {};
+    choice=trim(choice);
+    try {
+        size_t used=0;
+        unsigned long index=std::stoul(choice,&used);
+        if(used!=choice.size()||index<1||index>names.size()) return {};
+        return names[index-1];
+    } catch(...) {
+        return {};
+    }
+}
+
 std::string detect_mac() {
     std::error_code ec;
     for(const auto &entry:std::filesystem::directory_iterator("/sys/class/net",ec)) {
@@ -57,7 +90,12 @@ void configure_host_wol() {
 
 int connect_default(const Ini &cfg) {
     auto name=cfg.get("opal","default_host");
-    if(name.empty()) {std::cerr<<"No default host configured. Run 'opal setup'.\n";return 2;}
+    if(name.empty()) return -1;
+    auto p=Paths::load();Ini hosts;hosts.load(p.hosts);
+    if(!hosts.get(name,"mac").empty()) {
+        std::cout<<"Waking "<<name<<"...\n";
+        (void)wake_named(name);
+    }
     std::cout<<"Connecting to "<<name<<" through OPAL tunnel...\n";
     return client_connect(name);
 }
@@ -98,12 +136,53 @@ int first_setup() {
 
 int interactive_setup(){return first_setup();}
 
+int interactive_select() {
+    auto p=Paths::load();Ini hosts;
+    hosts.load(p.hosts);
+    auto name=choose_host(hosts,"SELECT HOST");
+    if(name.empty()) return host_names(hosts).empty()?0:2;
+    ensure_layout(p);Ini cfg;cfg.load(p.config);
+    cfg.set("opal","role","client");
+    cfg.set("opal","default_host",name);
+    if(!cfg.save(p.config)) return 1;
+    std::cout<<"Selected "<<name<<".\n";
+    return 0;
+}
+
+int interactive_remove() {
+    auto p=Paths::load();Ini hosts;
+    hosts.load(p.hosts);
+    auto selected=choose_host(hosts,"REMOVE HOST");
+    auto names=host_names(hosts);
+    if(selected.empty()) return names.empty()?0:2;
+
+    Ini remaining;
+    for(const auto &[name,values]:hosts.sections()) {
+        if(name.empty()||name==selected) continue;
+        for(const auto &[key,value]:values) remaining.set(name,key,value);
+    }
+    if(!remaining.save(p.hosts)) return 1;
+
+    Ini cfg;cfg.load(p.config);
+    if(cfg.get("opal","default_host")==selected) {
+        auto left=host_names(remaining);
+        cfg.set("opal","default_host",left.empty()?"":left.front());
+        if(!cfg.save(p.config)) return 1;
+    }
+    std::cout<<"Removed "<<selected<<".\n";
+    return 0;
+}
+
 int interactive_run() {
     auto p=Paths::load();Ini cfg;
     if(!cfg.load(p.config)||cfg.get("opal","role").empty()) return first_setup();
     auto role=cfg.get("opal","role");
     if(role=="host") return ensure_host_service();
-    if(role=="client") return connect_default(cfg);
+    if(role=="client") {
+        int rc=connect_default(cfg);
+        if(rc==-1) return first_setup();
+        return rc;
+    }
     return first_setup();
 }
 }
