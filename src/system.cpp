@@ -3,6 +3,7 @@
 #include <opal/crypto.hpp>
 #include <opal/net.hpp>
 #include <opal/tunnel.hpp>
+#include <opal/zrok_cleanup.hpp>
 #include <X11/Xlib.h>
 #include <X11/extensions/XInput2.h>
 #include <filesystem>
@@ -29,13 +30,20 @@ int restart_services(){
 }
 int clean(){
     auto p=Paths::load();
-    std::system("systemctl --user disable --now opal-host.service >/dev/null 2>&1");
-    std::system("systemctl --user disable --now opal-bridge.service >/dev/null 2>&1");
-    tunnel_clean_local();
+    (void)std::system("systemctl --user disable --now opal-host.service >/dev/null 2>&1");
+    (void)std::system("systemctl --user disable --now opal-bridge.service >/dev/null 2>&1");
+
+    int access_rc=clean_zrok_accesses();
+    int share_rc=tunnel_clean_local();
+    if(access_rc!=0||share_rc!=0){
+        std::cerr<<"OPAL cleanup incomplete. Local OPAL state was preserved so cleanup can be retried.\n";
+        return 1;
+    }
+
     std::error_code ec;
     std::filesystem::remove_all(p.root,ec);
     if(ec){std::cerr<<"Could not remove OPAL state: "<<ec.message()<<"\n";return 1;}
-    std::cout<<"OPAL local state cleaned. zrok2 login/environment preserved.\n";
+    std::cout<<"OPAL state cleaned. zrok2 login/environment preserved.\n";
     return 0;
 }
 int bridge_setup(const char*mac){if(!mac||!*mac){std::cerr<<"--mac required\n";return 2;}auto p=Paths::load();ensure_layout(p);Ini c;c.set("bridge","mac",mac);c.set("bridge","secret",random_hex(32));if(!c.save(p.root/"bridge.ini"))return 1;std::cout<<"Bridge configured for "<<mac<<"\nWake secret: "<<c.get("bridge","secret")<<"\nPut this secret in the saved host's wake_secret field.\n";return 0;}
