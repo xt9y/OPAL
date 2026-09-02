@@ -26,14 +26,28 @@ OPAL_HOME="$server" "$BIN" host setup >"$base/setup"
 password="$(sed -n 's/^Pairing password: //p' "$base/setup")"
 test -n "$password"
 
-OPAL_HOME="$server" OPAL_CAPTURE_CMD="while :; do printf OPALTEST; sleep 0.05; done" OPAL_INPUT_HELPER="$INPUT_BIN" "$BIN" host >"$base/host.log" 2>&1 & hp=$!
+OPAL_HOME="$server" \
+OPAL_CAPTURE_CMD="while :; do printf OPALTEST; sleep 0.05; done" \
+OPAL_INPUT_HELPER="$INPUT_BIN" \
+OPAL_TEST_CONTROL_CLOSE_AFTER_PINGS=1 \
+OPAL_TEST_AUTH_LOG="$base/auth.log" \
+OPAL_TEST_VIDEO_TOKEN_LOG="$base/video-tokens.log" \
+"$BIN" host >"$base/host.log" 2>&1 & hp=$!
 sleep 0.5
 
 OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 SDL_VIDEODRIVER=wayland "$BIN" connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
 recovered=0
 i=0
-while test "$i" -lt 100; do
-    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -ge 2 && grep -q 'Connected' "$base/client.log" && grep -q 'Video restored.' "$base/client.log"; then recovered=1; break; fi
+while test "$i" -lt 140; do
+    distinct_tokens=0
+    if test -f "$base/video-tokens.log"; then distinct_tokens="$(sort -u "$base/video-tokens.log" | wc -l)"; fi
+    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -ge 2 \
+       && test -f "$base/auth.log" && grep -q '^PAIR$' "$base/auth.log" && grep -q '^AUTH$' "$base/auth.log" \
+       && test "$distinct_tokens" -ge 2 \
+       && grep -q 'Connected' "$base/client.log" \
+       && grep -q 'Control interrupted; recovering...' "$base/client.log" \
+       && grep -q 'Control restored.' "$base/client.log" \
+       && grep -q 'Video restored.' "$base/client.log"; then recovered=1; break; fi
     kill -0 "$cp" 2>/dev/null || break
     sleep 0.1
     i=$((i+1))
@@ -43,8 +57,10 @@ test "$recovered" -eq 1
 kill -0 "$hp"
 kill -0 "$cp"
 grep -q 'Connected' "$base/client.log"
-grep -q 'Video stalled; reconnecting...' "$base/client.log"
+grep -q 'Video interrupted; recovering...' "$base/client.log"
 grep -q 'Video restored.' "$base/client.log"
+grep -q 'Control restored.' "$base/client.log"
+! grep -q 'Pairing password:' "$base/client.log"
 grep -qx 'x11' "$base/player.driver"
 ! grep -q 'FFPLAY_DEBUG_NOISE' "$base/client.log"
 ! grep -q '^capture:' "$base/host.log"
@@ -52,6 +68,7 @@ grep -qx 'x11' "$base/player.driver"
 test -s "$server/authorized_clients"
 grep -q '^\[127.0.0.1\]' "$client/hosts.ini"
 grep -q '^paired=true$' "$client/hosts.ini"
+grep -q '^mouse_sensitivity=1.0$' "$client/hosts.ini"
 
 first_count="$(cat "$base/player.count")"
 kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
