@@ -62,13 +62,19 @@ int main(){
     {
         std::ofstream out(player);
         out<<"#!/bin/sh\n"
-              "printf '%s\\n' \"$*\" >> \"$OPAL_TEST_PLAYER_LOG\"\n"
+              "printf 'driver=%s args=%s\\n' \"$SDL_VIDEODRIVER\" \"$*\" >> \"$OPAL_TEST_PLAYER_LOG\"\n"
               "dd bs=1 count=128 of=/dev/null 2>/dev/null\n";
     }
     chmod(player.c_str(),0755);
     std::string old_path=std::getenv("PATH")?std::getenv("PATH"):"";
+    const bool had_display=std::getenv("DISPLAY")!=nullptr;
+    const bool had_wayland=std::getenv("WAYLAND_DISPLAY")!=nullptr;
+    const std::string old_display=had_display?std::getenv("DISPLAY"):"";
+    const std::string old_wayland=had_wayland?std::getenv("WAYLAND_DISPLAY"):"";
     std::string test_path=bin.string()+":"+old_path;
     setenv("PATH",test_path.c_str(),1);
+    setenv("DISPLAY",":99",1);
+    setenv("WAYLAND_DISPLAY","wayland-test",1);
     unsetenv("OPAL_PLAYER_CMD");
     setenv("OPAL_TEST_PLAYER_LOG",player_log.c_str(),1);
 
@@ -174,8 +180,12 @@ int main(){
     control_server.join();video_server.join();SSL_CTX_free(server_ctx);
     auto player_args=read_all(player_log);
     assert(!player_args.empty());
+    assert(player_args.find("driver=x11")!=std::string::npos);
+    assert(player_args.find("driver=wayland")==std::string::npos);
     assert(player_args.find("-fflags nobuffer")==std::string::npos);
     setenv("PATH",old_path.c_str(),1);
+    if(had_display)setenv("DISPLAY",old_display.c_str(),1);else unsetenv("DISPLAY");
+    if(had_wayland)setenv("WAYLAND_DISPLAY",old_wayland.c_str(),1);else unsetenv("WAYLAND_DISPLAY");
     unsetenv("OPAL_TEST_PLAYER_LOG");
     fs::remove_all(root);
     return 0;
