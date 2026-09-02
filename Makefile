@@ -12,6 +12,7 @@ BUILD := build
 PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
+NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/net.cpp src/tunnel.cpp src/system.cpp $(CORE_SRCS)
 
 all: $(PRODUCT) $(INPUT)
@@ -37,10 +38,14 @@ test-tunnel: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel
 	$(BUILD)/test-tunnel
 
+test-net: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_net.cpp $(NET_SRCS) -lssl -lcrypto -lpthread -o $(BUILD)/test-net
+	$(BUILD)/test-net
+
 test-clean: all
 	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
 
-test: all test-core test-setup test-tunnel test-clean
+test: all test-core test-setup test-tunnel test-net test-clean
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -74,4 +79,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-setup test-tunnel test-clean install uninstall clean
+.PHONY: all test test-core test-setup test-tunnel test-net test-clean install uninstall clean
