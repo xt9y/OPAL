@@ -30,7 +30,7 @@ OPAL_TEST_PLAYER_COUNT="$base/player.count" PATH="$base/bin:$PATH" OPAL_HOME="$c
 recovered=0
 i=0
 while test "$i" -lt 100; do
-    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -ge 2; then recovered=1; break; fi
+    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -ge 2 && grep -q 'Connected' "$base/client.log" && grep -q 'Video restored.' "$base/client.log"; then recovered=1; break; fi
     kill -0 "$cp" 2>/dev/null || break
     sleep 0.1
     i=$((i+1))
@@ -58,7 +58,7 @@ OPAL_TEST_PLAYER_COUNT="$base/player.count" PATH="$base/bin:$PATH" OPAL_HOME="$c
 second_connected=0
 i=0
 while test "$i" -lt 100; do
-    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -gt "$first_count"; then second_connected=1; break; fi
+    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -gt "$first_count" && grep -q 'Connected' "$base/client2.log"; then second_connected=1; break; fi
     kill -0 "$cp" 2>/dev/null || break
     sleep 0.1
     i=$((i+1))
