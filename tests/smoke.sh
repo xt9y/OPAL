@@ -2,8 +2,17 @@
 set -eu
 : "${BIN:?}" "${INPUT_BIN:?}"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+
 OPAL_HOME="$tmp/.opal" "$BIN" version | grep -q '^OPAL 0.1.0$'
-OPAL_HOME="$tmp/.opal" "$BIN" help | grep -q 'performance-first Linux remote desktop'
+OPAL_HOME="$tmp/.opal" "$BIN" help >"$tmp/help.txt"
+grep -q 'Advanced commands:' "$tmp/help.txt"
+grep -q 'opal host' "$tmp/help.txt"
+
+printf '3\n' | OPAL_HOME="$tmp/fresh" "$BIN" >"$tmp/default.txt"
+grep -q '^OPAL SETUP$' "$tmp/default.txt"
+! grep -q 'Usage:' "$tmp/default.txt"
+! grep -q 'opal host' "$tmp/default.txt"
+
 OPAL_HOME="$tmp/.opal" "$BIN" init >/dev/null
 test -f "$tmp/.opal/config.ini"
 test -f "$tmp/.opal/identity.key"
