@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <mutex>
 #include <poll.h>
 #include <string>
@@ -34,6 +35,7 @@ static bool wait_until(const std::function<bool()>&pred,int timeout_ms){
 }
 
 static int line_count(const fs::path&p){std::ifstream in(p);int n=0;std::string s;while(std::getline(in,s))++n;return n;}
+static std::string read_all(const fs::path&p){std::ifstream in(p);return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());}
 
 int main(){
     auto root=fs::temp_directory_path()/"opal-session-supervisor-test";
@@ -44,15 +46,19 @@ int main(){
     auto public_hex=opal::public_key_hex(pub);assert(!public_hex.empty());
 
     auto player_log=root/"players.log";
-    auto player=root/"player.sh";
+    auto bin=root/"bin";fs::create_directories(bin);
+    auto player=bin/"ffplay";
     {
         std::ofstream out(player);
         out<<"#!/bin/sh\n"
-              "echo $$ >> \"$OPAL_TEST_PLAYER_LOG\"\n"
+              "printf '%s\\n' \"$*\" >> \"$OPAL_TEST_PLAYER_LOG\"\n"
               "dd bs=1 count=128 of=/dev/null 2>/dev/null\n";
     }
     chmod(player.c_str(),0755);
-    setenv("OPAL_PLAYER_CMD",player.c_str(),1);
+    std::string old_path=std::getenv("PATH")?std::getenv("PATH"):"";
+    std::string test_path=bin.string()+":"+old_path;
+    setenv("PATH",test_path.c_str(),1);
+    unsetenv("OPAL_PLAYER_CMD");
     setenv("OPAL_TEST_PLAYER_LOG",player_log.c_str(),1);
 
     SSL_CTX*server_ctx=opal::server_tls_context(cert,key);assert(server_ctx);
@@ -140,7 +146,11 @@ int main(){
 
     session.stop();run.store(false);
     control_server.join();video_server.join();SSL_CTX_free(server_ctx);
-    unsetenv("OPAL_PLAYER_CMD");unsetenv("OPAL_TEST_PLAYER_LOG");
+    auto player_args=read_all(player_log);
+    assert(!player_args.empty());
+    assert(player_args.find("-fflags nobuffer")==std::string::npos);
+    setenv("PATH",old_path.c_str(),1);
+    unsetenv("OPAL_TEST_PLAYER_LOG");
     fs::remove_all(root);
     return 0;
 }
