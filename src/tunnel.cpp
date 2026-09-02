@@ -83,9 +83,12 @@ bool ensure_zrok2() {
     if(zrok2_environment_enabled()) return true;
     std::cout<<R"(zrok2 is not enabled.
 
-1. Open https://myzrok.io
-2. Sign in and open "Enable Your Environment"
-3. Copy the enable token and paste it below
+1. Open https://myzrok.io and sign in.
+2. If prompted, choose "Link zrok Account".
+3. In the bottom-left of the sidebar, click "zrok", then sign in there.
+4. Click "Get Started" in the top-right.
+5. Find the command starting with "zrok enable" and copy only the code/token after it.
+6. Paste that token below.
 
 Zrok enable token: )";
     std::string token;
