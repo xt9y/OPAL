@@ -63,6 +63,52 @@ int main() {
     opal::close_tls(c);
     server.join();
 
+    uint16_t delayed_port=free_port();
+    std::thread delayed_server([&]{
+        int listen_fd=opal::listen_tcp(delayed_port,"127.0.0.1");
+        assert(listen_fd>=0);
+        auto peer=opal::accept_tls(server_ctx,listen_fd);
+        assert(peer.ssl);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+        assert(opal::tls_write_line(peer.ssl,"LATE"));
+        opal::close_tls(peer);
+        close(listen_fd);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    auto delayed=opal::connect_tls(client_ctx,"127.0.0.1",delayed_port);
+    assert(delayed.ssl);
+    started=std::chrono::steady_clock::now();
+    line.clear();
+    assert(opal::tls_read_line_timeout(delayed.ssl,line,5000));
+    elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+    assert(line=="LATE");
+    assert(elapsed>=1000);
+    assert(elapsed<5000);
+    opal::close_tls(delayed);
+    delayed_server.join();
+
+    uint16_t silent_port=free_port();
+    std::thread silent_server([&]{
+        int listen_fd=opal::listen_tcp(silent_port,"127.0.0.1");
+        assert(listen_fd>=0);
+        auto peer=opal::accept_tls(server_ctx,listen_fd);
+        assert(peer.ssl);
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        opal::close_tls(peer);
+        close(listen_fd);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    auto silent=opal::connect_tls(client_ctx,"127.0.0.1",silent_port);
+    assert(silent.ssl);
+    started=std::chrono::steady_clock::now();
+    line.clear();
+    assert(!opal::tls_read_line_timeout(silent.ssl,line,200));
+    elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+    assert(elapsed>=150);
+    assert(elapsed<1000);
+    opal::close_tls(silent);
+    silent_server.join();
+
     uint16_t blocked_port=free_port();
     std::thread blocked_server([&]{
         int listen_fd=opal::listen_tcp(blocked_port,"127.0.0.1");
