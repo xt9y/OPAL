@@ -54,6 +54,15 @@ case "$1" in
     [ "$6" = tcpTunnel ] || exit 65
     exit 0
     ;;
+  share)
+    [ "$2" = private ] || exit 71
+    printf '%s\n' "$*" | grep -q -- '--share-token' || exit 72
+    if printf '%s\n' "$*" | grep -q -- '--backend-mode'; then
+      exit 73
+    fi
+    sleep 2
+    exit 0
+    ;;
 esac
 exit 0
 )SH";
@@ -93,6 +102,10 @@ int main() {
         assert(log.find("create share --share-token opal-ctl-")!=std::string::npos);
         assert(log.find("--backend-mode tcpTunnel")!=std::string::npos);
         assert(log.find("create share --share-token opal-vid-")!=std::string::npos);
+        assert(opal::tunnel_host_start()==0);
+        log=read_all(root/"zrok.log");
+        assert(log.find("share private --headless --share-token opal-ctl-")!=std::string::npos);
+        assert(log.find("share private --headless --share-token opal-vid-")!=std::string::npos);
     }
 
     std::cout << "tunnel tests passed\n";
