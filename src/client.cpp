@@ -49,17 +49,22 @@ static TlsConn open_video(SSL_CTX*ctx,const std::string&target,int port,bool tun
 
 static void video_supervisor(SSL_CTX*ctx,const std::string target,int port,bool tunneled,const std::string token,const std::string fingerprint,TlsConn first,std::atomic<bool>*run,std::atomic<int>*active_fd){
     TlsConn v=first;
+    bool recovering=false;
     while(run->load()){
         if(!v.ssl){
             v=open_video(ctx,target,port,tunneled,token,fingerprint);
             if(!v.ssl){std::this_thread::sleep_for(std::chrono::milliseconds(150));continue;}
+            if(recovering){std::cout<<"Video restored.\n"<<std::flush;recovering=false;}
         }
         if(!run->load()){close_tls(v);break;}
         active_fd->store(v.fd);
         video_player(v.ssl);
         active_fd->store(-1);
         close_tls(v);
-        if(run->load())std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if(run->load()){
+            if(!recovering){std::cout<<"Video stalled; reconnecting...\n"<<std::flush;recovering=true;}
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
     active_fd->store(-1);
     close_tls(v);
