@@ -12,6 +12,7 @@
 #include <mutex>
 #include <poll.h>
 #include <signal.h>
+#include <sstream>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -69,6 +70,8 @@ struct SessionSupervisor::Impl {
     std::string observed_fingerprint;
     std::string error;
     bool paired_state=false;
+    int remote_width_value=0;
+    int remote_height_value=0;
 
     void set_error(const std::string&message){
         std::lock_guard<std::mutex>l(state_mu);
@@ -103,7 +106,20 @@ struct SessionSupervisor::Impl {
             set_error("control authentication challenge failed");
             return false;
         }
+        // The complete suffix remains the signed challenge for compatibility.
+        // New hosts append " <width> <height>" so the client can reproduce the
+        // exact letterboxed/pillarboxed ffplay viewport without changing OK.
         auto nonce=challenge.substr(10);
+        int parsed_width=0,parsed_height=0;
+        {
+            std::istringstream metadata(nonce);
+            std::string random_nonce,extra;
+            int width=0,height=0;
+            if(metadata>>random_nonce>>width>>height&&!(metadata>>extra)&&width>0&&height>0){
+                parsed_width=width;
+                parsed_height=height;
+            }
+        }
         std::string auth;
         if(paired_state){
             if(options.client_public_key.empty()||options.client_private_key_path.empty()){
@@ -143,6 +159,11 @@ struct SessionSupervisor::Impl {
         if(token.empty()){
             set_error("host returned an empty video token");
             return false;
+        }
+        if(parsed_width>0&&parsed_height>0){
+            std::lock_guard<std::mutex>l(state_mu);
+            remote_width_value=parsed_width;
+            remote_height_value=parsed_height;
         }
         if(!paired_state)paired_state=true;
         return true;
@@ -345,6 +366,8 @@ unsigned long SessionSupervisor::control_generation()const{return impl_->generat
 bool SessionSupervisor::media_started()const{return impl_->media.load();}
 bool SessionSupervisor::running()const{return impl_->run.load();}
 bool SessionSupervisor::paired()const{return impl_->paired_state;}
+int SessionSupervisor::remote_width()const{std::lock_guard<std::mutex>l(impl_->state_mu);return impl_->remote_width_value;}
+int SessionSupervisor::remote_height()const{std::lock_guard<std::mutex>l(impl_->state_mu);return impl_->remote_height_value;}
 std::string SessionSupervisor::fingerprint()const{std::lock_guard<std::mutex>l(impl_->state_mu);return impl_->observed_fingerprint;}
 std::string SessionSupervisor::last_error()const{std::lock_guard<std::mutex>l(impl_->state_mu);return impl_->error;}
 }
