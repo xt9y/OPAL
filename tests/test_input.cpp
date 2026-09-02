@@ -18,28 +18,25 @@ int main(){
     assert(opal::linux_keycode_from_x11(100000)==0);
     assert(opal::raw_motion_command(12.0,-7.0)=="MOUSE 12 -7");
 
-    // XI2 resolution is counts/metre. Synthetic XWayland values around 1000
-    // are not physical DPI metadata and must never create a ~39x multiplier.
+    // Raw XI2 deltas are already the physical device counts. OPAL must not
+    // reinterpret XI2 valuator resolution as a request to change the mouse's
+    // count rate: that makes the remote mouse intrinsically faster/slower than
+    // the source. Resolution metadata therefore never changes the default 1:1
+    // relative motion path.
     assert(near(opal::mouse_normalization_scale(0),1.0));
     assert(near(opal::mouse_normalization_scale(1000),1.0));
-    assert(near(opal::mouse_normalization_scale(4999),1.0));
-    assert(near(opal::mouse_normalization_scale(400001),1.0));
+    assert(near(opal::mouse_normalization_scale(5000),1.0));
+    assert(near(opal::mouse_normalization_scale(125984),1.0));
+    assert(near(opal::mouse_normalization_scale(400000),1.0));
 
-    // Physically plausible metadata is normalized toward 1000 DPI and the
-    // automatic multiplier is bounded even at the edge of the accepted range.
-    assert(near(opal::mouse_normalization_scale(5000),4.0));
-    assert(near(opal::mouse_normalization_scale(400000),0.25));
-    assert(opal::mouse_normalization_scale(125984)>0.30);
-    assert(opal::mouse_normalization_scale(125984)<0.33);
     assert(near(opal::clamp_mouse_sensitivity(0.01),0.1));
     assert(near(opal::clamp_mouse_sensitivity(1.0),1.0));
     assert(near(opal::clamp_mouse_sensitivity(9.0),4.0));
 
-    assert(opal::normalized_motion_command(32.0,-16.0,125984,125984)=="MOUSE 10 -5"); // 3200 DPI source
-    assert(opal::normalized_motion_command(8.0,-4.0,31496,31496)=="MOUSE 10 -5");    // 800 DPI source
-    assert(opal::normalized_motion_command(12.0,-7.0,0,0)=="MOUSE 12 -7");           // unknown DPI fallback
-    assert(opal::normalized_motion_command(12.0,-7.0,1000,1000)=="MOUSE 12 -7");    // synthetic XWayland fallback
-    assert(opal::normalized_motion_command(32.0,-16.0,125984,125984,2.0)=="MOUSE 20 -10");
+    assert(opal::normalized_motion_command(32.0,-16.0,125984,125984)=="MOUSE 32 -16");
+    assert(opal::normalized_motion_command(8.0,-4.0,31496,31496)=="MOUSE 8 -4");
+    assert(opal::normalized_motion_command(12.0,-7.0,0,0)=="MOUSE 12 -7");
+    assert(opal::normalized_motion_command(32.0,-16.0,125984,125984,2.0)=="MOUSE 64 -32");
 
     opal::HeldInputState held;
     assert(held.press_key(30));
@@ -62,7 +59,7 @@ int main(){
 
     auto client=read_file("src/client.cpp");
     assert(client.find("event.type==KeyPress||event.type==KeyRelease")!=std::string::npos);
-    assert(client.find("XIQueryDevice")!=std::string::npos);
+    assert(client.find("XIQueryDevice")==std::string::npos);
 
     auto makefile=read_file("Makefile");
     assert(makefile.find("-lXi")!=std::string::npos);
