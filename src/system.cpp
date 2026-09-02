@@ -3,12 +3,20 @@
 #include <opal/crypto.hpp>
 #include <opal/net.hpp>
 #include <opal/tunnel.hpp>
+#include <X11/Xlib.h>
+#include <X11/extensions/XInput2.h>
 #include <filesystem>
 #include <iostream>
 #include <unistd.h>
 namespace opal {
+static bool xinput2_available(){
+    Display*d=XOpenDisplay(nullptr);if(!d)return false;
+    int opcode=0,event=0,error=0;bool ok=XQueryExtension(d,"XInputExtension",&opcode,&event,&error)!=0;
+    if(ok){int major=2,minor=0;ok=XIQueryVersion(d,&major,&minor)==Success&&major>=2;}
+    XCloseDisplay(d);return ok;
+}
 int init(){auto p=Paths::load();if(!ensure_layout(p)||!ensure_identity(p.identity_key,p.identity_pub)||!ensure_tls_certificate(p.cert.string(),p.cert_key.string()))return 1;Ini c;if(!std::filesystem::exists(p.config)){c.set("video","fps","60");c.set("video","bitrate_kbps","20000");c.set("video","fullscreen","true");c.set("audio","enabled","true");c.set("network","mode","tunnel");c.set("network","transport","zrok2");c.save(p.config);}std::cout<<"Initialized "<<p.root<<"\n";return 0;}
-int doctor(){auto p=Paths::load();std::cout<<"OPAL doctor\n";auto show=[](const char*n,bool ok){std::cout<<(ok?"[ok]   ":"[warn] ")<<n<<"\n";};show("OpenSSL CLI",command_exists("openssl"));show("FFmpeg",command_exists("ffmpeg"));show("FFplay",command_exists("ffplay"));show("GPU Screen Recorder (preferred)",command_exists("gpu-screen-recorder"));show("zrok2 (required transport)",command_exists("zrok2"));show("X11/XWayland client session",std::getenv("DISPLAY")!=nullptr);show("Wayland host session",std::getenv("WAYLAND_DISPLAY")!=nullptr);show("/dev/uinput",access("/dev/uinput",W_OK)==0);show("~/.opal initialized",std::filesystem::exists(p.root));return 0;}
+int doctor(){auto p=Paths::load();std::cout<<"OPAL doctor\n";auto show=[](const char*n,bool ok){std::cout<<(ok?"[ok]   ":"[warn] ")<<n<<"\n";};show("OpenSSL CLI",command_exists("openssl"));show("FFmpeg",command_exists("ffmpeg"));show("FFplay",command_exists("ffplay"));show("GPU Screen Recorder (preferred)",command_exists("gpu-screen-recorder"));show("zrok2 (required transport)",command_exists("zrok2"));show("X11/XWayland client session",std::getenv("DISPLAY")!=nullptr);show("XInput2 raw client input",xinput2_available());show("Wayland host session",std::getenv("WAYLAND_DISPLAY")!=nullptr);show("/dev/uinput",access("/dev/uinput",W_OK)==0);show("~/.opal initialized",std::filesystem::exists(p.root));return 0;}
 int host_service(bool enable){std::string cmd="systemctl --user ";cmd+=enable?"enable --now opal-host.service":"disable --now opal-host.service";return std::system(cmd.c_str())==0?0:1;}
 int clean(){
     auto p=Paths::load();
