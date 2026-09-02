@@ -85,7 +85,7 @@ State changes are user-visible only when useful. Normal output should remain com
 
 After the user enters a valid `opal:CONTROL,VIDEO` connection code, OPAL saves the host name and then continues establishment instead of treating the first zrok failure as final.
 
-Tunnel establishment gets a bounded propagation window of 30 seconds. During that window OPAL may restart its local `zrok2 access private` children and retry end-to-end TLS readiness.
+Tunnel establishment gets one 30-second bounded propagation window per establishment/recovery cycle. During that window OPAL may restart its local `zrok2 access private` children and retry end-to-end TLS readiness at short intervals. Exiting one failed local access child is not itself terminal while the 30-second cycle is still active.
 
 Expected normal first-use behavior:
 
@@ -122,7 +122,7 @@ This preserves saved client connection codes.
 
 ### Heartbeat
 
-The logical session sends periodic control `PING` requests and expects `PONG` responses. A missed/failed heartbeat marks the control generation dead.
+The logical session sends a control `PING` every 2 seconds while otherwise idle and expects a `PONG` within 5 seconds. Any input/control traffic counts as liveness and may reset the heartbeat deadline. A failed write, failed read, socket close, or missed 5-second response marks that control generation dead.
 
 ### Control recovery
 
@@ -138,7 +138,7 @@ When the control session fails:
 8. start a fresh video generation;
 9. resume input capture.
 
-The session remains logically connected from the user's perspective unless recovery exceeds the bounded retry window.
+The recovery cycle gets the same 30-second bound used by initial establishment. The session remains logically connected from the user's perspective while that bounded recovery is active.
 
 ### Input helper health
 
@@ -172,26 +172,26 @@ The stabilized default target is:
 - 60 FPS CFR;
 - one-second keyframe interval;
 - CPU encoder fallback when hardware H.264 is unavailable;
-- cursor explicitly included;
+- `-cursor yes` explicitly set;
 - 12,000 kbps default video bitrate;
-- Matroska streaming container for new GSR sessions;
+- `-c mkv` Matroska streaming container for new GSR sessions;
 - portal-session restoration retained on Wayland.
 
 The FFmpeg fallback should use matching low-latency H.264 and Matroska output where practical.
 
 Existing user configuration can override the bitrate. The default changes from 20,000 kbps to 12,000 kbps to reduce sensitivity to tunnel jitter while retaining good desktop quality.
 
-### Network backpressure
+### Network backpressure and capture stalls
 
-The current one-second TLS media-write deadline is too aggressive for a tunneled remote desktop. The new video delivery loop must tolerate temporary backpressure without corrupting the stream.
+The current one-second TLS media-write deadline is too aggressive for a tunneled remote desktop. The stabilized policy is:
 
-The implementation should use a bounded but substantially more tolerant write/stall policy, with separate concepts for:
+- capture startup may take up to 10 seconds before the generation is considered failed;
+- after media starts, 3 seconds with no new capture bytes is a capture stall and causes a clean new video generation;
+- an individual TLS media write may remain backpressured for up to 5 seconds before the video generation is declared dead;
+- socket close or definitive TLS error fails the generation immediately;
+- any generation failure closes capture, video TLS, and player before replacement begins.
 
-- short network backpressure;
-- capture producing no bytes;
-- definitively dead TLS socket.
-
-A transient delay must not cut the encoder stream in the middle of a packet simply because one second elapsed.
+This keeps recovery bounded while preventing a one-second transient from cutting an encoded stream mid-packet.
 
 ### Recovery messages
 
@@ -220,19 +220,17 @@ Input capture belongs to the logical session supervisor rather than one disposab
 
 The current normalization accepts any XI2 resolution >= 1000 counts/meter. Synthetic XWayland values can therefore create enormous multipliers.
 
-The new normalization will:
+OPAL uses 1000 DPI as the normalization reference, equivalent to approximately 39,370 counts/meter.
 
-1. only accept a reported resolution when it is within a plausible physical mouse range;
-2. reject synthetic/implausible resolution metadata and fall back to neutral scaling;
-3. clamp automatic scale factors to a safe range so metadata can never generate extreme acceleration;
-4. retain a user-configurable sensitivity multiplier, default `1.0`;
-5. apply sensitivity after physical normalization.
+A reported XI2 axis resolution is treated as physical mouse metadata only when it lies between 5,000 and 400,000 counts/meter. Values outside that interval are treated as synthetic/unknown and use neutral scale `1.0`.
 
-The exact constants must be unit-tested. A synthetic resolution around 1000 counts/meter must never create a ~39x multiplier.
+For accepted metadata, the computed automatic scale is clamped to `[0.25, 4.0]` before use. A user-configurable sensitivity multiplier is then applied, defaulting to `1.0` and clamped to `[0.1, 4.0]`.
+
+Therefore a synthetic resolution around 1000 counts/meter cannot create the previous roughly 39x movement multiplier.
 
 ### Cursor visibility
 
-GSR capture must explicitly include the host cursor so successful remote pointer movement is visible in the stream.
+GSR capture explicitly uses `-cursor yes` so successful remote pointer movement is visible in the stream.
 
 ## Failure handling
 
@@ -303,18 +301,20 @@ Required automated coverage:
 3. paired reconnect uses `AUTH` without requesting a password;
 4. control socket failure triggers AUTH recovery and a new video token;
 5. held keys/buttons are released when a control generation dies;
-6. video delivery tolerates a network delay greater than one second without truncating the stream;
+6. video delivery tolerates a network delay greater than one second and up to the specified 5-second media-write bound without truncating the stream;
 7. player exit causes an entirely new video generation;
 8. capture/video reconnect never appends generation B bytes to generation A player stdin;
 9. corrupt/failed video generation is discarded before replacement playback;
 10. host zrok child death recreates the same saved token and restarts tunnel sharing;
 11. synthetic XI2 resolution around 1000 counts/meter does not amplify pointer movement;
-12. plausible physical resolution is normalized correctly;
-13. normalization scale is clamped;
-14. host cursor capture is explicit;
-15. invalid connection-code error includes the expected `opal:CONTROL,VIDEO` form;
-16. integration test holds one logical session through player restart, video restart, and control reconnect;
-17. full existing clean/install/smoke/integration suites remain green.
+12. plausible physical resolution is normalized toward the 1000-DPI reference;
+13. automatic normalization is clamped to `[0.25, 4.0]`;
+14. configured sensitivity is clamped to `[0.1, 4.0]` and applied after normalization;
+15. GSR command explicitly contains `-cursor yes` and `-c mkv`;
+16. invalid connection-code error includes the expected `opal:CONTROL,VIDEO` form;
+17. integration test holds one logical session through player restart, video restart, and control reconnect;
+18. heartbeat detects a silent control generation within the specified 5-second response deadline;
+19. full existing clean/install/smoke/integration suites remain green.
 
 ## Non-goals
 
