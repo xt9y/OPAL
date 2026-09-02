@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+: "${BIN:?}"
+
+base="$(mktemp -d)"
+trap 'test -n "${access_pid:-}" && kill "$access_pid" 2>/dev/null || true; test -n "${share_pid:-}" && kill "$share_pid" 2>/dev/null || true; rm -rf "$base"' EXIT
+
+home="$base/home"
+opal_home="$base/opal"
+bin="$base/bin"
+mkdir -p "$home/.zrok2" "$opal_home" "$bin"
+printf 'still-enabled\n' > "$home/.zrok2/environment"
+
+cat > "$opal_home/host.ini" <<'EOF'
+[tunnel]
+control_token=opal-ctl-clean-test
+video_token=opal-vid-clean-test
+mode=zrok2-private
+EOF
+printf '[desktop]\naddress=opal:remote-control,remote-video\n' > "$opal_home/hosts.ini"
+printf 'identity\n' > "$opal_home/identity.key"
+
+cat > "$bin/systemctl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$SYSTEMCTL_TEST_LOG"
+exit 0
+EOF
+chmod +x "$bin/systemctl"
+
+cat > "$bin/zrok2" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$ZROK_TEST_LOG"
+case "$1 $2" in
+  'access private'|'share private')
+    while :; do sleep 1; done
+    ;;
+  'delete share')
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$bin/zrok2"
+
+export HOME="$home"
+export OPAL_HOME="$opal_home"
+export PATH="$bin:$PATH"
+export SYSTEMCTL_TEST_LOG="$base/systemctl.log"
+export ZROK_TEST_LOG="$base/zrok.log"
+
+zrok2 access private stale-client --bind 127.0.0.1:47990 --headless & access_pid=$!
+zrok2 share private --headless --share-token stale-host 127.0.0.1:47991 & share_pid=$!
+sleep 0.2
+kill -0 "$access_pid"
+kill -0 "$share_pid"
+
+"$BIN" clean > "$base/clean.out"
+
+if kill -0 "$access_pid" 2>/dev/null; then
+    echo 'stale zrok access process survived opal clean' >&2
+    exit 1
+fi
+access_pid=""
+if kill -0 "$share_pid" 2>/dev/null; then
+    echo 'stale zrok share process survived opal clean' >&2
+    exit 1
+fi
+share_pid=""
+
+test ! -e "$opal_home"
+test -f "$home/.zrok2/environment"
+grep -q '^delete share opal-ctl-clean-test$' "$base/zrok.log"
+grep -q '^delete share opal-vid-clean-test$' "$base/zrok.log"
+! grep -q '^disable' "$base/zrok.log"
+grep -q '^--user disable --now opal-host.service$' "$base/systemctl.log"
+grep -q '^--user disable --now opal-bridge.service$' "$base/systemctl.log"
+grep -q 'OPAL local state cleaned' "$base/clean.out"
+
+echo 'clean tests passed'
