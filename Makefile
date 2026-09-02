@@ -51,6 +51,10 @@ test-tunnel: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel
 	$(BUILD)/test-tunnel
 
+test-tunnel-recovery: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel_recovery.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel-recovery
+	$(BUILD)/test-tunnel-recovery
+
 test-net: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_net.cpp $(NET_SRCS) -lssl -lcrypto -lpthread -o $(BUILD)/test-net
 	$(BUILD)/test-net
@@ -61,7 +65,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-core test-media test-input test-setup test-daemon test-tunnel test-net test-clean test-install
+test: all test-core test-media test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -103,4 +107,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-media test-input test-setup test-daemon test-tunnel test-net test-clean test-install install uninstall clean
+.PHONY: all test test-core test-media test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-clean test-install install uninstall clean
