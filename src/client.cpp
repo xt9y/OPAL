@@ -22,7 +22,7 @@ namespace opal {
 static bool send_control(SSL*s,const std::string&x){return tls_write_line(s,x);}
 static bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");if(!v||!*v)return false;std::string x=v;return x!="0"&&x!="false"&&x!="FALSE"&&x!="off"&&x!="OFF";}
 
-static void video_player(SSL*ssl,std::atomic<bool>*flowing,bool announce_restore){
+static void video_player(SSL*ssl,std::atomic<bool>*media_started,bool announce_restore){
     const char*e=std::getenv("OPAL_PLAYER_CMD");
     const char*cmd=(e&&*e)?e:(debug_enabled()?"ffplay -hide_banner -loglevel warning -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0":"ffplay -hide_banner -loglevel quiet -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1");
     FILE*p=popen(cmd,"w");
@@ -34,7 +34,7 @@ static void video_player(SSL*ssl,std::atomic<bool>*flowing,bool announce_restore
         if(n<=0)break;
         if(fwrite(buf,1,n,p)!=static_cast<size_t>(n))break;
         if(fflush(p)!=0)break;
-        flowing->store(true);
+        media_started->store(true);
         if(announce_restore&&!announced){std::cout<<"Video restored.\n"<<std::flush;announced=true;}
     }
     pclose(p);
@@ -50,7 +50,7 @@ static TlsConn open_video(SSL_CTX*ctx,const std::string&target,int port,bool tun
     return v;
 }
 
-static void video_supervisor(SSL_CTX*ctx,const std::string target,int port,bool tunneled,const std::string token,const std::string fingerprint,TlsConn first,std::atomic<bool>*run,std::atomic<int>*active_fd,std::atomic<bool>*flowing){
+static void video_supervisor(SSL_CTX*ctx,const std::string target,int port,bool tunneled,const std::string token,const std::string fingerprint,TlsConn first,std::atomic<bool>*run,std::atomic<int>*active_fd,std::atomic<bool>*media_started){
     TlsConn v=first;
     bool recovering=false;
     while(run->load()){
@@ -60,16 +60,16 @@ static void video_supervisor(SSL_CTX*ctx,const std::string target,int port,bool 
         }
         if(!run->load()){close_tls(v);break;}
         active_fd->store(v.fd);
-        video_player(v.ssl,flowing,recovering);
+        video_player(v.ssl,media_started,recovering);
         active_fd->store(-1);
         close_tls(v);
+        if(recovering)recovering=false;
         if(run->load()){
-            flowing->store(false);
-            if(!recovering){std::cout<<"Video stalled; reconnecting...\n"<<std::flush;recovering=true;}
+            std::cout<<"Video stalled; reconnecting...\n"<<std::flush;
+            recovering=true;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
-    flowing->store(false);
     active_fd->store(-1);
     close_tls(v);
 }
@@ -226,11 +226,11 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
 
     std::atomic<bool> video_run{true};
     std::atomic<int> active_video_fd{-1};
-    std::atomic<bool> video_flowing{false};
+    std::atomic<bool> media_started{false};
     TlsConn first{initial.fd,initial.ssl};initial={};
-    std::thread player(video_supervisor,ctx,target,vp,tunneled,token,fingerprint,first,&video_run,&active_video_fd,&video_flowing);
-    for(int i=0;i<100&&!video_flowing.load();++i)std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if(!video_flowing.load()){
+    std::thread player(video_supervisor,ctx,target,vp,tunneled,token,fingerprint,first,&video_run,&active_video_fd,&media_started);
+    for(int i=0;i<100&&!media_started.load();++i)std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if(!media_started.load()){
         std::cerr<<"video did not start\n";
         video_run.store(false);int fd=active_video_fd.exchange(-1);if(fd>=0)shutdown(fd,SHUT_RDWR);
         player.join();close_tls(c);SSL_CTX_free(ctx);return 1;
