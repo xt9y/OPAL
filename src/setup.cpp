@@ -87,7 +87,7 @@ int first_setup() {
         if(init()!=0) return 1;
         auto code=read_line("OPAL connection code: ");
         std::string control,video;
-        if(!tunnel_connection_code(code,&control,&video)) {std::cerr<<"Invalid OPAL connection code\n";return 2;}
+        if(!tunnel_connection_code(code,&control,&video)) {std::cerr<<"Invalid OPAL connection code. Expected: opal:CONTROL,VIDEO\n";return 2;}
         auto name=read_line("Save as [desktop]: ","desktop");
         if(hosts_add(name,code)!=0||!save_role("client",name)) return 1;
         return client_connect(name);
