@@ -34,6 +34,8 @@ public:
     bool media_started() const;
     bool running() const;
     bool paired() const;
+    int remote_width() const;
+    int remote_height() const;
     std::string fingerprint() const;
     std::string last_error() const;
 
