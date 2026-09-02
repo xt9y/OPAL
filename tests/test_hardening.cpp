@@ -33,7 +33,11 @@ int main(){
     assert(host.find("CHALLENGE OPAL2 ")!=std::string::npos);
 
     const auto session=read_all("src/session.cpp");
-    assert(session.find("SDL_VIDEODRIVER=wayland")!=std::string::npos);
+    // Input capture is currently X11/XInput2. Keep ffplay in the same X11/
+    // XWayland input domain so OPAL can actually grab keyboard and pointer
+    // events instead of letting a native Wayland ffplay consume them locally.
+    assert(session.find("SDL_VIDEODRIVER=x11")!=std::string::npos);
+    assert(session.find("SDL_VIDEODRIVER=wayland")==std::string::npos);
     assert(session.find("control queue overflow")!=std::string::npos);
     assert(session.find("incompatible OPAL host protocol")!=std::string::npos);
     assert(session.find("normalize_pairing_code")!=std::string::npos);
