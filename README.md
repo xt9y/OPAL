@@ -5,10 +5,10 @@
 Native Linux remote desktop.
 
 - Native-resolution fullscreen desktop mirroring and remote control.
-- 60 FPS H.264/FLV capture target with automatic video-session recovery.
-- XInput2 raw relative mouse/keyboard capture with an X11 compatibility fallback.
+- 60 FPS H.264/Matroska capture target with automatic video-session recovery.
+- XInput2 keyboard/pointer capture with an X11 compatibility fallback.
 - Linux uinput injection with full `KEY_MAX` support and stuck-input cleanup.
-- TLS 1.3 transport with Ed25519 device authentication.
+- TLS 1.3 transport with Ed25519 device authentication and certificate-bound first pairing.
 - GPU Screen Recorder preferred, FFmpeg fallback.
 - zrok2 private tunnels are the single normal network transport.
 - Persistent systemd user host service that waits for clients in the background.
@@ -40,9 +40,14 @@ sudo make install
 systemctl --user daemon-reload
 ```
 
-Install `zrok2` on both Linux computers with the universal installer:
+Install `zrok2` on both Linux computers with the universal installer. The temporary directory is private and is removed on exit, so another local user cannot substitute a predictable `/tmp` payload before the privileged install step:
 
 ```bash
+set -euo pipefail
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64) ARCH=amd64 ;;
@@ -51,10 +56,12 @@ case "$ARCH" in
   *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-VERSION="$(curl -fsSL https://api.github.com/repos/openziti/zrok/releases/latest | grep -m1 '"tag_name"' | cut -d '"' -f4 | sed 's/^v//')"
-curl -fL "https://github.com/openziti/zrok/releases/download/v${VERSION}/zrok_${VERSION}_linux_${ARCH}.tar.gz" -o /tmp/zrok2.tar.gz
-tar -xzf /tmp/zrok2.tar.gz -C /tmp
-sudo install -m 0755 /tmp/zrok2 /usr/local/bin/zrok2
+VERSION="$(curl --proto '=https' --tlsv1.2 -fsSL https://api.github.com/repos/openziti/zrok/releases/latest | grep -m1 '"tag_name"' | cut -d '"' -f4 | sed 's/^v//')"
+test -n "$VERSION"
+curl --proto '=https' --tlsv1.2 -fL "https://github.com/openziti/zrok/releases/download/v${VERSION}/zrok_${VERSION}_linux_${ARCH}.tar.gz" -o "$tmpdir/zrok2.tar.gz"
+tar --no-same-owner -xzf "$tmpdir/zrok2.tar.gz" -C "$tmpdir"
+test -x "$tmpdir/zrok2"
+sudo install -m 0755 "$tmpdir/zrok2" /usr/local/bin/zrok2
 zrok2 version
 ```
 
@@ -64,7 +71,7 @@ Then just run:
 opal
 ```
 
-The first host setup creates two persistent private zrok2 shares and enables `opal-host.service`. The OPAL host then stays in the background and waits for connections; closing a client video window or losing a video stream does not stop the host daemon.
+The first host setup creates two persistent private zrok2 shares and enables `opal-host.service`. The daemon binds only to loopback; zrok2 is the Internet-facing transport. `opal host` remains an explicit foreground/debug LAN listener.
 
 Check the host service with:
 
@@ -74,7 +81,7 @@ systemctl --user status opal-host.service
 
 The first Wayland capture can display the desktop portal screen-selection prompt. OPAL stores the GPU Screen Recorder portal-session token under `~/.opal/` and attempts to reuse it for later/recovered video sessions. If the compositor rejects the saved portal session, OPAL discards that token and allows a fresh screen selection.
 
-The first host setup also prints one OPAL connection code. Enter that code on the client. OPAL remembers it and every later `opal` run uses the tunnel and pinned host identity automatically.
+The first host setup prints an OPAL connection code and a high-entropy pairing password. Enter the connection code on the client. After a successful pairing, OPAL rotates the host pairing password and later connections use the saved Ed25519 identity plus the pinned host certificate fingerprint.
 
 If zrok2 is installed but not enabled, OPAL asks for your zrok enable token and runs `zrok2 enable` for you.
 
@@ -126,7 +133,7 @@ Docs (Thanks to AI): https://xt9y.de/opal.html
 - OPAL is currently Linux-first and pre-1.0.
 - GPU Screen Recorder is recommended for the fastest Wayland/X11 capture path.
 - zrok2 is required for normal networking.
-- `opal host` remains a manual foreground/debug host; systemd uses `opal host daemon`.
+- The normal daemon is loopback-only behind private zrok shares; direct foreground hosting is intentionally a separate debugging/LAN mode.
 
 ## License
 

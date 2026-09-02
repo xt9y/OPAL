@@ -1,5 +1,6 @@
 #ifdef __linux__
 #include <linux/uinput.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -10,11 +11,11 @@
 
 static constexpr int pointer_max=65535;
 
-static bool emit_event(int fd,int type,int code,int value){input_event e{};e.type=type;e.code=code;e.value=value;return write(fd,&e,sizeof(e))==static_cast<ssize_t>(sizeof(e));}
+static bool emit_event(int fd,int type,int code,int value){input_event e{};e.type=type;e.code=code;e.value=value;for(;;){ssize_t n=write(fd,&e,sizeof(e));if(n==static_cast<ssize_t>(sizeof(e)))return true;if(n<0&&errno==EINTR)continue;return false;}}
 static int button_code(int button){return button==1?BTN_LEFT:button==2?BTN_MIDDLE:button==3?BTN_RIGHT:0;}
-static void sync_events(int fd){emit_event(fd,EV_SYN,SYN_REPORT,0);}
+static bool sync_events(int fd){return emit_event(fd,EV_SYN,SYN_REPORT,0);}
 
-static int open_uinput(){return open("/dev/uinput",O_WRONLY|O_NONBLOCK);}
+static int open_uinput(){return open("/dev/uinput",O_WRONLY|O_CLOEXEC);}
 
 static bool create_device(int fd,const char*name,unsigned short product){
     uinput_setup us{};
@@ -75,7 +76,7 @@ int main(){
         std::istringstream ss(line);std::string t;ss>>t;bool emitted=false;
         if(t=="KEY"){
             int k,d;if(ss>>k>>d&&k>0&&k<=KEY_MAX&&(d==0||d==1)){
-                if(emit_event(keyboard_fd,EV_KEY,k,d)){if(d)held_keys.insert(k);else held_keys.erase(k);sync_events(keyboard_fd);}
+                if(emit_event(keyboard_fd,EV_KEY,k,d)&&sync_events(keyboard_fd)){if(d)held_keys.insert(k);else held_keys.erase(k);}
             }
         }else if(t=="POINTER"){
             int x,y;if(ss>>x>>y&&x>=0&&x<=pointer_max&&y>=0&&y<=pointer_max){
@@ -89,16 +90,16 @@ int main(){
                 if(code&&emit_event(pointer_fd,EV_KEY,code,d)){if(d)held_buttons.insert(code);else held_buttons.erase(code);emitted=true;}
             }
         }else if(t=="WHEEL"){
-            int v;if(ss>>v){emit_event(pointer_fd,EV_REL,REL_WHEEL,v);emitted=true;}
+            int v;if(ss>>v)emitted=emit_event(pointer_fd,EV_REL,REL_WHEEL,v);
         }
-        if(emitted)sync_events(pointer_fd);
+        if(emitted&&!sync_events(pointer_fd))break;
     }
 
     bool keyboard_released=false;
-    for(int code:held_keys){emit_event(keyboard_fd,EV_KEY,code,0);keyboard_released=true;}
+    for(int code:held_keys){keyboard_released|=emit_event(keyboard_fd,EV_KEY,code,0);}
     if(keyboard_released)sync_events(keyboard_fd);
     bool pointer_released=false;
-    for(int code:held_buttons){emit_event(pointer_fd,EV_KEY,code,0);pointer_released=true;}
+    for(int code:held_buttons){pointer_released|=emit_event(pointer_fd,EV_KEY,code,0);}
     if(pointer_released)sync_events(pointer_fd);
     destroy_device(pointer_fd);destroy_device(keyboard_fd);return 0;
 }

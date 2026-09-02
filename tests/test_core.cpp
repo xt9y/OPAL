@@ -26,7 +26,7 @@ int main() {
     assert(read.get_int("video", "fps", 0) == 60);
 
     auto pair = opal::pairing_code();
-    assert(pair.size() == 9 && pair[4] == '-');
+    assert(pair.size() == 19 && pair[4] == '-' && pair[9] == '-' && pair[14] == '-');
     auto nonce = opal::random_hex(32);
     auto proof = opal::hmac_sha256_hex("secret", nonce);
     assert(opal::secure_equal(proof, opal::hmac_sha256_hex("secret", nonce)));

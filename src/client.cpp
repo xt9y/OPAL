@@ -212,7 +212,7 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
     if(hosts.get(target_in,"mouse_sensitivity").empty())hosts.set(target_in,"mouse_sensitivity","1.0");
     hosts.save(p.hosts);
 
-    for(int i=0;i<100&&!session.media_started()&&session.running();++i)std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for(int i=0;i<300&&!session.media_started()&&session.running();++i)std::this_thread::sleep_for(std::chrono::milliseconds(100));
     if(!session.media_started()){
         std::cerr<<"video did not start\n";
         session.stop();return 1;
