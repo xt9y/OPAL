@@ -103,11 +103,20 @@ exit 0
     std::thread supervisor([&]{opal::tunnel_host_supervise(supervise,50);});
     auto pids=read_pids(root/"pids");
     assert(pids.size()>=2);
-    kill(pids.front(),SIGTERM);
+    const pid_t killed_pid=pids.front();
+    kill(killed_pid,SIGTERM);
     auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(4);
     bool repaired=false;
     while(std::chrono::steady_clock::now()<deadline){
-        if(opal::tunnel_host_healthy()){repaired=true;break;}
+        // Do not mistake the short SIGTERM delivery window for recovery. The
+        // old test could observe the killed process as still healthy, stop the
+        // supervisor immediately, and then fail once that process finally
+        // exited. Recovery is complete only after the recorded host pair has
+        // actually been replaced and the replacement pair is healthy.
+        auto current=read_pids(root/"opal/tunnel-host.pids");
+        bool old_replaced=current.size()==2;
+        for(pid_t pid:current) if(pid==killed_pid) old_replaced=false;
+        if(old_replaced&&opal::tunnel_host_healthy()){repaired=true;break;}
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     supervise.store(false);
