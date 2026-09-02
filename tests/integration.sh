@@ -25,6 +25,7 @@ chmod +x "$base/bin/ffplay"
 OPAL_HOME="$server" "$BIN" --internal-host-setup >"$base/setup"
 password="$(sed -n 's/^Pairing password: //p' "$base/setup")"
 test -n "$password"
+lower_password="$(printf '%s' "$password" | tr '[:upper:]' '[:lower:]')"
 
 OPAL_HOME="$server" \
 OPAL_CAPTURE_CMD="while :; do printf OPALTEST; sleep 0.05; done" \
@@ -36,7 +37,7 @@ OPAL_TEST_VIDEO_TOKEN_LOG="$base/video-tokens.log" \
 sleep 0.5
 ! grep -q '^Password ' "$base/host.log"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" --internal-connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
+OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" --internal-connect 127.0.0.1 "$lower_password" >"$base/client.log" 2>&1 & cp=$!
 recovered=0
 i=0
 while test "$i" -lt 140; do
