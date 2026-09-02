@@ -57,7 +57,25 @@ case "$1 $2" in
     printf '{"accesses":[{"frontendToken":"%s","shareToken":"%s"}]}\n' "$front" "$token"
     exit 0
     ;;
-  'delete access'|'delete share')
+  'list shares')
+    token=''
+    prev=''
+    for arg in "$@"; do
+      if [ "$prev" = --share-token ]; then token="$arg"; break; fi
+      prev="$arg"
+    done
+    if [ -n "${ZROK_TEST_STICKY_SHARE:-}" ] && [ "$token" = "$ZROK_TEST_STICKY_SHARE" ]; then
+      printf '{"shares":[{"shareToken":"%s"}]}\n' "$token"
+    else
+      printf '{"shares":[]}\n'
+    fi
+    exit 0
+    ;;
+  'delete access')
+    exit 0
+    ;;
+  'delete share')
+    if [ -n "${ZROK_TEST_STICKY_SHARE:-}" ] && [ "$3" = "$ZROK_TEST_STICKY_SHARE" ]; then exit 1; fi
     exit 0
     ;;
 esac
@@ -95,6 +113,9 @@ test -f "$home/.zrok2/environment"
 for token in opal-ctl-clean-test opal-vid-clean-test remote-control remote-video; do
     grep -q "^list accesses --share-token $token --json$" "$base/zrok.log"
 done
+for token in opal-ctl-clean-test opal-vid-clean-test; do
+    grep -q "^list shares --share-token $token --json$" "$base/zrok.log"
+done
 for frontend in front-host-control front-host-video front-remote-control front-remote-video; do
     grep -q "^delete access $frontend$" "$base/zrok.log"
 done
@@ -106,5 +127,31 @@ grep -q '^delete share opal-vid-clean-test$' "$base/zrok.log"
 grep -q '^--user disable --now opal-host.service$' "$base/systemctl.log"
 grep -q '^--user disable --now opal-bridge.service$' "$base/systemctl.log"
 grep -q 'OPAL state cleaned' "$base/clean.out"
+
+# A controller-side share that survives deletion must make clean fail and keep
+# the OPAL token inventory so the command can be retried later.
+opal_home="$base/opal-sticky"
+mkdir -p "$opal_home"
+cat > "$opal_home/host.ini" <<'EOF'
+[tunnel]
+control_token=opal-ctl-sticky
+video_token=opal-vid-sticky
+mode=zrok2-private
+EOF
+: > "$base/zrok-sticky.log"
+export OPAL_HOME="$opal_home"
+export ZROK_TEST_LOG="$base/zrok-sticky.log"
+export ZROK_TEST_STICKY_SHARE=opal-ctl-sticky
+set +e
+"$BIN" clean > "$base/clean-sticky.out" 2> "$base/clean-sticky.err"
+rc=$?
+set -e
+test "$rc" -eq 1
+test -d "$opal_home"
+test -f "$opal_home/host.ini"
+grep -q '^delete share opal-ctl-sticky$' "$base/zrok-sticky.log"
+grep -q '^list shares --share-token opal-ctl-sticky --json$' "$base/zrok-sticky.log"
+grep -q 'cleanup incomplete' "$base/clean-sticky.err"
+unset ZROK_TEST_STICKY_SHARE
 
 echo 'clean tests passed'
