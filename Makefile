@@ -1,7 +1,7 @@
 CXX ?= c++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic
 CPPFLAGS += -Iinclude
-LDLIBS += -lssl -lcrypto -lX11 -lpthread
+LDLIBS += -lssl -lcrypto -lX11 -lXi -lpthread
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 LIBEXECDIR ?= $(PREFIX)/libexec/opal
