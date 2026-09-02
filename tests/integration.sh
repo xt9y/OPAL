@@ -17,6 +17,7 @@ OPAL_HOME="$server" OPAL_CAPTURE_CMD="printf OPALTEST" OPAL_INPUT_HELPER="$INPUT
 sleep 0.5
 PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY= "$BIN" connect 127.0.0.1 "$password" >"$base/client1.log" 2>&1
 ! grep -q 'FFPLAY_DEBUG_NOISE' "$base/client1.log"
+! grep -q '^capture:' "$base/host1.log"
 kill "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true; hp=""
 test -s "$server/authorized_clients"
 grep -q '^\[127.0.0.1\]' "$client/hosts.ini"
