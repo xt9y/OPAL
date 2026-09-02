@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/opal host
-Restart=on-failure
+ExecStart=/usr/local/bin/opal host daemon
+Restart=always
 RestartSec=2
 
 [Install]
