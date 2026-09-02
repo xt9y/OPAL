@@ -93,7 +93,7 @@ int main(){
     assert(host.find("line.rfind(\"POINTER \",0)==0")!=std::string::npos);
     assert(host.find("DisplayWidth")!=std::string::npos);
     assert(host.find("DisplayHeight")!=std::string::npos);
-    assert(host.find("CHALLENGE "+std::string("\"+challenge"))!=std::string::npos);
+    assert(host.find("CHALLENGE OPAL2 "+std::string("\"+challenge"))!=std::string::npos);
 
     auto makefile=read_file("Makefile");
     assert(makefile.find("-lXi")!=std::string::npos);
