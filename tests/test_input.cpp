@@ -82,13 +82,18 @@ int main(){
     assert(client.find("event.type==KeyPress||event.type==KeyRelease")!=std::string::npos);
     assert(client.find("XIQueryDevice")==std::string::npos);
     assert(client.find("XQueryPointer")!=std::string::npos);
-    assert(client.find("absolute_pointer_command")!=std::string::npos);
+    assert(client.find("video_pointer_command")!=std::string::npos);
+    assert(client.find("session.remote_width()")!=std::string::npos);
+    assert(client.find("session.remote_height()")!=std::string::npos);
     assert(client.find("PointerMotionMask")!=std::string::npos);
     assert(client.find("XISetMask(mask,XI_RawMotion)")==std::string::npos);
     assert(client.find("XWarpPointer")==std::string::npos);
 
     auto host=read_file("src/host.cpp");
     assert(host.find("line.rfind(\"POINTER \",0)==0")!=std::string::npos);
+    assert(host.find("DisplayWidth")!=std::string::npos);
+    assert(host.find("DisplayHeight")!=std::string::npos);
+    assert(host.find("CHALLENGE "+std::string("\"+challenge"))!=std::string::npos);
 
     auto makefile=read_file("Makefile");
     assert(makefile.find("-lXi")!=std::string::npos);
