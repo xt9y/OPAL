@@ -1,3 +1,4 @@
+#include <opal/client.hpp>
 #include <opal/host.hpp>
 #include <opal/setup.hpp>
 #include <opal/system.hpp>
@@ -32,6 +33,9 @@ int main(int argc,char **argv) {
     std::string a=argv[1];
     if(a=="--internal-host-daemon"&&argc==2) return opal::host_daemon();
     if(a=="--internal-bridge-run"&&argc==2) return opal::run_bridge(47992);
+    if(a=="--internal-host-setup"&&argc==2) return opal::host_setup();
+    if(a=="--internal-host-run"&&argc==2) return opal::host_run();
+    if(a=="--internal-connect"&&argc>=3&&argc<=4) return opal::client_connect(argv[2],argc==4?argv[3]:"");
 
     if(a=="help"||a=="--help"||a=="-h") { help(); return 0; }
     if(a=="version"||a=="--version") { std::cout<<"OPAL 0.1.0\n"; return 0; }
