@@ -1,7 +1,7 @@
 # OPAL Resilient Host, Input, and Video Design
 
 Date: 2026-09-02
-Status: Approved in chat; written design pending final review before implementation
+Status: Approved design; written spec ready for final review before implementation
 Branch: `feature-resilient-host-input-video`
 
 ## Goal
@@ -69,12 +69,11 @@ New flow:
 1. client opens video TLS and sends `VIDEO <session-token>`;
 2. host validates that the associated control session is still alive;
 3. host starts the capture child;
-4. host waits for the first actual encoded media bytes;
+4. host waits for and buffers the first actual encoded media bytes;
 5. host sends `READY` only after media exists;
-6. binary FLV bytes follow;
-7. if capture fails before first bytes, host sends an actionable `ERROR ...` and closes the video connection.
-
-The client prints `Connected` only after `READY` and after the first media bytes are available to the player path.
+6. host sends the buffered FLV bytes and continues the binary stream;
+7. client starts/writes the player and prints `Connected` only after at least one real media chunk has been received and accepted by the player pipe;
+8. if capture fails before first bytes, host sends an actionable `ERROR ...` and closes the video connection.
 
 ### Video recovery
 
@@ -192,7 +191,7 @@ Video restored.
 
 Raw GSR/zrok/FFplay/SDK diagnostics remain hidden unless `OPAL_DEBUG=1`.
 
-Actionable permanent failures, such as missing `/dev/uinput`, unavailable XI2 fallback, repeated capture startup failure, or authentication failure, are emitted as OPAL-owned error messages.
+Actionable permanent failures, such as missing `/dev/uinput`, no usable local input-capture path, repeated capture startup failure, or authentication failure, are emitted as OPAL-owned error messages.
 
 The host daemon logs useful errors to the user journal, but a single session failure returns the daemon to its waiting state rather than exiting.
 
