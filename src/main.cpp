@@ -18,6 +18,7 @@ Advanced commands:
   opal setup
   opal init
   opal clean
+  opal restart
   opal host [setup|enable|disable|daemon]
   opal connect <host|ip|zrok:CONTROL,VIDEO> [password]
   opal hosts [list|add <name> <address> [mac]]
@@ -43,6 +44,7 @@ int main(int argc,char **argv) {
     if(a=="setup") return opal::interactive_setup();
     if(a=="init") return opal::init();
     if(a=="clean") return opal::clean();
+    if(a=="restart") return opal::restart_services();
     if(a=="doctor") return opal::doctor();
     if(a=="host") {
         if(argc>=3&&std::string(argv[2])=="setup") return opal::host_setup();
