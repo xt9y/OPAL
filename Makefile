@@ -83,6 +83,14 @@ install: all
 	$(INSTALL) -m 0644 systemd/opal-host.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service"
 	$(INSTALL) -m 0644 systemd/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
 	$(INSTALL) -m 0644 packaging/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"
+	@if [ -z "$(DESTDIR)" ]; then \
+	  if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
+	  if command -v udevadm >/dev/null 2>&1; then \
+	    udevadm control --reload-rules; \
+	    udevadm trigger --action=change --sysname-match=uinput; \
+	    udevadm settle; \
+	  fi; \
+	fi
 	@echo "Installed OPAL to $(DESTDIR)$(PREFIX)"
 	@echo "Run: opal"
 
