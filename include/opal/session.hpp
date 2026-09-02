@@ -37,6 +37,7 @@ public:
     bool paired() const;
     int remote_width() const;
     int remote_height() const;
+    std::string remote_mac() const;
     std::string fingerprint() const;
     std::string last_error() const;
 
