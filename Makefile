@@ -33,7 +33,11 @@ test-setup: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_setup.cpp src/setup.cpp src/config.cpp -o $(BUILD)/test-setup
 	$(BUILD)/test-setup
 
-test: all test-core test-setup
+test-tunnel: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel
+	$(BUILD)/test-tunnel
+
+test: all test-core test-setup test-tunnel
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -67,4 +71,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-setup install uninstall clean
+.PHONY: all test test-core test-setup test-tunnel install uninstall clean
