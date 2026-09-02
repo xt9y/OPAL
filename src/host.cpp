@@ -84,7 +84,7 @@ static void video_client(TlsConn c){
     {std::lock_guard<std::mutex>l(session_mu);ok=word=="VIDEO"&&sessions.find(token)!=sessions.end();}
     if(!ok){tls_write_line(c.ssl,"DENY");close_tls(c);return;}
     int fps=host_cfg.get_int("video","fps",60),bitrate=host_cfg.get_int("video","bitrate_kbps",20000);bool audio=host_cfg.get_bool("audio","enabled",true);bool gsr=command_exists("gpu-screen-recorder");
-    auto cmd=capture_command(gsr,fps,bitrate,audio);if(const char*e=std::getenv("OPAL_CAPTURE_CMD");e&&*e)cmd=e;
+    auto cmd=capture_command(gsr,fps,bitrate,audio,(G.root/"portal-session.token").string());if(const char*e=std::getenv("OPAL_CAPTURE_CMD");e&&*e)cmd=e;
     if(debug_enabled())std::cerr<<"capture: "<<(std::getenv("OPAL_CAPTURE_CMD")?"test/override":(gsr?"gpu-screen-recorder":"ffmpeg fallback"))<<"\n";
     auto capture=start_capture(cmd);if(capture.pid<=0||capture.fd<0){tls_write_line(c.ssl,"ERROR capture-startup");close_tls(c);return;}
     char buf[65536];int n=read_capture(capture,buf,sizeof(buf),10000);
