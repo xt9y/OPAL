@@ -175,8 +175,8 @@ int tunnel_host_start() {
         video=host.get("tunnel","video_token");
         std::cout<<"OPAL connection code: "<<code<<"\n";
     } else if(!ensure_zrok2()) return 2;
-    auto control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"--backend-mode","tcpTunnel","127.0.0.1:47990"});
-    auto video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"--backend-mode","tcpTunnel","127.0.0.1:47991"});
+    auto control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"127.0.0.1:47990"});
+    auto video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"127.0.0.1:47991"});
     if(!child_started(control_pid)||!child_started(video_pid)) {
         if(control_pid>0) kill(control_pid,SIGTERM);
         if(video_pid>0) kill(video_pid,SIGTERM);
