@@ -81,7 +81,13 @@ bool ensure_zrok2() {
         return false;
     }
     if(zrok2_environment_enabled()) return true;
-    std::cout<<"zrok2 is not enabled on this computer.\nZrok enable token: ";
+    std::cout<<R"(zrok2 is not enabled.
+
+1. Open https://myzrok.io
+2. Sign in and open "Enable Your Environment"
+3. Copy the enable token and paste it below
+
+Zrok enable token: )";
     std::string token;
     if(!std::getline(std::cin,token)) return false;
     token=trim(token);
