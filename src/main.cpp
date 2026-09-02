@@ -17,6 +17,7 @@ Normal use:
 Advanced commands:
   opal setup
   opal init
+  opal clean
   opal host [setup|enable|disable]
   opal connect <host|ip|zrok:CONTROL,VIDEO> [password]
   opal hosts [list|add <name> <address> [mac]]
@@ -41,6 +42,7 @@ int main(int argc,char **argv) {
     if(a=="version"||a=="--version") { std::cout<<"OPAL 0.1.0\n"; return 0; }
     if(a=="setup") return opal::interactive_setup();
     if(a=="init") return opal::init();
+    if(a=="clean") return opal::clean();
     if(a=="doctor") return opal::doctor();
     if(a=="host") {
         if(argc>=3&&std::string(argv[2])=="setup") return opal::host_setup();
