@@ -258,6 +258,21 @@ int main() {
     }
 
     {
+        auto root=make_fake_zrok("opal-zrok-access-backoff-test","access-first-fails");
+        bool accessed=false;
+        auto started=std::chrono::steady_clock::now();
+        auto output=capture_fds(root/"access-backoff-output.log",[&]{accessed=opal::tunnel_access("backoff-control-token","backoff-video-token",5000);});
+        auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+        assert(accessed);
+        assert(output.find("accessNotFound")==std::string::npos);
+        assert(elapsed>=900);
+        auto log=read_all(root/"zrok.log");
+        assert(count_text(log,"access private backoff-control-token")==2);
+        assert(count_text(log,"access private backoff-video-token")==2);
+        stop_fake_zrok(root);
+    }
+
+    {
         auto root=make_fake_zrok("opal-zrok-access-slow-start-test","access-slow");
         bool accessed=false;
         auto started=std::chrono::steady_clock::now();
