@@ -34,6 +34,10 @@ test-setup: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_setup.cpp src/setup.cpp src/config.cpp -o $(BUILD)/test-setup
 	$(BUILD)/test-setup
 
+test-daemon: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_daemon.cpp -o $(BUILD)/test-daemon
+	$(BUILD)/test-daemon
+
 test-tunnel: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel
 	$(BUILD)/test-tunnel
@@ -45,7 +49,7 @@ test-net: | $(BUILD)
 test-clean: all
 	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
 
-test: all test-core test-setup test-tunnel test-net test-clean
+test: all test-core test-setup test-daemon test-tunnel test-net test-clean
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -79,4 +83,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-setup test-tunnel test-net test-clean install uninstall clean
+.PHONY: all test test-core test-setup test-daemon test-tunnel test-net test-clean install uninstall clean
