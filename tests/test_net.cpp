@@ -5,15 +5,12 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <vector>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
 namespace fs = std::filesystem;
-
-namespace opal {
-TlsConn connect_tls_retry(SSL_CTX *ctx,const std::string &host,uint16_t port,int timeout_ms,int retry_ms);
-}
 
 static uint16_t free_port() {
     int fd=socket(AF_INET,SOCK_STREAM,0);
@@ -64,8 +61,31 @@ int main() {
     assert(opal::tls_read_line(c.ssl,line));
     assert(line=="READY");
     opal::close_tls(c);
-
     server.join();
+
+    uint16_t blocked_port=free_port();
+    std::thread blocked_server([&]{
+        int listen_fd=opal::listen_tcp(blocked_port,"127.0.0.1");
+        assert(listen_fd>=0);
+        auto peer=opal::accept_tls(server_ctx,listen_fd);
+        assert(peer.ssl);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        opal::close_tls(peer);
+        close(listen_fd);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    auto blocked=opal::connect_tls(client_ctx,"127.0.0.1",blocked_port);
+    assert(blocked.ssl);
+    int sndbuf=4096;
+    setsockopt(blocked.fd,SOL_SOCKET,SO_SNDBUF,&sndbuf,sizeof(sndbuf));
+    std::vector<unsigned char> payload(32*1024*1024,0x5a);
+    started=std::chrono::steady_clock::now();
+    assert(!opal::tls_write_all_timeout(blocked.ssl,payload.data(),payload.size(),250));
+    elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+    assert(elapsed<1500);
+    opal::close_tls(blocked);
+    blocked_server.join();
+
     SSL_CTX_free(client_ctx);
     SSL_CTX_free(server_ctx);
     fs::remove_all(root);
