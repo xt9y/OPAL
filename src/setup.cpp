@@ -62,6 +62,15 @@ int connect_default(const Ini &cfg) {
     return client_connect(name);
 }
 
+int ensure_host_service() {
+    if(host_service(true)!=0) {
+        std::cerr<<"Could not start OPAL host service. Run 'systemctl --user status opal-host.service'.\n";
+        return 1;
+    }
+    std::cout<<"OPAL host service running.\n";
+    return 0;
+}
+
 int first_setup() {
     std::cout<<"OPAL SETUP\n--------------------------------\n1  Host this computer\n2  Connect to another computer\n3  Quit\n> ";
     std::string choice;if(!std::getline(std::cin,choice)) return 0;choice=trim(choice);
@@ -72,12 +81,7 @@ int first_setup() {
         if(!save_role("host")) return 1;
         if(ask_yes_no("Enable Wake-on-LAN support? [Y/n] ",true)) configure_host_wol();
         std::cout<<"\nOPAL connection code\n"<<code<<"\n\nGive this code to the client. No IP address or port forwarding is required.\n";
-        if(ask_yes_no("Start OPAL automatically with this user session? [y/N] ",false)) {
-            if(host_service(true)==0) {std::cout<<"OPAL host service started.\n";return 0;}
-            std::cerr<<"Could not enable the user service; hosting will start in this terminal.\n";
-        }
-        if(tunnel_host_start()!=0) return 1;
-        return host_run();
+        return ensure_host_service();
     }
     if(choice=="2") {
         if(init()!=0) return 1;
@@ -98,7 +102,7 @@ int interactive_run() {
     auto p=Paths::load();Ini cfg;
     if(!cfg.load(p.config)||cfg.get("opal","role").empty()) return first_setup();
     auto role=cfg.get("opal","role");
-    if(role=="host") {if(tunnel_host_start()!=0) return 1;return host_run();}
+    if(role=="host") return ensure_host_service();
     if(role=="client") return connect_default(cfg);
     return first_setup();
 }
