@@ -1,6 +1,7 @@
 #include <opal/zrok_cleanup.hpp>
 #include <opal/config.hpp>
 #include <opal/tunnel.hpp>
+#include <chrono>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -8,6 +9,7 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace opal {
@@ -91,7 +93,7 @@ void add_connection_tokens(std::set<std::string> &tokens,const std::string &addr
     if(!video.empty()) tokens.insert(video);
 }
 
-std::set<std::string> known_share_tokens() {
+std::set<std::string> owned_host_share_tokens() {
     auto paths=Paths::load();
     std::set<std::string> tokens;
     Ini host;
@@ -101,6 +103,12 @@ std::set<std::string> known_share_tokens() {
         if(!control.empty()) tokens.insert(control);
         if(!video.empty()) tokens.insert(video);
     }
+    return tokens;
+}
+
+std::set<std::string> known_share_tokens() {
+    auto paths=Paths::load();
+    auto tokens=owned_host_share_tokens();
     Ini hosts;
     if(hosts.load(paths.hosts)) {
         for(const auto &[name,values]:hosts.sections()) {
@@ -114,6 +122,14 @@ std::set<std::string> known_share_tokens() {
 
 std::set<std::string> frontend_tokens(const std::string &json) {
     static const std::regex pattern(R"json("frontendToken"\s*:\s*"([^"]+)")json");
+    std::set<std::string> result;
+    for(std::sregex_iterator it(json.begin(),json.end(),pattern),end;it!=end;++it)
+        if((*it).size()>1&&!(*it)[1].str().empty()) result.insert((*it)[1].str());
+    return result;
+}
+
+std::set<std::string> listed_share_tokens(const std::string &json) {
+    static const std::regex pattern(R"json("shareToken"\s*:\s*"([^"]+)")json");
     std::set<std::string> result;
     for(std::sregex_iterator it(json.begin(),json.end(),pattern),end;it!=end;++it)
         if((*it).size()>1&&!(*it)[1].str().empty()) result.insert((*it)[1].str());
@@ -145,6 +161,37 @@ int clean_zrok_accesses() {
                 rc=1;
             }
         }
+    }
+    return rc;
+}
+
+int verify_zrok_host_shares_absent() {
+    auto shares=owned_host_share_tokens();
+    if(shares.empty()) return 0;
+    if(!command_exists("zrok2")) {
+        std::cerr<<"Could not verify OPAL zrok share cleanup: zrok2 is not installed.\n";
+        return 1;
+    }
+
+    int rc=0;
+    for(const auto &share:shares) {
+        bool confirmed_absent=false;
+        bool listed=false;
+        for(int attempt=0;attempt<5;++attempt) {
+            std::string json;
+            if(run_capture({"zrok2","list","shares","--share-token",share,"--json"},json)==0) {
+                listed=true;
+                if(listed_share_tokens(json).count(share)==0) {
+                    confirmed_absent=true;
+                    break;
+                }
+            }
+            if(attempt<4) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if(confirmed_absent) continue;
+        if(listed) std::cerr<<"Warning: zrok share still exists after cleanup: "<<share<<"\n";
+        else std::cerr<<"Warning: could not verify deletion of zrok share "<<share<<"\n";
+        rc=1;
     }
     return rc;
 }
