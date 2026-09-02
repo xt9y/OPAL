@@ -1,6 +1,7 @@
 #include <opal/tunnel.hpp>
 #include <arpa/inet.h>
 #include <cassert>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -41,7 +42,7 @@ printf '%s\n' "$*" >> "$ZROK_TEST_LOG"
 case "$1" in
   status)
     echo 'Config:'
-    if [ "$ZROK_TEST_MODE" = enabled ] || [ "$ZROK_TEST_MODE" = access-delayed ] || [ "$ZROK_TEST_MODE" = access-first-fails ] || [ -f "$ZROK_TEST_MARKER" ]; then
+    if [ "$ZROK_TEST_MODE" = enabled ] || [ "$ZROK_TEST_MODE" = access-delayed ] || [ "$ZROK_TEST_MODE" = access-slow ] || [ "$ZROK_TEST_MODE" = access-first-fails ] || [ -f "$ZROK_TEST_MARKER" ]; then
       echo 'Environment:'
       echo 'EnvZId <<SET>>'
     else
@@ -76,7 +77,7 @@ case "$1" in
     exit 0
     ;;
   access)
-    [ "$ZROK_TEST_MODE" = access-delayed ] || [ "$ZROK_TEST_MODE" = access-first-fails ] || exit 0
+    [ "$ZROK_TEST_MODE" = access-delayed ] || [ "$ZROK_TEST_MODE" = access-slow ] || [ "$ZROK_TEST_MODE" = access-first-fails ] || exit 0
     echo 'ZROK_DEBUG_NOISE_STDOUT'
     echo 'ZROK_DEBUG_NOISE_STDERR' >&2
     case "$*" in
@@ -84,6 +85,9 @@ case "$1" in
       *127.0.0.1:47991*) port=47991; delay=2 ;;
       *) exit 81 ;;
     esac
+    if [ "$ZROK_TEST_MODE" = access-slow ]; then
+      if [ "$port" = 47991 ]; then delay=5; fi
+    fi
     if [ "$ZROK_TEST_MODE" = access-first-fails ]; then
       marker="$ZROK_TEST_STATE_DIR/$port"
       if [ ! -f "$marker" ]; then
@@ -250,6 +254,21 @@ int main() {
         auto log=read_all(root/"zrok.log");
         assert(log.find("access private new-control-token")!=std::string::npos);
         assert(log.find("access private new-video-token")!=std::string::npos);
+        stop_fake_zrok(root);
+    }
+
+    {
+        auto root=make_fake_zrok("opal-zrok-access-slow-start-test","access-slow");
+        bool accessed=false;
+        auto started=std::chrono::steady_clock::now();
+        auto output=capture_fds(root/"access-slow-output.log",[&]{accessed=opal::tunnel_access("slow-control-token","slow-video-token",10000);});
+        auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+        assert(accessed);
+        assert(output.find("ZROK_DEBUG_NOISE")==std::string::npos);
+        assert(elapsed>=4500);
+        auto log=read_all(root/"zrok.log");
+        assert(count_text(log,"access private slow-control-token")==1);
+        assert(count_text(log,"access private slow-video-token")==1);
         stop_fake_zrok(root);
     }
 
