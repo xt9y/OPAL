@@ -12,6 +12,7 @@ double mouse_normalization_scale(int resolution);
 double clamp_mouse_sensitivity(double sensitivity);
 std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y,double sensitivity=1.0);
 std::string absolute_pointer_command(int x,int y,int width,int height);
+std::string video_pointer_command(int x,int y,int client_width,int client_height,int remote_width,int remote_height);
 
 class HeldInputState {
     std::set<int> keys_;
