@@ -14,6 +14,7 @@ TlsConn connect_tls(SSL_CTX *ctx,const std::string &host,uint16_t port);
 TlsConn connect_tls_retry(SSL_CTX *ctx,const std::string &host,uint16_t port,int timeout_ms=10000,int retry_ms=100);
 void close_tls(TlsConn &c);
 bool tls_write_all(SSL *ssl,const void *data,size_t size);
+bool tls_write_all_timeout(SSL *ssl,const void *data,size_t size,int timeout_ms);
 bool tls_write_line(SSL *ssl,const std::string &line);
 bool tls_read_line(SSL *ssl,std::string &line,size_t limit=8192);
 std::string peer_fingerprint(SSL *ssl);
