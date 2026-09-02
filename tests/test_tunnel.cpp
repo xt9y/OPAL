@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <fcntl.h>
 #include <signal.h>
 #include <sstream>
 #include <string>
@@ -66,11 +68,15 @@ case "$1" in
     if printf '%s\n' "$*" | grep -q -- '--backend-mode'; then
       exit 73
     fi
+    echo 'ZROK_DEBUG_NOISE_STDOUT'
+    echo 'ZROK_DEBUG_NOISE_STDERR' >&2
     sleep 2
     exit 0
     ;;
   access)
     [ "$ZROK_TEST_MODE" = access-delayed ] || exit 0
+    echo 'ZROK_DEBUG_NOISE_STDOUT'
+    echo 'ZROK_DEBUG_NOISE_STDERR' >&2
     case "$*" in
       *127.0.0.1:47990*) port=47990; delay=1 ;;
       *127.0.0.1:47991*) port=47991; delay=2 ;;
@@ -108,6 +114,30 @@ exit 0
 static std::string read_all(const fs::path &path) {
     std::ifstream in(path);
     return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+}
+
+static std::string capture_fds(const fs::path &path,const std::function<void()> &fn) {
+    std::cout.flush();
+    std::cerr.flush();
+    fflush(stdout);
+    fflush(stderr);
+    int saved_out=dup(STDOUT_FILENO);
+    int saved_err=dup(STDERR_FILENO);
+    int fd=open(path.c_str(),O_CREAT|O_TRUNC|O_WRONLY,0600);
+    assert(saved_out>=0&&saved_err>=0&&fd>=0);
+    assert(dup2(fd,STDOUT_FILENO)>=0);
+    assert(dup2(fd,STDERR_FILENO)>=0);
+    close(fd);
+    fn();
+    std::cout.flush();
+    std::cerr.flush();
+    fflush(stdout);
+    fflush(stderr);
+    assert(dup2(saved_out,STDOUT_FILENO)>=0);
+    assert(dup2(saved_err,STDERR_FILENO)>=0);
+    close(saved_out);
+    close(saved_err);
+    return read_all(path);
 }
 
 static bool can_connect(uint16_t port) {
@@ -176,7 +206,10 @@ int main() {
         assert(log.find("create share --share-token opal-ctl-")!=std::string::npos);
         assert(log.find("--backend-mode tcpTunnel")!=std::string::npos);
         assert(log.find("create share --share-token opal-vid-")!=std::string::npos);
-        assert(opal::tunnel_host_start()==0);
+        int rc=-1;
+        auto output=capture_fds(root/"host-output.log",[&]{rc=opal::tunnel_host_start();});
+        assert(rc==0);
+        assert(output.find("ZROK_DEBUG_NOISE")==std::string::npos);
         log=read_all(root/"zrok.log");
         assert(log.find("share private --headless --share-token opal-ctl-")!=std::string::npos);
         assert(log.find("share private --headless --share-token opal-vid-")!=std::string::npos);
@@ -184,7 +217,10 @@ int main() {
 
     {
         auto root=make_fake_zrok("opal-zrok-access-readiness-test","access-delayed");
-        assert(opal::tunnel_access("old-control-token","old-video-token"));
+        bool accessed=false;
+        auto output=capture_fds(root/"access-output.log",[&]{accessed=opal::tunnel_access("old-control-token","old-video-token");});
+        assert(accessed);
+        assert(output.find("ZROK_DEBUG_NOISE")==std::string::npos);
         assert(can_connect(47990));
         assert(can_connect(47991));
         auto old_pids=read_pids(root);
