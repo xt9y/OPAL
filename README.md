@@ -7,9 +7,9 @@ Native Linux remote desktop.
 - Native-resolution fullscreen desktop mirroring and remote control.
 - TLS 1.3 transport with Ed25519 device authentication.
 - GPU Screen Recorder preferred, FFmpeg fallback.
-- Wake-on-LAN with automatic wake-before-connect.
-- Optional authenticated wake bridge and zrok private tunnels.
-- Configuration and saved hosts under `~/.opal/`.
+- zrok2 private tunnels are the single network transport.
+- No IP address, port forwarding, LAN detection, or relay fallback logic.
+- Configuration under `~/.opal/`.
 
 ## Install
 
@@ -20,13 +20,15 @@ make
 sudo make install
 ```
 
-Then just run:
+Install `zrok2` on both computers and then just run:
 
 ```bash
 opal
 ```
 
-The first run asks whether this computer should host or connect. OPAL remembers that choice. A configured host starts hosting; a configured client connects to its default host and automatically sends Wake-on-LAN first when the host is offline and a MAC address is configured.
+The first host setup creates two persistent private zrok2 shares and prints one OPAL connection code. Enter that code on the client. OPAL remembers it and every later `opal` run uses the tunnel automatically.
+
+If zrok2 is installed but not enabled, OPAL asks for your zrok enable token and runs `zrok2 enable` for you.
 
 For advanced and scripting commands:
 
@@ -40,7 +42,7 @@ Docs (Thanks to AI): https://xt9y.de/opal.html
 
 - OPAL is currently Linux-first and pre-1.0.
 - GPU Screen Recorder is recommended for the fastest Wayland/X11 capture path.
-- zrok is optional; OPAL does not require a paid relay or an `xt9y.de` backend.
+- zrok2 is required for networking; OPAL itself does not require an `xt9y.de` backend.
 
 ## License
 
