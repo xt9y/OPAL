@@ -372,7 +372,19 @@ int tunnel_host_start() {
     stop_opal_tunnel_processes();
     auto control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"127.0.0.1:47990"},true);
     auto video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"127.0.0.1:47991"},true);
-    if(!child_started(control_pid)||!child_started(video_pid)) {
+    bool control_started=child_started(control_pid);
+    bool video_started=child_started(video_pid);
+    if(!control_started||!video_started) {
+        terminate_pids({control_pid,video_pid});
+        if(debug_enabled()) std::cerr<<"OPAL zrok2 share missing or unavailable; repairing saved reservation(s)\n";
+        if(!control_started) create_persistent_share(control);
+        if(!video_started) create_persistent_share(video);
+        control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"127.0.0.1:47990"},true);
+        video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"127.0.0.1:47991"},true);
+        control_started=child_started(control_pid);
+        video_started=child_started(video_pid);
+    }
+    if(!control_started||!video_started) {
         terminate_pids({control_pid,video_pid});
         std::cerr<<"Could not start OPAL zrok2 tunnel\n";
         return 1;
