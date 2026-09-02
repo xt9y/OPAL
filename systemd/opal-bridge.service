@@ -1,0 +1,13 @@
+[Unit]
+Description=OPAL Authenticated Wake-on-LAN Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/opal bridge run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
