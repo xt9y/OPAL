@@ -34,7 +34,17 @@ int main() {
 
     auto cmd = opal::capture_command(true, 60, 20000, true);
     assert(cmd.find("gpu-screen-recorder") != std::string::npos);
-    assert(cmd.find("-c flv") != std::string::npos);
+    assert(cmd.find(" -f 60 ") != std::string::npos);
+    assert(cmd.find(" -k h264 ") != std::string::npos);
+    assert(cmd.find(" -v h264 ") == std::string::npos);
+    assert(cmd.find(" -bm cbr ") != std::string::npos);
+    assert(cmd.find(" -q 20000") != std::string::npos);
+    assert(cmd.find(" -a default_output") != std::string::npos);
+    assert(cmd.find(" -c flv ") != std::string::npos);
+    assert(cmd.find(" -o -") != std::string::npos);
+    assert(cmd.find("WAYLAND_DISPLAY:-screen") == std::string::npos);
+    assert(cmd.find("portalwayland") == std::string::npos);
+
     auto fallback = opal::capture_command(false, 60, 12000, false);
     assert(fallback.find("ffmpeg") != std::string::npos);
     assert(fallback.find("x11grab") != std::string::npos);
