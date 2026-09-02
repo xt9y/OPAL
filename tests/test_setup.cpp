@@ -39,11 +39,12 @@ static std::filesystem::path fresh(const char*name){
     return p;
 }
 
-static int run_with(const std::string&input,std::string*out=nullptr){
-    std::istringstream in(input);std::ostringstream capture;
-    auto*oldin=std::cin.rdbuf(in.rdbuf());auto*oldout=std::cout.rdbuf(capture.rdbuf());
+static int run_with(const std::string&input,std::string*out=nullptr,std::string*err=nullptr){
+    std::istringstream in(input);std::ostringstream capture,errors;
+    auto*oldin=std::cin.rdbuf(in.rdbuf());auto*oldout=std::cout.rdbuf(capture.rdbuf());auto*olderr=std::cerr.rdbuf(errors.rdbuf());
     int rc=opal::interactive_run();
-    std::cin.rdbuf(oldin);std::cout.rdbuf(oldout);if(out)*out=capture.str();return rc;
+    std::cin.rdbuf(oldin);std::cout.rdbuf(oldout);std::cerr.rdbuf(olderr);
+    if(out)*out=capture.str();if(err)*err=errors.str();return rc;
 }
 
 int main(){
@@ -60,6 +61,12 @@ int main(){
         assert(run_with("2\nopal:control-token,video-token\ndesktop\n")==0);
         opal::Ini c;assert(c.load(p/"config.ini"));assert(c.get("opal","role")=="client");assert(c.get("opal","default_host")=="desktop");
         assert(opal::add_calls==1);assert(opal::added_address=="opal:control-token,video-token");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
+    }
+    {
+        fresh("opal-setup-invalid-code-test");reset_calls();std::string err;
+        assert(run_with("2\nopal,opal-ctl-bad,opal-vid-bad\n",nullptr,&err)==2);
+        assert(err.find("Invalid OPAL connection code. Expected: opal:CONTROL,VIDEO")!=std::string::npos);
+        assert(opal::add_calls==0);assert(opal::client_calls==0);
     }
     {
         auto p=fresh("opal-auto-host-test");reset_calls();opal::Ini c;c.set("opal","role","host");c.save(p/"config.ini");
