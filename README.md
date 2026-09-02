@@ -71,7 +71,7 @@ Then just run:
 opal
 ```
 
-The first host setup creates two persistent private zrok2 shares and enables `opal-host.service`. The daemon binds only to loopback; zrok2 is the Internet-facing transport. `opal host` remains an explicit foreground/debug LAN listener.
+The first run opens OPAL setup. A host setup creates two persistent private zrok2 shares and enables `opal-host.service`. The daemon binds only to loopback; zrok2 is the Internet-facing transport.
 
 Check the host service with:
 
@@ -84,6 +84,8 @@ The first Wayland capture can display the desktop portal screen-selection prompt
 The first host setup prints an OPAL connection code and a high-entropy pairing password. Enter the connection code on the client. After a successful pairing, OPAL rotates the host pairing password and later connections use the saved Ed25519 identity plus the pinned host certificate fingerprint.
 
 If zrok2 is installed but not enabled, OPAL asks for your zrok enable token and runs `zrok2 enable` for you.
+
+On a client, plain `opal` uses the selected saved host. If that host has a saved MAC address, OPAL sends Wake-on-LAN automatically before connecting.
 
 During a connection, OPAL keeps the authenticated control session separate from the replaceable video/player session. If capture, transport, or FFplay stalls, normal output reports:
 
@@ -108,23 +110,33 @@ OPAL_DEBUG=1 opal
 
 Normal `opal` output intentionally suppresses those subprocess diagnostics.
 
-## Clean local OPAL state
+## Commands
 
-To completely reset OPAL and its zrok tunnels on the current computer:
+```text
+opal             Wake and connect to the selected host
+opal select      Select a saved host
+opal new         Run setup / add another host
+opal remove      Remove a saved host
+opal restart     Restart OPAL services
+opal clean       Remove OPAL state and OPAL zrok resources
+opal doctor      Check local requirements
+opal version     Show the version
+opal help        Show command help
+```
+
+## Clean OPAL state
+
+To completely reset OPAL and the zrok resources associated with it on the current computer:
 
 ```bash
 opal clean
 ```
 
-This stops and disables the local OPAL host/bridge services, terminates local zrok2 private share/access tunnel processes, deletes the persistent zrok shares created by this computer's OPAL host setup, and removes `~/.opal` including saved hosts, pairings, identities, connection codes, portal-session state, and OPAL configuration.
+This stops and disables the local OPAL host/bridge services, terminates local zrok2 private share/access tunnel processes, enumerates and deletes zrok access frontends associated with OPAL's saved control/video tokens, deletes the persistent zrok shares created by this computer's OPAL host setup, and removes `~/.opal` including saved hosts, pairings, identities, connection codes, portal-session state, and OPAL configuration.
 
-`opal clean` intentionally does **not** run `zrok2 disable` and does not remove `~/.zrok2`, so the zrok2 environment/login stays enabled. The next `opal` run starts as a fresh OPAL setup without requiring you to link/login to zrok again.
+Client access tunnels are launched with zrok2 local-only access mode so new connections do not register persistent access frontends with the zrok agent.
 
-For advanced and scripting commands:
-
-```bash
-opal help
-```
+`opal clean` intentionally does **not** run `zrok2 disable` and does not remove `~/.zrok2`, so the zrok2 environment/login stays enabled. If zrok resource cleanup fails, OPAL preserves `~/.opal` so the cleanup can be retried instead of losing the saved tokens needed to identify those resources.
 
 Docs (Thanks to AI): https://xt9y.de/opal.html
 
@@ -133,7 +145,7 @@ Docs (Thanks to AI): https://xt9y.de/opal.html
 - OPAL is currently Linux-first and pre-1.0.
 - GPU Screen Recorder is recommended for the fastest Wayland/X11 capture path.
 - zrok2 is required for normal networking.
-- The normal daemon is loopback-only behind private zrok shares; direct foreground hosting is intentionally a separate debugging/LAN mode.
+- The normal daemon is loopback-only behind private zrok shares.
 
 ## License
 
