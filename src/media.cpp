@@ -14,7 +14,7 @@ std::string capture_command(bool gsr,int fps,int bitrate,bool audio){
         const bool debug_enabled=debug&&*debug&&std::string(debug)!="0";
         return "gpu-screen-recorder -w "+source+
             " -f "+std::to_string(fps)+
-            " -k h264 -bm cbr -q "+std::to_string(bitrate)+
+            " -k h264 -fallback-cpu-encoding yes -bm cbr -q "+std::to_string(bitrate)+
             " -v no"+
             (audio?" -a default_output":"")+
             " -c flv -o -"+
