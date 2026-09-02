@@ -75,7 +75,9 @@ int main(){
             auto c=opal::accept_tls(server_ctx,lfd);if(!c.ssl)continue;
             ++generation;++control_accepts;
             std::string nonce="nonce-"+std::to_string(generation);
-            assert(opal::tls_write_line(c.ssl,"CHALLENGE "+nonce));
+            // Geometry is part of the opaque signed challenge so old clients
+            // remain compatible while new clients can discover host aspect.
+            assert(opal::tls_write_line(c.ssl,"CHALLENGE "+nonce+" 1920 1080"));
             std::string line;assert(opal::tls_read_line_timeout(c.ssl,line,3000));
             if(generation==1){assert(line.rfind("PAIR ",0)==0);++pair_count;}
             else{assert(line.rfind("AUTH ",0)==0);++auth_count;}
@@ -129,9 +131,13 @@ int main(){
     options.paired=false;
     opal::SessionSupervisor session(options);
     assert(session.start());
+    assert(session.remote_width()==1920);
+    assert(session.remote_height()==1080);
     assert(wait_until([&]{return session.media_started();},5000));
     assert(wait_until([&]{return line_count(player_log)>=2;},5000));
     assert(wait_until([&]{return session.control_generation()>=2;},9000));
+    assert(session.remote_width()==1920);
+    assert(session.remote_height()==1080);
     assert(pair_count.load()==1);
     assert(auth_count.load()>=1);
     assert(control_accepts.load()>=2);
