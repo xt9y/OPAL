@@ -82,11 +82,18 @@ int main() {
     {
         auto root=make_fake_zrok("opal-zrok-disabled-test","disabled");
         std::istringstream input("TEST-ENABLE-TOKEN\n");
-        auto *old=std::cin.rdbuf(input.rdbuf());
+        std::ostringstream output;
+        auto *old_in=std::cin.rdbuf(input.rdbuf());
+        auto *old_out=std::cout.rdbuf(output.rdbuf());
         std::string code;
         int rc=opal::tunnel_host_setup(code);
-        std::cin.rdbuf(old);
+        std::cin.rdbuf(old_in);
+        std::cout.rdbuf(old_out);
         assert(rc==0);
+        auto guide=output.str();
+        assert(guide.find("https://myzrok.io")!=std::string::npos);
+        assert(guide.find("Enable Your Environment")!=std::string::npos);
+        assert(guide.find("Copy the enable token")!=std::string::npos);
         auto log=read_all(root/"zrok.log");
         assert(log.find("status\n")!=std::string::npos);
         assert(log.find("enable TEST-ENABLE-TOKEN\n")!=std::string::npos);
