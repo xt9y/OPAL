@@ -30,13 +30,13 @@ std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::s
             " -f "+std::to_string(fps)+
             " -fm cfr -keyint 1"
             " -k h264 -fallback-cpu-encoding yes -bm cbr -q "+std::to_string(bitrate)+
-            " -v no"+
+            " -v no -cursor yes"+
             (audio?" -a default_output":"")+
             portal_args+
-            " -c flv"+
+            " -c mkv"+
             (debug_enabled?"":" 2>/dev/null");
     }
-    return "ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 1 -framerate "+std::to_string(fps)+" -i ${DISPLAY:-:0.0} "+(audio?"-f pulse -i default ":"")+"-c:v libx264 -preset ultrafast -tune zerolatency -b:v "+std::to_string(bitrate)+"k -maxrate "+std::to_string(bitrate)+"k -bufsize "+std::to_string(bitrate)+"k "+(audio?"-c:a aac -b:a 128k ":"")+"-f flv pipe:1";
+    return "ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 1 -framerate "+std::to_string(fps)+" -i ${DISPLAY:-:0.0} "+(audio?"-f pulse -i default ":"")+"-c:v libx264 -preset ultrafast -tune zerolatency -b:v "+std::to_string(bitrate)+"k -maxrate "+std::to_string(bitrate)+"k -bufsize "+std::to_string(bitrate)+"k "+(audio?"-c:a aac -b:a 128k ":"")+"-f matroska pipe:1";
 }
 
 CaptureProcess start_capture(const std::string &command){
