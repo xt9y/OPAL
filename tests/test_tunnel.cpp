@@ -5,10 +5,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <signal.h>
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -22,6 +24,7 @@ static fs::path make_fake_zrok(const char *name,const char *mode) {
     setenv("OPAL_HOME",(root/"opal").c_str(),1);
     setenv("ZROK_TEST_LOG",(root/"zrok.log").c_str(),1);
     setenv("ZROK_TEST_MARKER",(root/"enabled").c_str(),1);
+    setenv("ZROK_TEST_PIDS",(root/"pids").c_str(),1);
     setenv("ZROK_TEST_MODE",mode,1);
     std::string path=(root/"bin").string()+":"+original_path;
     setenv("PATH",path.c_str(),1);
@@ -72,6 +75,7 @@ case "$1" in
       *127.0.0.1:47991*) port=47991; delay=2 ;;
       *) exit 81 ;;
     esac
+    echo $$ >> "$ZROK_TEST_PIDS"
     sleep "$delay"
     exec python3 - "$port" <<'PY'
 import socket
@@ -117,6 +121,15 @@ static bool can_connect(uint16_t port) {
     return ok;
 }
 
+static void stop_fake_zrok(const fs::path &root) {
+    std::ifstream in(root/"pids");
+    pid_t pid=0;
+    while(in>>pid) {
+        kill(pid,SIGTERM);
+        waitpid(pid,nullptr,0);
+    }
+}
+
 int main() {
     original_path=std::getenv("PATH")?std::getenv("PATH"):"";
 
@@ -159,10 +172,11 @@ int main() {
     }
 
     {
-        make_fake_zrok("opal-zrok-access-readiness-test","access-delayed");
+        auto root=make_fake_zrok("opal-zrok-access-readiness-test","access-delayed");
         assert(opal::tunnel_access("control-token","video-token"));
         assert(can_connect(47990));
         assert(can_connect(47991));
+        stop_fake_zrok(root);
     }
 
     std::cout << "tunnel tests passed\n";
