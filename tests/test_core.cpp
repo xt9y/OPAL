@@ -32,11 +32,14 @@ int main() {
     assert(opal::secure_equal(proof, opal::hmac_sha256_hex("secret", nonce)));
     assert(!opal::secure_equal(proof, opal::hmac_sha256_hex("wrong", nonce)));
 
+    unsetenv("WAYLAND_DISPLAY");
     auto cmd = opal::capture_command(true, 60, 20000, true);
     assert(cmd.find("gpu-screen-recorder") != std::string::npos);
+    assert(cmd.find(" -w screen ") != std::string::npos);
     assert(cmd.find(" -f 60 ") != std::string::npos);
     assert(cmd.find(" -k h264 ") != std::string::npos);
     assert(cmd.find(" -v h264 ") == std::string::npos);
+    assert(cmd.find(" -v no ") != std::string::npos);
     assert(cmd.find(" -bm cbr ") != std::string::npos);
     assert(cmd.find(" -q 20000") != std::string::npos);
     assert(cmd.find(" -a default_output") != std::string::npos);
@@ -44,6 +47,12 @@ int main() {
     assert(cmd.find(" -o -") != std::string::npos);
     assert(cmd.find("WAYLAND_DISPLAY:-screen") == std::string::npos);
     assert(cmd.find("portalwayland") == std::string::npos);
+
+    setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+    auto wayland_cmd = opal::capture_command(true, 60, 20000, false);
+    assert(wayland_cmd.find(" -w portal ") != std::string::npos);
+    assert(wayland_cmd.find("wayland-0") == std::string::npos);
+    unsetenv("WAYLAND_DISPLAY");
 
     auto fallback = opal::capture_command(false, 60, 12000, false);
     assert(fallback.find("ffmpeg") != std::string::npos);
