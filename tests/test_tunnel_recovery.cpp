@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <signal.h>
+#include <sstream>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -22,8 +23,12 @@ static std::string read_all(const fs::path&path){
 static std::vector<pid_t> read_pids(const fs::path&path){
     std::ifstream in(path);
     std::vector<pid_t> out;
-    pid_t pid=0;
-    while(in>>pid)out.push_back(pid);
+    std::string line;
+    while(std::getline(in,line)){
+        std::istringstream row(line);
+        pid_t pid=0;
+        if(row>>pid)out.push_back(pid);
+    }
     return out;
 }
 
