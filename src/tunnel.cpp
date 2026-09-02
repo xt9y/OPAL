@@ -2,6 +2,7 @@
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -18,9 +19,24 @@
 namespace opal {
 namespace {
 
-pid_t spawn(const std::vector<std::string> &args) {
+bool debug_enabled() {
+    const char *value=std::getenv("OPAL_DEBUG");
+    if(!value||!*value) return false;
+    std::string v=value;
+    return v!="0"&&v!="false"&&v!="FALSE"&&v!="off"&&v!="OFF";
+}
+
+pid_t spawn(const std::vector<std::string> &args,bool quiet=false) {
     pid_t pid=fork();
     if(pid==0) {
+        if(quiet&&!debug_enabled()) {
+            int nullfd=open("/dev/null",O_WRONLY);
+            if(nullfd>=0) {
+                dup2(nullfd,STDOUT_FILENO);
+                dup2(nullfd,STDERR_FILENO);
+                if(nullfd>STDERR_FILENO) close(nullfd);
+            }
+        }
         std::vector<char*> argv;
         argv.reserve(args.size()+1);
         for(const auto &arg:args) argv.push_back(const_cast<char*>(arg.c_str()));
@@ -32,7 +48,7 @@ pid_t spawn(const std::vector<std::string> &args) {
 }
 
 int run_wait(const std::vector<std::string> &args) {
-    pid_t pid=spawn(args);
+    pid_t pid=spawn(args,true);
     if(pid<0) return 1;
     int status=0;
     if(waitpid(pid,&status,0)<0) return 1;
@@ -73,7 +89,7 @@ int run_capture(const std::vector<std::string> &args,std::string &output) {
 bool zrok2_environment_enabled() {
     std::string status_output;
     if(run_capture({"zrok2","status"},status_output)!=0) {
-        std::cerr<<status_output;
+        if(debug_enabled()) std::cerr<<status_output;
         std::cerr<<"Could not read zrok2 environment status\n";
         return false;
     }
@@ -354,8 +370,8 @@ int tunnel_host_start() {
         std::cout<<"OPAL connection code: "<<code<<"\n";
     } else if(!ensure_zrok2()) return 2;
     stop_opal_tunnel_processes();
-    auto control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"127.0.0.1:47990"});
-    auto video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"127.0.0.1:47991"});
+    auto control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"127.0.0.1:47990"},true);
+    auto video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"127.0.0.1:47991"},true);
     if(!child_started(control_pid)||!child_started(video_pid)) {
         terminate_pids({control_pid,video_pid});
         std::cerr<<"Could not start OPAL zrok2 tunnel\n";
@@ -368,8 +384,8 @@ int tunnel_host_start() {
 bool tunnel_access(const std::string &control_token,const std::string &video_token) {
     if(!ensure_zrok2()) return false;
     stop_opal_tunnel_processes();
-    auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"});
-    auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"});
+    auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"},true);
+    auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"},true);
     if(!wait_for_access_endpoints(control_pid,video_pid)) {
         terminate_pids({control_pid,video_pid});
         return false;
