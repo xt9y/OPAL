@@ -20,7 +20,25 @@ make
 sudo make install
 ```
 
-Install `zrok2` on both computers and then just run:
+Install `zrok2` on both Linux computers with the universal installer:
+
+```bash
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  armv7l|armv7) ARCH=armv7 ;;
+  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
+VERSION="$(curl -fsSL https://api.github.com/repos/openziti/zrok/releases/latest | grep -m1 '"tag_name"' | cut -d '"' -f4 | sed 's/^v//')"
+curl -fL "https://github.com/openziti/zrok/releases/download/v${VERSION}/zrok_${VERSION}_linux_${ARCH}.tar.gz" -o /tmp/zrok2.tar.gz
+tar -xzf /tmp/zrok2.tar.gz -C /tmp
+sudo install -m 0755 /tmp/zrok2 /usr/local/bin/zrok2
+zrok2 version
+```
+
+Then just run:
 
 ```bash
 opal
@@ -42,7 +60,7 @@ Docs (Thanks to AI): https://xt9y.de/opal.html
 
 - OPAL is currently Linux-first and pre-1.0.
 - GPU Screen Recorder is recommended for the fastest Wayland/X11 capture path.
-- zrok2 is required for networking; OPAL itself does not require an `xt9y.de` backend.
+- zrok2 is required for networking.
 
 ## License
 
