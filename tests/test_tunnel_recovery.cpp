@@ -1,11 +1,14 @@
 #include <opal/tunnel.hpp>
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <signal.h>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -87,9 +90,6 @@ exit 0
             "mode=zrok2-private\n";
     host.close();
 
-    // The local config remembers the connection code, but the corresponding
-    // persistent zrok shares have disappeared server-side. Restart must repair
-    // those exact names instead of forcing every client to save a new code.
     assert(opal::tunnel_host_start()==0);
     assert(opal::tunnel_host_healthy());
 
@@ -97,12 +97,22 @@ exit 0
     assert(log.find("create share --share-token opal-ctl-preserved --backend-mode tcpTunnel")!=std::string::npos);
     assert(log.find("create share --share-token opal-vid-preserved --backend-mode tcpTunnel")!=std::string::npos);
 
+    // Continuous supervision must repair a child that dies after startup,
+    // without requiring an explicit restart and without changing share tokens.
+    std::atomic<bool> supervise{true};
+    std::thread supervisor([&]{opal::tunnel_host_supervise(supervise,50);});
     auto pids=read_pids(root/"pids");
     assert(pids.size()>=2);
     kill(pids.front(),SIGTERM);
-    usleep(150000);
-    assert(!opal::tunnel_host_healthy());
-    assert(opal::tunnel_host_ensure_running()==0);
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(4);
+    bool repaired=false;
+    while(std::chrono::steady_clock::now()<deadline){
+        if(opal::tunnel_host_healthy()){repaired=true;break;}
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    supervise.store(false);
+    supervisor.join();
+    assert(repaired);
     assert(opal::tunnel_host_healthy());
 
     auto config=read_all(root/"opal/host.ini");
