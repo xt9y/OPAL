@@ -421,18 +421,25 @@ bool tunnel_access(const std::string &control_token,const std::string &video_tok
     stop_opal_tunnel_processes();
     if(timeout_ms<1) timeout_ms=1;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(timeout_ms);
+    int retry_delay_ms=1000;
     while(std::chrono::steady_clock::now()<deadline) {
         auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"},true);
         auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"},true);
-        auto attempt_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
-        if(attempt_deadline>deadline) attempt_deadline=deadline;
-        if(wait_for_access_endpoints(control_pid,video_pid,attempt_deadline)) {
+        if(wait_for_access_endpoints(control_pid,video_pid,deadline)) {
             record_pids(pid_file("access"),{control_pid,video_pid});
             return true;
         }
         terminate_pids({control_pid,video_pid});
-        if(std::chrono::steady_clock::now()>=deadline) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        auto now=std::chrono::steady_clock::now();
+        if(now>=deadline) break;
+        auto remaining_ms=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count();
+        long long pause_ms=retry_delay_ms;
+        if(pause_ms>remaining_ms) pause_ms=remaining_ms;
+        if(pause_ms>0) std::this_thread::sleep_for(std::chrono::milliseconds(pause_ms));
+        if(retry_delay_ms<5000) {
+            retry_delay_ms*=2;
+            if(retry_delay_ms>5000) retry_delay_ms=5000;
+        }
     }
     return false;
 }
