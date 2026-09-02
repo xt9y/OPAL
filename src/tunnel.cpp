@@ -34,12 +34,53 @@ int run_wait(const std::vector<std::string> &args) {
     return WIFEXITED(status)?WEXITSTATUS(status):1;
 }
 
+int run_capture(const std::vector<std::string> &args,std::string &output) {
+    int fds[2];
+    if(pipe(fds)!=0) return 1;
+    pid_t pid=fork();
+    if(pid==0) {
+        close(fds[0]);
+        dup2(fds[1],STDOUT_FILENO);
+        dup2(fds[1],STDERR_FILENO);
+        close(fds[1]);
+        std::vector<char*> argv;
+        argv.reserve(args.size()+1);
+        for(const auto &arg:args) argv.push_back(const_cast<char*>(arg.c_str()));
+        argv.push_back(nullptr);
+        execvp(argv[0],argv.data());
+        _exit(127);
+    }
+    close(fds[1]);
+    output.clear();
+    char buffer[4096];
+    for(;;) {
+        ssize_t n=read(fds[0],buffer,sizeof(buffer));
+        if(n<=0) break;
+        output.append(buffer,static_cast<size_t>(n));
+    }
+    close(fds[0]);
+    if(pid<0) return 1;
+    int status=0;
+    if(waitpid(pid,&status,0)<0) return 1;
+    return WIFEXITED(status)?WEXITSTATUS(status):1;
+}
+
+bool zrok2_environment_enabled() {
+    std::string status_output;
+    if(run_capture({"zrok2","status"},status_output)!=0) {
+        std::cerr<<status_output;
+        std::cerr<<"Could not read zrok2 environment status\n";
+        return false;
+    }
+    return status_output.find("EnvZId")!=std::string::npos;
+}
+
 bool ensure_zrok2() {
     if(!command_exists("zrok2")) {
         std::cerr<<"OPAL requires zrok2 for networking. Install zrok2, then run opal again.\n";
         return false;
     }
-    if(run_wait({"zrok2","status"})==0) return true;
+    if(zrok2_environment_enabled()) return true;
     std::cout<<"zrok2 is not enabled on this computer.\nZrok enable token: ";
     std::string token;
     if(!std::getline(std::cin,token)) return false;
@@ -49,11 +90,15 @@ bool ensure_zrok2() {
         std::cerr<<"zrok2 enable failed\n";
         return false;
     }
+    if(!zrok2_environment_enabled()) {
+        std::cerr<<"zrok2 enable completed but no enabled environment was found\n";
+        return false;
+    }
     return true;
 }
 
 bool create_persistent_share(const std::string &token) {
-    return run_wait({"zrok2","create","share",token})==0;
+    return run_wait({"zrok2","create","share","--share-token",token,"--backend-mode","tcpTunnel"})==0;
 }
 
 bool child_started(pid_t pid) {
