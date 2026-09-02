@@ -46,6 +46,27 @@ std::string absolute_pointer_command(int x,int y,int width,int height){
     return "POINTER "+std::to_string(scale(x,width))+" "+std::to_string(scale(y,height));
 }
 
+std::string video_pointer_command(int x,int y,int client_width,int client_height,int remote_width,int remote_height){
+    if(client_width<=0||client_height<=0)return{};
+    if(remote_width<=0||remote_height<=0)return absolute_pointer_command(x,y,client_width,client_height);
+
+    int view_x=0,view_y=0,view_width=client_width,view_height=client_height;
+    const std::int64_t client_cross=static_cast<std::int64_t>(client_width)*remote_height;
+    const std::int64_t remote_cross=static_cast<std::int64_t>(client_height)*remote_width;
+    if(client_cross>remote_cross){
+        // Client is wider than the host video: ffplay pillarboxes left/right.
+        view_width=static_cast<int>((static_cast<std::int64_t>(client_height)*remote_width)/remote_height);
+        view_width=std::clamp(view_width,1,client_width);
+        view_x=(client_width-view_width)/2;
+    }else if(client_cross<remote_cross){
+        // Client is taller than the host video: ffplay letterboxes top/bottom.
+        view_height=static_cast<int>((static_cast<std::int64_t>(client_width)*remote_height)/remote_width);
+        view_height=std::clamp(view_height,1,client_height);
+        view_y=(client_height-view_height)/2;
+    }
+    return absolute_pointer_command(x-view_x,y-view_y,view_width,view_height);
+}
+
 bool HeldInputState::press_key(int code){if(code<=0)return false;return keys_.insert(code).second;}
 bool HeldInputState::release_key(int code){if(code<=0)return false;return keys_.erase(code)!=0;}
 bool HeldInputState::press_button(int button){if(button<1||button>3)return false;return buttons_.insert(button).second;}
