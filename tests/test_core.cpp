@@ -46,7 +46,7 @@ int main() {
     assert(cmd.find(" -q 20000") != std::string::npos);
     assert(cmd.find(" -a default_output") != std::string::npos);
     assert(cmd.find(" -c flv ") != std::string::npos);
-    assert(cmd.find(" -o -") != std::string::npos);
+    assert(cmd.find(" -o -") == std::string::npos);
     assert(cmd.find("2>/dev/null") != std::string::npos);
     assert(cmd.find("WAYLAND_DISPLAY:-screen") == std::string::npos);
     assert(cmd.find("portalwayland") == std::string::npos);
