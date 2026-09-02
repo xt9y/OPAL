@@ -14,8 +14,9 @@ INPUT := $(BUILD)/opal-input
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
+TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
 SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/system.cpp $(CORE_SRCS) $(INPUT_SRCS)
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
 
@@ -53,7 +54,7 @@ test-tunnel: | $(BUILD)
 	$(BUILD)/test-tunnel
 
 test-tunnel-recovery: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel_recovery.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel-recovery
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel_recovery.cpp src/tunnel.cpp $(TUNNEL_SUPERVISOR_SRCS) src/config.cpp src/crypto.cpp -lssl -lcrypto -lpthread -o $(BUILD)/test-tunnel-recovery
 	$(BUILD)/test-tunnel-recovery
 
 test-net: | $(BUILD)
