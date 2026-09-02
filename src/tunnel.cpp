@@ -7,7 +7,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <thread>
 #include <vector>
 #include <signal.h>
@@ -155,6 +158,135 @@ bool wait_for_access_endpoints(pid_t &control_pid,pid_t &video_pid) {
     return false;
 }
 
+unsigned long long process_start_time(pid_t pid) {
+    std::ifstream in("/proc/"+std::to_string(pid)+"/stat");
+    std::string line;
+    if(!std::getline(in,line)) return 0;
+    auto end=line.rfind(')');
+    if(end==std::string::npos||end+2>=line.size()) return 0;
+    std::istringstream fields(line.substr(end+2));
+    std::string value;
+    for(int field=3;field<=22;++field) {
+        if(!(fields>>value)) return 0;
+        if(field==22) {
+            try { return std::stoull(value); }
+            catch(...) { return 0; }
+        }
+    }
+    return 0;
+}
+
+std::vector<std::string> process_args(pid_t pid) {
+    std::ifstream in("/proc/"+std::to_string(pid)+"/cmdline",std::ios::binary);
+    std::string raw((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+    std::vector<std::string> args;
+    size_t pos=0;
+    while(pos<raw.size()) {
+        auto end=raw.find('\0',pos);
+        if(end==std::string::npos) end=raw.size();
+        if(end>pos) args.emplace_back(raw.substr(pos,end-pos));
+        pos=end+1;
+    }
+    return args;
+}
+
+bool basename_is_zrok2(const std::string &arg) {
+    return std::filesystem::path(arg).filename()=="zrok2";
+}
+
+bool has_opal_endpoint(const std::vector<std::string> &args) {
+    for(const auto &arg:args) {
+        if(arg=="127.0.0.1:47990"||arg=="127.0.0.1:47991") return true;
+    }
+    return false;
+}
+
+bool is_zrok_private_process(pid_t pid,bool opal_endpoints_only) {
+    auto args=process_args(pid);
+    for(size_t i=0;i+2<args.size();++i) {
+        if(!basename_is_zrok2(args[i])) continue;
+        if((args[i+1]!="access"&&args[i+1]!="share")||args[i+2]!="private") return false;
+        return !opal_endpoints_only||has_opal_endpoint(args);
+    }
+    return false;
+}
+
+bool pid_exists(pid_t pid) {
+    return pid>0&&kill(pid,0)==0;
+}
+
+void terminate_pids(const std::vector<pid_t> &pids) {
+    for(auto pid:pids) if(pid>0&&pid!=getpid()) kill(pid,SIGTERM);
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(1200);
+    while(std::chrono::steady_clock::now()<deadline) {
+        bool any=false;
+        for(auto pid:pids) {
+            if(pid<=0||pid==getpid()) continue;
+            int status=0;
+            pid_t rc=waitpid(pid,&status,WNOHANG);
+            if(rc==pid) continue;
+            if(pid_exists(pid)) any=true;
+        }
+        if(!any) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    for(auto pid:pids) if(pid>0&&pid!=getpid()&&pid_exists(pid)) kill(pid,SIGKILL);
+    for(auto pid:pids) {
+        if(pid<=0||pid==getpid()) continue;
+        int status=0;
+        waitpid(pid,&status,WNOHANG);
+    }
+}
+
+std::vector<pid_t> scan_zrok_private_processes(bool opal_endpoints_only) {
+    std::vector<pid_t> pids;
+    std::error_code ec;
+    for(const auto &entry:std::filesystem::directory_iterator("/proc",ec)) {
+        if(ec) break;
+        auto name=entry.path().filename().string();
+        if(name.empty()||name.find_first_not_of("0123456789")!=std::string::npos) continue;
+        pid_t pid=0;
+        try { pid=static_cast<pid_t>(std::stol(name)); }
+        catch(...) { continue; }
+        if(pid!=getpid()&&is_zrok_private_process(pid,opal_endpoints_only)) pids.push_back(pid);
+    }
+    return pids;
+}
+
+std::filesystem::path pid_file(const char *kind) {
+    return Paths::load().root/(std::string("tunnel-")+kind+".pids");
+}
+
+void record_pids(const std::filesystem::path &path,const std::vector<pid_t> &pids) {
+    auto parent=path.parent_path();
+    std::error_code ec;
+    std::filesystem::create_directories(parent,ec);
+    std::ofstream out(path,std::ios::trunc);
+    for(auto pid:pids) {
+        auto start=process_start_time(pid);
+        if(pid>0&&start) out<<pid<<' '<<start<<'\n';
+    }
+}
+
+void stop_recorded(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    std::vector<pid_t> pids;
+    pid_t pid=0;
+    unsigned long long start=0;
+    while(in>>pid>>start) {
+        if(pid>0&&start&&process_start_time(pid)==start) pids.push_back(pid);
+    }
+    terminate_pids(pids);
+    std::error_code ec;
+    std::filesystem::remove(path,ec);
+}
+
+void stop_opal_tunnel_processes() {
+    stop_recorded(pid_file("host"));
+    stop_recorded(pid_file("access"));
+    terminate_pids(scan_zrok_private_processes(true));
+}
+
 std::string make_token(const char *kind) {
     return std::string("opal-")+kind+"-"+random_hex(5);
 }
@@ -221,27 +353,50 @@ int tunnel_host_start() {
         video=host.get("tunnel","video_token");
         std::cout<<"OPAL connection code: "<<code<<"\n";
     } else if(!ensure_zrok2()) return 2;
+    stop_opal_tunnel_processes();
     auto control_pid=spawn({"zrok2","share","private","--headless","--share-token",control,"127.0.0.1:47990"});
     auto video_pid=spawn({"zrok2","share","private","--headless","--share-token",video,"127.0.0.1:47991"});
     if(!child_started(control_pid)||!child_started(video_pid)) {
-        if(control_pid>0) kill(control_pid,SIGTERM);
-        if(video_pid>0) kill(video_pid,SIGTERM);
+        terminate_pids({control_pid,video_pid});
         std::cerr<<"Could not start OPAL zrok2 tunnel\n";
         return 1;
     }
+    record_pids(pid_file("host"),{control_pid,video_pid});
     return 0;
 }
 
 bool tunnel_access(const std::string &control_token,const std::string &video_token) {
     if(!ensure_zrok2()) return false;
+    stop_opal_tunnel_processes();
     auto control_pid=spawn({"zrok2","access","private",control_token,"--bind","127.0.0.1:47990","--headless"});
     auto video_pid=spawn({"zrok2","access","private",video_token,"--bind","127.0.0.1:47991","--headless"});
     if(!wait_for_access_endpoints(control_pid,video_pid)) {
-        if(control_pid>0) kill(control_pid,SIGTERM);
-        if(video_pid>0) kill(video_pid,SIGTERM);
+        terminate_pids({control_pid,video_pid});
         return false;
     }
+    record_pids(pid_file("access"),{control_pid,video_pid});
     return true;
+}
+
+int tunnel_clean_local() {
+    auto paths=Paths::load();
+    Ini host;
+    host.load(paths.host);
+    auto control=host.get("tunnel","control_token");
+    auto video=host.get("tunnel","video_token");
+
+    stop_recorded(pid_file("host"));
+    stop_recorded(pid_file("access"));
+    terminate_pids(scan_zrok_private_processes(false));
+
+    if(command_exists("zrok2")) {
+        for(const auto &token:{control,video}) {
+            if(token.empty()) continue;
+            if(run_wait({"zrok2","delete","share",token})!=0)
+                std::cerr<<"Warning: could not delete zrok share "<<token<<"\n";
+        }
+    }
+    return 0;
 }
 
 int tunnel_host() {
