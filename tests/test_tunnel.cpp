@@ -24,10 +24,12 @@ static fs::path make_fake_zrok(const char *name,const char *mode) {
     auto root=fs::temp_directory_path()/name;
     fs::remove_all(root);
     fs::create_directories(root/"bin");
+    fs::create_directories(root/"state");
     setenv("OPAL_HOME",(root/"opal").c_str(),1);
     setenv("ZROK_TEST_LOG",(root/"zrok.log").c_str(),1);
     setenv("ZROK_TEST_MARKER",(root/"enabled").c_str(),1);
     setenv("ZROK_TEST_PIDS",(root/"pids").c_str(),1);
+    setenv("ZROK_TEST_STATE_DIR",(root/"state").c_str(),1);
     setenv("ZROK_TEST_MODE",mode,1);
     std::string path=(root/"bin").string()+":"+original_path;
     setenv("PATH",path.c_str(),1);
@@ -39,7 +41,7 @@ printf '%s\n' "$*" >> "$ZROK_TEST_LOG"
 case "$1" in
   status)
     echo 'Config:'
-    if [ "$ZROK_TEST_MODE" = enabled ] || [ "$ZROK_TEST_MODE" = access-delayed ] || [ -f "$ZROK_TEST_MARKER" ]; then
+    if [ "$ZROK_TEST_MODE" = enabled ] || [ "$ZROK_TEST_MODE" = access-delayed ] || [ "$ZROK_TEST_MODE" = access-first-fails ] || [ -f "$ZROK_TEST_MARKER" ]; then
       echo 'Environment:'
       echo 'EnvZId <<SET>>'
     else
@@ -74,7 +76,7 @@ case "$1" in
     exit 0
     ;;
   access)
-    [ "$ZROK_TEST_MODE" = access-delayed ] || exit 0
+    [ "$ZROK_TEST_MODE" = access-delayed ] || [ "$ZROK_TEST_MODE" = access-first-fails ] || exit 0
     echo 'ZROK_DEBUG_NOISE_STDOUT'
     echo 'ZROK_DEBUG_NOISE_STDERR' >&2
     case "$*" in
@@ -82,6 +84,15 @@ case "$1" in
       *127.0.0.1:47991*) port=47991; delay=2 ;;
       *) exit 81 ;;
     esac
+    if [ "$ZROK_TEST_MODE" = access-first-fails ]; then
+      marker="$ZROK_TEST_STATE_DIR/$port"
+      if [ ! -f "$marker" ]; then
+        touch "$marker"
+        echo 'accessNotFound: share is still propagating' >&2
+        exit 44
+      fi
+      delay=0
+    fi
     echo $$ >> "$ZROK_TEST_PIDS"
     sleep "$delay"
     exec python3 - "$port" <<'PY'
@@ -114,6 +125,12 @@ exit 0
 static std::string read_all(const fs::path &path) {
     std::ifstream in(path);
     return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+}
+
+static size_t count_text(const std::string &haystack,const std::string &needle) {
+    size_t count=0,pos=0;
+    while((pos=haystack.find(needle,pos))!=std::string::npos){++count;pos+=needle.size();}
+    return count;
 }
 
 static std::string capture_fds(const fs::path &path,const std::function<void()> &fn) {
@@ -233,6 +250,20 @@ int main() {
         auto log=read_all(root/"zrok.log");
         assert(log.find("access private new-control-token")!=std::string::npos);
         assert(log.find("access private new-video-token")!=std::string::npos);
+        stop_fake_zrok(root);
+    }
+
+    {
+        auto root=make_fake_zrok("opal-zrok-access-propagation-test","access-first-fails");
+        bool accessed=false;
+        auto output=capture_fds(root/"access-propagation-output.log",[&]{accessed=opal::tunnel_access("retry-control-token","retry-video-token");});
+        assert(accessed);
+        assert(output.find("accessNotFound")==std::string::npos);
+        assert(can_connect(47990));
+        assert(can_connect(47991));
+        auto log=read_all(root/"zrok.log");
+        assert(count_text(log,"access private retry-control-token")>=2);
+        assert(count_text(log,"access private retry-video-token")>=2);
         stop_fake_zrok(root);
     }
 

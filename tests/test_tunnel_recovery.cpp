@@ -1,15 +1,27 @@
 #include <opal/tunnel.hpp>
+#include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <signal.h>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
 
 namespace fs=std::filesystem;
 
 static std::string read_all(const fs::path&path){
     std::ifstream in(path);
     return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+}
+
+static std::vector<pid_t> read_pids(const fs::path&path){
+    std::ifstream in(path);
+    std::vector<pid_t> out;
+    pid_t pid=0;
+    while(in>>pid)out.push_back(pid);
+    return out;
 }
 
 int main(){
@@ -22,6 +34,7 @@ int main(){
     setenv("OPAL_HOME",(root/"opal").c_str(),1);
     setenv("ZROK_TEST_LOG",(root/"zrok.log").c_str(),1);
     setenv("ZROK_TEST_SHARE_DIR",(root/"shares").c_str(),1);
+    setenv("ZROK_TEST_PIDS",(root/"pids").c_str(),1);
     std::string old_path=std::getenv("PATH")?std::getenv("PATH"):"";
     std::string path=(root/"bin").string()+":"+old_path;
     setenv("PATH",path.c_str(),1);
@@ -53,7 +66,8 @@ case "$1" in
     done
     [ -n "$token" ] || exit 72
     [ -f "$ZROK_TEST_SHARE_DIR/$token" ] || exit 74
-    sleep 5
+    echo $$ >> "$ZROK_TEST_PIDS"
+    sleep 30
     ;;
   delete)
     [ "$2" = share ] || exit 81
@@ -76,14 +90,27 @@ exit 0
     // The local config remembers the connection code, but the corresponding
     // persistent zrok shares have disappeared server-side. Restart must repair
     // those exact names instead of forcing every client to save a new code.
-    if(opal::tunnel_host_start()!=0){
-        std::cerr << "stale persistent share was not recovered\n";
-        return 1;
-    }
+    assert(opal::tunnel_host_start()==0);
+    assert(opal::tunnel_host_healthy());
 
     auto log=read_all(root/"zrok.log");
-    if(log.find("create share --share-token opal-ctl-preserved --backend-mode tcpTunnel")==std::string::npos) return 2;
-    if(log.find("create share --share-token opal-vid-preserved --backend-mode tcpTunnel")==std::string::npos) return 3;
+    assert(log.find("create share --share-token opal-ctl-preserved --backend-mode tcpTunnel")!=std::string::npos);
+    assert(log.find("create share --share-token opal-vid-preserved --backend-mode tcpTunnel")!=std::string::npos);
+
+    auto pids=read_pids(root/"pids");
+    assert(pids.size()>=2);
+    kill(pids.front(),SIGTERM);
+    usleep(150000);
+    assert(!opal::tunnel_host_healthy());
+    assert(opal::tunnel_host_ensure_running()==0);
+    assert(opal::tunnel_host_healthy());
+
+    auto config=read_all(root/"opal/host.ini");
+    assert(config.find("control_token=opal-ctl-preserved")!=std::string::npos);
+    assert(config.find("video_token=opal-vid-preserved")!=std::string::npos);
+    log=read_all(root/"zrok.log");
+    assert(log.find("share private --headless --share-token opal-ctl-preserved")!=std::string::npos);
+    assert(log.find("share private --headless --share-token opal-vid-preserved")!=std::string::npos);
 
     opal::tunnel_clean_local();
     std::cout << "tunnel recovery tests passed\n";
