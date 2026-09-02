@@ -24,8 +24,14 @@ static bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");if(!v||!*v)re
 
 static void video_player(SSL*ssl,std::atomic<bool>*media_started,bool announce_restore){
     const char*e=std::getenv("OPAL_PLAYER_CMD");
-    const char*cmd=(e&&*e)?e:(debug_enabled()?"ffplay -hide_banner -loglevel warning -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0":"ffplay -hide_banner -loglevel quiet -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1");
-    FILE*p=popen(cmd,"w");
+    std::string cmd;
+    if(e&&*e)cmd=e;
+    else{
+        cmd=debug_enabled()?"ffplay -hide_banner -loglevel warning -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0":"ffplay -hide_banner -loglevel quiet -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1";
+        const char*display=std::getenv("DISPLAY");
+        if(display&&*display)cmd="SDL_VIDEODRIVER=x11 "+cmd;
+    }
+    FILE*p=popen(cmd.c_str(),"w");
     if(!p)return;
     bool announced=false;
     char buf[65536];
