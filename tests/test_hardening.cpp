@@ -27,6 +27,20 @@ int main(){
     const auto client=read_all("src/client.cpp");
     assert(client.find("i<300")!=std::string::npos);
 
+    const auto host=read_all("src/host.cpp");
+    assert(host.find("sanitize_label")!=std::string::npos);
+    assert(host.find("video_session_active")!=std::string::npos);
+
+    const auto session=read_all("src/session.cpp");
+    assert(session.find("SDL_VIDEODRIVER=wayland")!=std::string::npos);
+    assert(session.find("control queue overflow")!=std::string::npos);
+
+    const auto service=read_all("systemd/opal-host.service");
+    assert(service.find("NoNewPrivileges=true")!=std::string::npos);
+    assert(service.find("PrivateTmp=true")!=std::string::npos);
+    assert(service.find("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6")!=std::string::npos);
+    assert(service.find("UMask=0077")!=std::string::npos);
+
     const auto readme=read_all("README.md");
     assert(readme.find("mktemp -d")!=std::string::npos);
     assert(readme.find("/tmp/zrok2.tar.gz")==std::string::npos);

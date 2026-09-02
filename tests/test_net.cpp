@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 namespace fs = std::filesystem;
 
@@ -42,6 +43,10 @@ int main() {
     auto cert=(root/"cert.pem").string();
     auto key=(root/"key.pem").string();
     assert(opal::ensure_tls_certificate(cert,key));
+    assert(chmod(key.c_str(),0644)==0);
+    assert(opal::ensure_tls_certificate(cert,key));
+    struct stat key_stat{};assert(stat(key.c_str(),&key_stat)==0);
+    assert((key_stat.st_mode&0777)==0600);
 
     SSL_CTX *server_ctx=opal::server_tls_context(cert,key);
     SSL_CTX *client_ctx=opal::client_tls_context();

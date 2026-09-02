@@ -36,7 +36,7 @@ OPAL_TEST_VIDEO_TOKEN_LOG="$base/video-tokens.log" \
 sleep 0.5
 ! grep -q '^Password ' "$base/host.log"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 SDL_VIDEODRIVER=wayland "$BIN" connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
+OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" connect 127.0.0.1 "$password" >"$base/client.log" 2>&1 & cp=$!
 recovered=0
 i=0
 while test "$i" -lt 140; do
@@ -62,7 +62,7 @@ grep -q 'Video interrupted; recovering...' "$base/client.log"
 grep -q 'Video restored.' "$base/client.log"
 grep -q 'Control restored.' "$base/client.log"
 ! grep -q 'Pairing password:' "$base/client.log"
-grep -qx 'x11' "$base/player.driver"
+grep -qx 'wayland' "$base/player.driver"
 ! grep -q 'FFPLAY_DEBUG_NOISE' "$base/client.log"
 ! grep -q '^capture:' "$base/host.log"
 
@@ -76,7 +76,7 @@ kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
 sleep 0.2
 kill -0 "$hp"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 SDL_VIDEODRIVER=wayland "$BIN" connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
+OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
 second_connected=0
 i=0
 while test "$i" -lt 100; do
@@ -90,7 +90,7 @@ test "$second_connected" -eq 1
 kill -0 "$hp"
 kill -0 "$cp"
 grep -q 'Connected' "$base/client2.log"
-grep -qx 'x11' "$base/player.driver"
+grep -qx 'wayland' "$base/player.driver"
 ! grep -q 'Pairing password:' "$base/client2.log"
 ! grep -q 'authentication denied' "$base/client2.log"
 
