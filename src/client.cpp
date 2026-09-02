@@ -209,6 +209,8 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
     }
     hosts.set(target_in,"fingerprint",session.fingerprint());
     hosts.set(target_in,"paired",session.paired()?"true":"false");
+    auto learned_mac=session.remote_mac();
+    if(!learned_mac.empty())hosts.set(target_in,"mac",learned_mac);
     if(hosts.get(target_in,"mouse_sensitivity").empty())hosts.set(target_in,"mouse_sensitivity","1.0");
     hosts.save(p.hosts);
 
