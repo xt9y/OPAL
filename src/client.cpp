@@ -25,8 +25,6 @@ bool release_chord(const HeldInputState&held,int code){
 void sync_generation(SessionSupervisor&session,HeldInputState&held,unsigned long&generation){
     auto current=session.control_generation();
     if(current==generation)return;
-    // The host releases every key/button held by a dead control generation.
-    // Drop matching local assumptions rather than carrying them into the new one.
     held.release_commands();
     generation=current;
 }
@@ -38,21 +36,24 @@ bool setup_xinput2(Display*d,Window root,int&opcode){
     if(XIQueryVersion(d,&major,&minor)!=Success||major<2)return false;
     unsigned char mask[XIMaskLen(XI_LASTEVENT)]{};
     XISetMask(mask,XI_RawKeyPress);XISetMask(mask,XI_RawKeyRelease);
-    XISetMask(mask,XI_RawButtonPress);XISetMask(mask,XI_RawButtonRelease);XISetMask(mask,XI_RawMotion);
+    XISetMask(mask,XI_RawButtonPress);XISetMask(mask,XI_RawButtonRelease);
     XIEventMask selection{XIAllMasterDevices,static_cast<int>(sizeof(mask)),mask};
     if(XISelectEvents(d,root,&selection,1)!=Success)return false;
     XFlush(d);return true;
 }
 
-bool raw_motion_values(const XIRawEvent*raw,double&dx,double&dy){
-    dx=0.0;dy=0.0;if(!raw||!raw->valuators.mask||!raw->raw_values)return false;
-    int value_index=0;
-    for(int axis=0;axis<raw->valuators.mask_len*8;axis++){
-        if(!XIMaskIsSet(raw->valuators.mask,axis))continue;
-        double value=raw->raw_values[value_index++];
-        if(axis==0)dx=value;else if(axis==1)dy=value;
-    }
-    return dx!=0.0||dy!=0.0;
+bool send_pointer_position(Display*d,Window root,int width,int height,SessionSupervisor&session){
+    Window returned_root=None,child=None;
+    int root_x=0,root_y=0,win_x=0,win_y=0;
+    unsigned int mask=0;
+    if(!XQueryPointer(d,root,&returned_root,&child,&root_x,&root_y,&win_x,&win_y,&mask))return true;
+    auto command=absolute_pointer_command(root_x,root_y,width,height);
+    return command.empty()||session.send_input(command);
+}
+
+bool send_pointer_position(int x,int y,int width,int height,SessionSupervisor&session){
+    auto command=absolute_pointer_command(x,y,width,height);
+    return command.empty()||session.send_input(command);
 }
 
 bool send_key_event(SessionSupervisor&session,HeldInputState&held,unsigned long&generation,unsigned int keycode,bool down,bool&run){
@@ -69,12 +70,15 @@ void release_held(SessionSupervisor&session,HeldInputState&held,unsigned long&ge
     for(const auto&command:held.release_commands())session.send_input(command);
 }
 
-void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&session,double sensitivity){
+void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&session){
+    XWindowAttributes wa{};
+    if(!XGetWindowAttributes(d,root,&wa)||wa.width<=0||wa.height<=0)return;
     HeldInputState held;
     unsigned long generation=session.control_generation();
     int keyboard_grab=XGrabKeyboard(d,root,True,GrabModeAsync,GrabModeAsync,CurrentTime);
-    XGrabPointer(d,root,True,0,GrabModeAsync,GrabModeAsync,None,None,CurrentTime);
+    XGrabPointer(d,root,True,PointerMotionMask,GrabModeAsync,GrabModeAsync,None,None,CurrentTime);
     XFlush(d);
+    send_pointer_position(d,root,wa.width,wa.height,session);
     bool run=true;
     while(run&&session.running()){
         XEvent event;XNextEvent(d,&event);
@@ -82,6 +86,10 @@ void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&sess
         if(event.type==KeyPress||event.type==KeyRelease){
             bool down=event.type==KeyPress;
             if(!send_key_event(session,held,generation,event.xkey.keycode,down,run)&&!session.running())run=false;
+            continue;
+        }
+        if(event.type==MotionNotify){
+            if(!send_pointer_position(event.xmotion.x_root,event.xmotion.y_root,wa.width,wa.height,session)&&!session.running())run=false;
             continue;
         }
         if(event.xcookie.type!=GenericEvent||event.xcookie.extension!=opcode)continue;
@@ -94,17 +102,10 @@ void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&sess
                 break;
             case XI_RawButtonPress:
             case XI_RawButtonRelease:{
+                send_ok=send_pointer_position(d,root,wa.width,wa.height,session);
                 int button=raw->detail;bool down=event.xcookie.evtype==XI_RawButtonPress;
-                if((button==4||button==5)&&down)send_ok=session.send_input("WHEEL "+std::to_string(button==4?1:-1));
-                else if(button>=1&&button<=3){if(down)held.press_button(button);else held.release_button(button);send_ok=session.send_input("BUTTON "+std::to_string(button)+" "+(down?"1":"0"));}
-                break;
-            }
-            case XI_RawMotion:{
-                double dx=0.0,dy=0.0;
-                if(raw_motion_values(raw,dx,dy)){
-                    auto command=normalized_motion_command(dx,dy,0,0,sensitivity);
-                    if(!command.empty())send_ok=session.send_input(command);
-                }
+                if(send_ok&&(button==4||button==5)&&down)send_ok=session.send_input("WHEEL "+std::to_string(button==4?1:-1));
+                else if(send_ok&&button>=1&&button<=3){if(down)held.press_button(button);else held.release_button(button);send_ok=session.send_input("BUTTON "+std::to_string(button)+" "+(down?"1":"0"));}
                 break;
             }
             default:break;
@@ -117,12 +118,12 @@ void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&sess
     XUngrabPointer(d,CurrentTime);XFlush(d);
 }
 
-void run_x11_fallback_control(Display*d,Window root,SessionSupervisor&session,double sensitivity){
-    XWindowAttributes wa{};XGetWindowAttributes(d,root,&wa);int cx=wa.width/2,cy=wa.height/2;
+void run_x11_fallback_control(Display*d,Window root,SessionSupervisor&session){
+    XWindowAttributes wa{};if(!XGetWindowAttributes(d,root,&wa)||wa.width<=0||wa.height<=0)return;
     HeldInputState held;unsigned long generation=session.control_generation();
     XGrabKeyboard(d,root,True,GrabModeAsync,GrabModeAsync,CurrentTime);
     XGrabPointer(d,root,True,PointerMotionMask|ButtonPressMask|ButtonReleaseMask,GrabModeAsync,GrabModeAsync,None,None,CurrentTime);
-    XWarpPointer(d,None,root,0,0,0,0,cx,cy);XFlush(d);
+    XFlush(d);send_pointer_position(d,root,wa.width,wa.height,session);
     bool run=true;
     while(run&&session.running()){
         XEvent e;XNextEvent(d,&e);sync_generation(session,held,generation);
@@ -132,23 +133,17 @@ void run_x11_fallback_control(Display*d,Window root,SessionSupervisor&session,do
             int code=linux_keycode_from_x11(k->keycode);bool down=e.type==KeyPress;
             if(code>0){if(down)held.press_key(code);else held.release_key(code);if(!session.send_input("KEY "+std::to_string(code)+" "+(down?"1":"0"))&&!session.running()){run=false;break;}}
         }else if(e.type==MotionNotify){
-            int dx=e.xmotion.x_root-cx,dy=e.xmotion.y_root-cy;
-            if(dx||dy){auto command=normalized_motion_command(dx,dy,0,0,sensitivity);if(!command.empty()&&!session.send_input(command)&&!session.running()){run=false;break;}XWarpPointer(d,None,root,0,0,0,0,cx,cy);XFlush(d);}
+            if(!send_pointer_position(e.xmotion.x_root,e.xmotion.y_root,wa.width,wa.height,session)&&!session.running()){run=false;break;}
         }else if(e.type==ButtonPress||e.type==ButtonRelease){
-            int b=e.xbutton.button;bool down=e.type==ButtonPress,ok=true;
-            if((b==4||b==5)&&down)ok=session.send_input("WHEEL "+std::to_string(b==4?1:-1));
-            else if(b<=3){if(down)held.press_button(b);else held.release_button(b);ok=session.send_input("BUTTON "+std::to_string(b)+" "+(down?"1":"0"));}
+            int b=e.xbutton.button;bool down=e.type==ButtonPress;
+            bool ok=send_pointer_position(e.xbutton.x_root,e.xbutton.y_root,wa.width,wa.height,session);
+            if(ok&&(b==4||b==5)&&down)ok=session.send_input("WHEEL "+std::to_string(b==4?1:-1));
+            else if(ok&&b<=3){if(down)held.press_button(b);else held.release_button(b);ok=session.send_input("BUTTON "+std::to_string(b)+" "+(down?"1":"0"));}
             if(!ok&&!session.running()){run=false;break;}
         }
     }
     release_held(session,held,generation);
     XUngrabKeyboard(d,CurrentTime);XUngrabPointer(d,CurrentTime);XFlush(d);
-}
-
-double saved_mouse_sensitivity(const Ini&hosts,const std::string&name,bool saved){
-    if(!saved)return 1.0;
-    try{return clamp_mouse_sensitivity(std::stod(hosts.get(name,"mouse_sensitivity","1.0")));}
-    catch(...){return 1.0;}
 }
 
 int error_code_for(const std::string&message){
@@ -169,7 +164,6 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
     int cp=47990,vp=47991;
     bool saved=hosts.sections().count(target_in)>0,tunneled=false;
     if(saved){target=hosts.get(target_in,"address");saved_address=target;cp=hosts.get_int(target_in,"port",47990);vp=hosts.get_int(target_in,"video_port",47991);}
-    double sensitivity=saved_mouse_sensitivity(hosts,target_in,saved);
 
     std::string control_token,video_token;
     if(tunnel_connection_code(target,&control_token,&video_token)){
@@ -229,8 +223,8 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
     }
 
     Window root=DefaultRootWindow(d);int xi_opcode=0;
-    if(setup_xinput2(d,root,xi_opcode))run_xinput2_control(d,root,xi_opcode,session,sensitivity);
-    else run_x11_fallback_control(d,root,session,sensitivity);
+    if(setup_xinput2(d,root,xi_opcode))run_xinput2_control(d,root,xi_opcode,session);
+    else run_x11_fallback_control(d,root,session);
     XCloseDisplay(d);session.stop();return 0;
 }
 }

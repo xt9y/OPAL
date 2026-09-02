@@ -105,7 +105,7 @@ static void control_client(TlsConn c){
             continue;
         }
         if(line.rfind("KEY ",0)==0||line.rfind("BUTTON ",0)==0){track_input(line,held);input_send(line);}
-        else if(line.rfind("MOUSE ",0)==0||line.rfind("WHEEL ",0)==0)input_send(line);
+        else if(line.rfind("MOUSE ",0)==0||line.rfind("POINTER ",0)==0||line.rfind("WHEEL ",0)==0)input_send(line);
     }
     for(const auto&release:held.release_commands())input_send(release);
     {std::lock_guard<std::mutex>l(session_mu);sessions.erase(token);}

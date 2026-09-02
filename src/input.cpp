@@ -1,5 +1,6 @@
 #include <opal/input.hpp>
 #include <algorithm>
+#include <cstdint>
 #ifdef __linux__
 #include <linux/input-event-codes.h>
 #endif
@@ -24,18 +25,25 @@ static std::string motion_command(double dx,double dy){
 }
 std::string raw_motion_command(double dx,double dy){return motion_command(dx,dy);}
 
-// XI2 RawMotion values are already device-relative counts. Re-scaling those
-// counts from XI2 resolution metadata changes the physical motion rate and
-// makes the remote pointer intrinsically faster/slower than the source.
+// Kept for compatibility with existing host configuration. The exact-pointer
+// path below does not use relative DPI normalization or sensitivity at all.
 double mouse_normalization_scale(int){return 1.0;}
-
 double clamp_mouse_sensitivity(double sensitivity){return std::clamp(sensitivity,0.1,4.0);}
-
 std::string normalized_motion_command(double dx,double dy,int,int,double sensitivity){
     const double user_scale=clamp_mouse_sensitivity(sensitivity);
-    dx*=user_scale;
-    dy*=user_scale;
-    return motion_command(dx,dy);
+    return motion_command(dx*user_scale,dy*user_scale);
+}
+
+std::string absolute_pointer_command(int x,int y,int width,int height){
+    if(width<=0||height<=0)return{};
+    x=std::clamp(x,0,width-1);
+    y=std::clamp(y,0,height-1);
+    auto scale=[](int value,int extent){
+        if(extent<=1)return 0;
+        const std::int64_t denominator=static_cast<std::int64_t>(extent-1);
+        return static_cast<int>((static_cast<std::int64_t>(value)*pointer_abs_max+denominator/2)/denominator);
+    };
+    return "POINTER "+std::to_string(scale(x,width))+" "+std::to_string(scale(y,height));
 }
 
 bool HeldInputState::press_key(int code){if(code<=0)return false;return keys_.insert(code).second;}

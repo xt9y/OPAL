@@ -4,11 +4,14 @@
 #include <vector>
 
 namespace opal {
+inline constexpr int pointer_abs_max=65535;
+
 int linux_keycode_from_x11(unsigned int keycode);
 std::string raw_motion_command(double dx,double dy);
 double mouse_normalization_scale(int resolution);
 double clamp_mouse_sensitivity(double sensitivity);
 std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y,double sensitivity=1.0);
+std::string absolute_pointer_command(int x,int y,int width,int height);
 
 class HeldInputState {
     std::set<int> keys_;

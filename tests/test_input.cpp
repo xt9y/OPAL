@@ -18,25 +18,24 @@ int main(){
     assert(opal::linux_keycode_from_x11(100000)==0);
     assert(opal::raw_motion_command(12.0,-7.0)=="MOUSE 12 -7");
 
-    // Raw XI2 deltas are already the physical device counts. OPAL must not
-    // reinterpret XI2 valuator resolution as a request to change the mouse's
-    // count rate: that makes the remote mouse intrinsically faster/slower than
-    // the source. Resolution metadata therefore never changes the default 1:1
-    // relative motion path.
+    // Legacy relative helpers remain 1:1, but the live pointer path is now
+    // absolute so host-side pointer acceleration cannot change cursor speed.
     assert(near(opal::mouse_normalization_scale(0),1.0));
     assert(near(opal::mouse_normalization_scale(1000),1.0));
     assert(near(opal::mouse_normalization_scale(5000),1.0));
     assert(near(opal::mouse_normalization_scale(125984),1.0));
     assert(near(opal::mouse_normalization_scale(400000),1.0));
-
     assert(near(opal::clamp_mouse_sensitivity(0.01),0.1));
     assert(near(opal::clamp_mouse_sensitivity(1.0),1.0));
     assert(near(opal::clamp_mouse_sensitivity(9.0),4.0));
-
     assert(opal::normalized_motion_command(32.0,-16.0,125984,125984)=="MOUSE 32 -16");
-    assert(opal::normalized_motion_command(8.0,-4.0,31496,31496)=="MOUSE 8 -4");
-    assert(opal::normalized_motion_command(12.0,-7.0,0,0)=="MOUSE 12 -7");
-    assert(opal::normalized_motion_command(32.0,-16.0,125984,125984,2.0)=="MOUSE 64 -32");
+
+    // Screen coordinates are normalized into the uinput absolute range.
+    assert(opal::absolute_pointer_command(0,0,1920,1080)=="POINTER 0 0");
+    assert(opal::absolute_pointer_command(1919,1079,1920,1080)=="POINTER 65535 65535");
+    assert(opal::absolute_pointer_command(500,500,1001,1001)=="POINTER 32768 32768");
+    assert(opal::absolute_pointer_command(-50,5000,1920,1080)=="POINTER 0 65535");
+    assert(opal::absolute_pointer_command(0,0,0,1080).empty());
 
     opal::HeldInputState held;
     assert(held.press_key(30));
@@ -52,9 +51,9 @@ int main(){
     assert((releases==std::vector<std::string>{"KEY 42 0","BUTTON 3 0"}));
     assert(held.release_commands().empty());
 
-    // Exact cursor parity requires absolute host injection. Relative uinput
-    // motion is intentionally processed by the host input stack and may be
-    // accelerated again, so even 1:1 client deltas cannot guarantee parity.
+    // Exact cursor parity requires an absolute virtual pointing device, kept
+    // separate from the keyboard so Linux recognizes it as a virtual absolute
+    // mouse rather than a joystick or touch device.
     auto helper=read_file("src/input_helper.cpp");
     assert(helper.find("KEY_MAX")!=std::string::npos);
     assert(helper.find("k<256")==std::string::npos);
@@ -62,13 +61,19 @@ int main(){
     assert(helper.find("UI_SET_EVBIT,EV_ABS")!=std::string::npos);
     assert(helper.find("UI_SET_ABSBIT,ABS_X")!=std::string::npos);
     assert(helper.find("UI_SET_ABSBIT,ABS_Y")!=std::string::npos);
+    assert(helper.find("INPUT_PROP_DIRECT")!=std::string::npos);
+    assert(helper.find("INPUT_PROP_POINTER")!=std::string::npos);
     assert(helper.find("t==\"POINTER\"")!=std::string::npos);
+    assert(helper.find("OPAL Remote Absolute Pointer")!=std::string::npos);
 
     auto client=read_file("src/client.cpp");
     assert(client.find("event.type==KeyPress||event.type==KeyRelease")!=std::string::npos);
     assert(client.find("XIQueryDevice")==std::string::npos);
     assert(client.find("XQueryPointer")!=std::string::npos);
     assert(client.find("absolute_pointer_command")!=std::string::npos);
+    assert(client.find("PointerMotionMask")!=std::string::npos);
+    assert(client.find("XISetMask(mask,XI_RawMotion)")==std::string::npos);
+    assert(client.find("XWarpPointer")==std::string::npos);
 
     auto host=read_file("src/host.cpp");
     assert(host.find("line.rfind(\"POINTER \",0)==0")!=std::string::npos);
