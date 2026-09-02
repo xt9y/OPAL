@@ -336,9 +336,10 @@ bool SessionSupervisor::send_input(const std::string&command){
         std::lock_guard<std::mutex>l(impl_->control_mu);
         if(impl_->control.ssl&&tls_write_line(impl_->control.ssl,command))return true;
     }
-    if(!impl_->recover_control(g))return false;
-    std::lock_guard<std::mutex>l(impl_->control_mu);
-    return impl_->control.ssl&&tls_write_line(impl_->control.ssl,command);
+    // Do not replay the event that discovered the dead generation. A key/button
+    // event replayed after AUTH could become stuck because the old generation's
+    // held-input state is deliberately discarded during recovery.
+    return impl_->recover_control(g);
 }
 unsigned long SessionSupervisor::control_generation()const{return impl_->generation.load();}
 bool SessionSupervisor::media_started()const{return impl_->media.load();}
