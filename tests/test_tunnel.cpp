@@ -44,7 +44,6 @@ case "$1" in
     ;;
   create)
     if [ "$ZROK_TEST_MODE" = disabled ]; then
-      # This test isolates environment detection; accept either create syntax.
       exit 0
     fi
     [ "$2" = share ] || exit 61
@@ -92,8 +91,10 @@ int main() {
         assert(rc==0);
         auto guide=output.str();
         assert(guide.find("https://myzrok.io")!=std::string::npos);
-        assert(guide.find("Enable Your Environment")!=std::string::npos);
-        assert(guide.find("Copy the enable token")!=std::string::npos);
+        assert(guide.find("Link zrok Account")!=std::string::npos);
+        assert(guide.find("bottom-left")!=std::string::npos);
+        assert(guide.find("Get Started")!=std::string::npos);
+        assert(guide.find("zrok enable")!=std::string::npos);
         auto log=read_all(root/"zrok.log");
         assert(log.find("status\n")!=std::string::npos);
         assert(log.find("enable TEST-ENABLE-TOKEN\n")!=std::string::npos);
