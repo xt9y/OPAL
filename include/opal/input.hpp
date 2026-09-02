@@ -5,6 +5,7 @@
 
 namespace opal {
 int linux_keycode_from_x11(unsigned int keycode);
+std::string raw_motion_command(double dx,double dy);
 
 class HeldInputState {
     std::set<int> keys_;
@@ -14,6 +15,8 @@ public:
     bool release_key(int code);
     bool press_button(int button);
     bool release_button(int button);
+    bool key_down(int code) const;
+    bool button_down(int button) const;
     std::vector<std::string> release_commands();
 };
 }
