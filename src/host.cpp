@@ -84,10 +84,19 @@ static void video_client(TlsConn c){
     {std::lock_guard<std::mutex>l(session_mu);ok=word=="VIDEO"&&sessions.find(token)!=sessions.end();}
     if(!ok){tls_write_line(c.ssl,"DENY");close_tls(c);return;}
     int fps=host_cfg.get_int("video","fps",60),bitrate=host_cfg.get_int("video","bitrate_kbps",20000);bool audio=host_cfg.get_bool("audio","enabled",true);bool gsr=command_exists("gpu-screen-recorder");
-    auto cmd=capture_command(gsr,fps,bitrate,audio,(G.root/"portal-session.token").string());if(const char*e=std::getenv("OPAL_CAPTURE_CMD");e&&*e)cmd=e;
+    const std::string portal_token=(G.root/"portal-session.token").string();
+    bool attempted_restore=gsr&&std::filesystem::exists(portal_token);
+    auto make_cmd=[&](){auto command=capture_command(gsr,fps,bitrate,audio,portal_token);if(const char*e=std::getenv("OPAL_CAPTURE_CMD");e&&*e)command=e;return command;};
+    auto cmd=make_cmd();
     if(debug_enabled())std::cerr<<"capture: "<<(std::getenv("OPAL_CAPTURE_CMD")?"test/override":(gsr?"gpu-screen-recorder":"ffmpeg fallback"))<<"\n";
     auto capture=start_capture(cmd);if(capture.pid<=0||capture.fd<0){tls_write_line(c.ssl,"ERROR capture-startup");close_tls(c);return;}
     char buf[65536];int n=read_capture(capture,buf,sizeof(buf),10000);
+    if(n<=0&&attempted_restore&&!std::getenv("OPAL_CAPTURE_CMD")){
+        stop_capture(capture);
+        std::error_code ec;std::filesystem::remove(portal_token,ec);
+        capture=start_capture(make_cmd());
+        if(capture.pid>0&&capture.fd>=0)n=read_capture(capture,buf,sizeof(buf),10000);
+    }
     if(n<=0){tls_write_line(c.ssl,"ERROR capture-startup");stop_capture(capture);close_tls(c);return;}
     if(!tls_write_line(c.ssl,"READY")||!tls_write_all_timeout(c.ssl,buf,static_cast<size_t>(n),1000)){stop_capture(capture);close_tls(c);return;}
     for(;;){n=read_capture(capture,buf,sizeof(buf),3000);if(n<=0)break;if(!tls_write_all_timeout(c.ssl,buf,static_cast<size_t>(n),1000))break;}
