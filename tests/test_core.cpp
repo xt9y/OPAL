@@ -39,6 +39,7 @@ int main() {
     assert(cmd.find(" -w screen ") != std::string::npos);
     assert(cmd.find(" -f 60 ") != std::string::npos);
     assert(cmd.find(" -k h264 ") != std::string::npos);
+    assert(cmd.find(" -fallback-cpu-encoding yes ") != std::string::npos);
     assert(cmd.find(" -v h264 ") == std::string::npos);
     assert(cmd.find(" -v no ") != std::string::npos);
     assert(cmd.find(" -bm cbr ") != std::string::npos);
