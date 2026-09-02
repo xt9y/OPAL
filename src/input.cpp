@@ -1,4 +1,5 @@
 #include <opal/input.hpp>
+#include <algorithm>
 #ifdef __linux__
 #include <linux/input-event-codes.h>
 #endif
@@ -22,12 +23,21 @@ static std::string motion_command(double dx,double dy){
     return "MOUSE "+std::to_string(x)+" "+std::to_string(y);
 }
 std::string raw_motion_command(double dx,double dy){return motion_command(dx,dy);}
-std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y){
+
+double mouse_normalization_scale(int resolution){
+    if(resolution<5000||resolution>400000)return 1.0;
     constexpr double target_counts_per_meter=1000.0/0.0254;
-    // XI2/XWayland may expose synthetic resolutions such as 0 or 1. Only
-    // treat a value as physical sensor resolution when it is plausible.
-    if(resolution_x>=1000)dx=dx*target_counts_per_meter/static_cast<double>(resolution_x);
-    if(resolution_y>=1000)dy=dy*target_counts_per_meter/static_cast<double>(resolution_y);
+    return std::clamp(target_counts_per_meter/static_cast<double>(resolution),0.25,4.0);
+}
+
+double clamp_mouse_sensitivity(double sensitivity){return std::clamp(sensitivity,0.1,4.0);}
+
+std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y,double sensitivity){
+    dx*=mouse_normalization_scale(resolution_x);
+    dy*=mouse_normalization_scale(resolution_y);
+    const double user_scale=clamp_mouse_sensitivity(sensitivity);
+    dx*=user_scale;
+    dy*=user_scale;
     return motion_command(dx,dy);
 }
 
