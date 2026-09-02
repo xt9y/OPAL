@@ -7,30 +7,9 @@ Native Linux remote desktop.
 - Native-resolution fullscreen desktop mirroring and remote control.
 - TLS 1.3 transport with Ed25519 device authentication.
 - GPU Screen Recorder preferred, FFmpeg fallback.
-- Separate control and media connections for low input latency.
-- Wake-on-LAN and authenticated remote wake bridge.
-- Optional zrok private tunnels when direct networking is unavailable.
+- Wake-on-LAN with automatic wake-before-connect.
+- Optional authenticated wake bridge and zrok private tunnels.
 - Configuration and saved hosts under `~/.opal/`.
-
-## Commands
-
-```bash
-opal
-opal init
-opal host
-opal host setup
-opal host enable
-opal host disable
-opal connect <host>
-opal hosts list
-opal hosts add <name> <address> [mac]
-opal wake <host>
-opal bridge setup --mac <mac>
-opal bridge run
-opal tunnel host
-opal doctor
-opal version
-```
 
 ## Install
 
@@ -41,19 +20,18 @@ make
 sudo make install
 ```
 
-Then:
+Then just run:
 
 ```bash
-opal init
-opal doctor
-opal host setup
-opal host
+opal
 ```
 
-On another machine:
+The first run asks whether this computer should host or connect. OPAL remembers that choice. A configured host starts hosting; a configured client connects to its default host and automatically sends Wake-on-LAN first when the host is offline and a MAC address is configured.
+
+For advanced and scripting commands:
 
 ```bash
-opal connect <host-ip>
+opal help
 ```
 
 Docs (Thanks to AI): https://xt9y.de/opal.html
