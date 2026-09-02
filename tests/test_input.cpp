@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+static std::string read_file(const char*path){std::ifstream f(path);return std::string((std::istreambuf_iterator<char>(f)),{});}
+
 int main(){
     assert(opal::linux_keycode_from_x11(9)==1);
     assert(opal::linux_keycode_from_x11(108)==100);
@@ -12,6 +14,7 @@ int main(){
     assert(opal::linux_keycode_from_x11(7)==0);
     assert(opal::linux_keycode_from_x11(8)==0);
     assert(opal::linux_keycode_from_x11(100000)==0);
+    assert(opal::raw_motion_command(12.0,-7.0)=="MOUSE 12 -7");
 
     opal::HeldInputState held;
     assert(held.press_key(30));
@@ -27,9 +30,13 @@ int main(){
     assert((releases==std::vector<std::string>{"KEY 42 0","BUTTON 3 0"}));
     assert(held.release_commands().empty());
 
-    std::ifstream f("src/input_helper.cpp");
-    std::string source((std::istreambuf_iterator<char>(f)),{});
-    assert(source.find("KEY_MAX")!=std::string::npos);
-    assert(source.find("k<256")==std::string::npos);
-    assert(source.find("i<256")==std::string::npos);
+    auto helper=read_file("src/input_helper.cpp");
+    assert(helper.find("KEY_MAX")!=std::string::npos);
+    assert(helper.find("k<256")==std::string::npos);
+    assert(helper.find("i<256")==std::string::npos);
+
+    auto makefile=read_file("Makefile");
+    assert(makefile.find("-lXi")!=std::string::npos);
+    auto ci=read_file(".github/workflows/ci.yml");
+    assert(ci.find("libxi-dev")!=std::string::npos);
 }
