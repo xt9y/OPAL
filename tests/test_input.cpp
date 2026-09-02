@@ -16,6 +16,13 @@ int main(){
     assert(opal::linux_keycode_from_x11(100000)==0);
     assert(opal::raw_motion_command(12.0,-7.0)=="MOUSE 12 -7");
 
+    // XInput2 reports valuator resolution in counts/metre. Normalize physical
+    // mouse motion to the 1000-DPI scale libinput assumes for the OPAL uinput
+    // mouse so client and host DPI do not multiply cursor speed.
+    assert(opal::normalized_motion_command(32.0,-16.0,125984,125984)=="MOUSE 10 -5"); // 3200 DPI source
+    assert(opal::normalized_motion_command(8.0,-4.0,31496,31496)=="MOUSE 10 -5");    // 800 DPI source
+    assert(opal::normalized_motion_command(12.0,-7.0,0,0)=="MOUSE 12 -7");           // unknown DPI fallback
+
     opal::HeldInputState held;
     assert(held.press_key(30));
     assert(!held.press_key(30));
@@ -34,6 +41,13 @@ int main(){
     assert(helper.find("KEY_MAX")!=std::string::npos);
     assert(helper.find("k<256")==std::string::npos);
     assert(helper.find("i<256")==std::string::npos);
+
+    // XGrabKeyboard delivers KeyPress/KeyRelease to the grabbing client. The
+    // XI2 loop must consume those core events instead of discarding everything
+    // that is not GenericEvent.
+    auto client=read_file("src/client.cpp");
+    assert(client.find("event.type==KeyPress||event.type==KeyRelease")!=std::string::npos);
+    assert(client.find("XIQueryDevice")!=std::string::npos);
 
     auto makefile=read_file("Makefile");
     assert(makefile.find("-lXi")!=std::string::npos);
