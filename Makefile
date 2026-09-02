@@ -38,7 +38,7 @@ test-tunnel: | $(BUILD)
 	$(BUILD)/test-tunnel
 
 test-clean: all
-	BIN=$(abspath $(PRODUCT)) ./tests/test_clean.sh
+	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
 
 test: all test-core test-setup test-tunnel test-clean
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
