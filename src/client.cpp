@@ -42,17 +42,21 @@ bool setup_xinput2(Display*d,Window root,int&opcode){
     XFlush(d);return true;
 }
 
+std::string pointer_command_for(SessionSupervisor&session,int x,int y,int width,int height){
+    return video_pointer_command(x,y,width,height,session.remote_width(),session.remote_height());
+}
+
 bool send_pointer_position(Display*d,Window root,int width,int height,SessionSupervisor&session){
     Window returned_root=None,child=None;
     int root_x=0,root_y=0,win_x=0,win_y=0;
     unsigned int mask=0;
     if(!XQueryPointer(d,root,&returned_root,&child,&root_x,&root_y,&win_x,&win_y,&mask))return true;
-    auto command=absolute_pointer_command(root_x,root_y,width,height);
+    auto command=pointer_command_for(session,root_x,root_y,width,height);
     return command.empty()||session.send_input(command);
 }
 
 bool send_pointer_position(int x,int y,int width,int height,SessionSupervisor&session){
-    auto command=absolute_pointer_command(x,y,width,height);
+    auto command=pointer_command_for(session,x,y,width,height);
     return command.empty()||session.send_input(command);
 }
 
