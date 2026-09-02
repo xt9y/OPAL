@@ -112,27 +112,59 @@ static bool raw_motion_values(const XIRawEvent*raw,double&dx,double&dy){
     return dx!=0.0||dy!=0.0;
 }
 
+struct PointerResolution{int x=0;int y=0;};
+static PointerResolution pointer_resolution(Display*d,int deviceid){
+    PointerResolution result;
+    if(deviceid<=0)return result;
+    int count=0;
+    XIDeviceInfo*info=XIQueryDevice(d,deviceid,&count);
+    if(!info)return result;
+    for(int i=0;i<count;i++){
+        for(int j=0;j<info[i].num_classes;j++){
+            XIAnyClassInfo*base=info[i].classes[j];
+            if(!base||base->type!=XIValuatorClass)continue;
+            auto*valuator=reinterpret_cast<XIValuatorClassInfo*>(base);
+            if(valuator->mode!=XIModeRelative)continue;
+            if(valuator->number==0)result.x=valuator->resolution;
+            else if(valuator->number==1)result.y=valuator->resolution;
+        }
+    }
+    XIFreeDeviceInfo(info);
+    return result;
+}
+
+static bool send_key_event(SSL*control,HeldInputState&held,unsigned int keycode,bool down,bool&run){
+    int code=linux_keycode_from_x11(keycode);
+    if(code<=0)return true;
+    if(down&&release_chord(held,code)){run=false;return true;}
+    if(down)held.press_key(code);else held.release_key(code);
+    return send_control(control,"KEY "+std::to_string(code)+" "+(down?"1":"0"));
+}
+
 static void run_xinput2_control(Display*d,Window root,int opcode,SSL*control){
     HeldInputState held;
-    XGrabKeyboard(d,root,True,GrabModeAsync,GrabModeAsync,CurrentTime);
+    int keyboard_grab=XGrabKeyboard(d,root,True,GrabModeAsync,GrabModeAsync,CurrentTime);
     XGrabPointer(d,root,True,0,GrabModeAsync,GrabModeAsync,None,None,CurrentTime);
     XFlush(d);
+    int resolution_device=-1;PointerResolution resolution;
     bool run=true;
     while(run){
         XEvent event;XNextEvent(d,&event);
+        if(event.type==KeyPress||event.type==KeyRelease){
+            bool down=event.type==KeyPress;
+            if(!send_key_event(control,held,event.xkey.keycode,down,run))run=false;
+            continue;
+        }
         if(event.xcookie.type!=GenericEvent||event.xcookie.extension!=opcode)continue;
         if(!XGetEventData(d,&event.xcookie))continue;
         auto*raw=static_cast<XIRawEvent*>(event.xcookie.data);bool send_ok=true;
         switch(event.xcookie.evtype){
             case XI_RawKeyPress:
             case XI_RawKeyRelease:{
-                int code=linux_keycode_from_x11(static_cast<unsigned int>(raw->detail));
-                bool down=event.xcookie.evtype==XI_RawKeyPress;
-                if(code>0){
-                    if(down&&release_chord(held,code)){run=false;break;}
-                    if(down)held.press_key(code);else held.release_key(code);
-                    send_ok=send_control(control,"KEY "+std::to_string(code)+" "+(down?"1":"0"));
-                }
+                // A successful XGrabKeyboard delivers canonical core
+                // KeyPress/KeyRelease events above. Use raw keys only when the
+                // grab could not be established, avoiding duplicate injection.
+                if(keyboard_grab!=GrabSuccess)send_ok=send_key_event(control,held,static_cast<unsigned int>(raw->detail),event.xcookie.evtype==XI_RawKeyPress,run);
                 break;
             }
             case XI_RawButtonPress:
@@ -144,7 +176,12 @@ static void run_xinput2_control(Display*d,Window root,int opcode,SSL*control){
             }
             case XI_RawMotion:{
                 double dx=0.0,dy=0.0;
-                if(raw_motion_values(raw,dx,dy)){auto command=raw_motion_command(dx,dy);if(!command.empty())send_ok=send_control(control,command);}
+                if(raw_motion_values(raw,dx,dy)){
+                    int source=raw->sourceid>0?raw->sourceid:raw->deviceid;
+                    if(source!=resolution_device){resolution=pointer_resolution(d,source);resolution_device=source;}
+                    auto command=normalized_motion_command(dx,dy,resolution.x,resolution.y);
+                    if(!command.empty())send_ok=send_control(control,command);
+                }
                 break;
             }
             default:break;
@@ -153,7 +190,8 @@ static void run_xinput2_control(Display*d,Window root,int opcode,SSL*control){
         if(!send_ok)run=false;
     }
     release_held(control,held);
-    XUngrabKeyboard(d,CurrentTime);XUngrabPointer(d,CurrentTime);XFlush(d);
+    if(keyboard_grab==GrabSuccess)XUngrabKeyboard(d,CurrentTime);
+    XUngrabPointer(d,CurrentTime);XFlush(d);
 }
 
 static void run_x11_fallback_control(Display*d,Window root,SSL*control){
