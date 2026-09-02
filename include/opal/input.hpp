@@ -6,6 +6,7 @@
 namespace opal {
 int linux_keycode_from_x11(unsigned int keycode);
 std::string raw_motion_command(double dx,double dy);
+std::string normalized_motion_command(double dx,double dy,int resolution_x,int resolution_y);
 
 class HeldInputState {
     std::set<int> keys_;
