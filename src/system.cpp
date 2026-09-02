@@ -18,6 +18,15 @@ static bool xinput2_available(){
 int init(){auto p=Paths::load();if(!ensure_layout(p)||!ensure_identity(p.identity_key,p.identity_pub)||!ensure_tls_certificate(p.cert.string(),p.cert_key.string()))return 1;Ini c;if(!std::filesystem::exists(p.config)){c.set("video","fps","60");c.set("video","bitrate_kbps","20000");c.set("video","fullscreen","true");c.set("audio","enabled","true");c.set("network","mode","tunnel");c.set("network","transport","zrok2");c.save(p.config);}std::cout<<"Initialized "<<p.root<<"\n";return 0;}
 int doctor(){auto p=Paths::load();std::cout<<"OPAL doctor\n";auto show=[](const char*n,bool ok){std::cout<<(ok?"[ok]   ":"[warn] ")<<n<<"\n";};show("OpenSSL CLI",command_exists("openssl"));show("FFmpeg",command_exists("ffmpeg"));show("FFplay",command_exists("ffplay"));show("GPU Screen Recorder (preferred)",command_exists("gpu-screen-recorder"));show("zrok2 (required transport)",command_exists("zrok2"));show("X11/XWayland client session",std::getenv("DISPLAY")!=nullptr);show("XInput2 raw client input",xinput2_available());show("Wayland host session",std::getenv("WAYLAND_DISPLAY")!=nullptr);show("/dev/uinput",access("/dev/uinput",W_OK)==0);show("~/.opal initialized",std::filesystem::exists(p.root));return 0;}
 int host_service(bool enable){std::string cmd="systemctl --user ";cmd+=enable?"enable --now opal-host.service":"disable --now opal-host.service";return std::system(cmd.c_str())==0?0:1;}
+int restart_services(){
+    int rc=0;
+    if(std::system("systemctl --user daemon-reload")!=0)rc=1;
+    if(std::system("systemctl --user try-restart opal-host.service")!=0)rc=1;
+    if(std::system("systemctl --user try-restart opal-bridge.service")!=0)rc=1;
+    if(rc==0)std::cout<<"OPAL services restarted.\n";
+    else std::cerr<<"Could not restart all OPAL services.\n";
+    return rc;
+}
 int clean(){
     auto p=Paths::load();
     std::system("systemctl --user disable --now opal-host.service >/dev/null 2>&1");
