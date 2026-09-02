@@ -30,8 +30,8 @@ bool debug_enabled(){
 std::string player_command(){
     if(const char*e=std::getenv("OPAL_PLAYER_CMD");e&&*e)return e;
     std::string cmd=debug_enabled()
-        ?"ffplay -hide_banner -loglevel warning -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0"
-        :"ffplay -hide_banner -loglevel quiet -fflags nobuffer -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1";
+        ?"ffplay -hide_banner -loglevel warning -flags low_delay -framedrop -fs -autoexit -i pipe:0"
+        :"ffplay -hide_banner -loglevel quiet -flags low_delay -framedrop -fs -autoexit -i pipe:0 >/dev/null 2>&1";
     if(const char*display=std::getenv("DISPLAY");display&&*display)cmd="SDL_VIDEODRIVER=x11 "+cmd;
     return cmd;
 }
