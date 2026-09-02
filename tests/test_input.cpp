@@ -52,14 +52,26 @@ int main(){
     assert((releases==std::vector<std::string>{"KEY 42 0","BUTTON 3 0"}));
     assert(held.release_commands().empty());
 
+    // Exact cursor parity requires absolute host injection. Relative uinput
+    // motion is intentionally processed by the host input stack and may be
+    // accelerated again, so even 1:1 client deltas cannot guarantee parity.
     auto helper=read_file("src/input_helper.cpp");
     assert(helper.find("KEY_MAX")!=std::string::npos);
     assert(helper.find("k<256")==std::string::npos);
     assert(helper.find("i<256")==std::string::npos);
+    assert(helper.find("UI_SET_EVBIT,EV_ABS")!=std::string::npos);
+    assert(helper.find("UI_SET_ABSBIT,ABS_X")!=std::string::npos);
+    assert(helper.find("UI_SET_ABSBIT,ABS_Y")!=std::string::npos);
+    assert(helper.find("t==\"POINTER\"")!=std::string::npos);
 
     auto client=read_file("src/client.cpp");
     assert(client.find("event.type==KeyPress||event.type==KeyRelease")!=std::string::npos);
     assert(client.find("XIQueryDevice")==std::string::npos);
+    assert(client.find("XQueryPointer")!=std::string::npos);
+    assert(client.find("absolute_pointer_command")!=std::string::npos);
+
+    auto host=read_file("src/host.cpp");
+    assert(host.find("line.rfind(\"POINTER \",0)==0")!=std::string::npos);
 
     auto makefile=read_file("Makefile");
     assert(makefile.find("-lXi")!=std::string::npos);
