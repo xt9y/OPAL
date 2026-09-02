@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <poll.h>
 #include <string>
@@ -63,7 +64,7 @@ int main(){
     std::thread control_server([&]{
         int lfd=opal::listen_tcp(control_port,"127.0.0.1");assert(lfd>=0);
         int generation=0;
-        while(run.load()&&generation<3){
+        while(run.load()&&generation<4){
             pollfd p{lfd,POLLIN,0};if(poll(&p,1,100)<=0)continue;
             auto c=opal::accept_tls(server_ctx,lfd);if(!c.ssl)continue;
             ++generation;++control_accepts;
@@ -74,7 +75,14 @@ int main(){
             else{assert(line.rfind("AUTH ",0)==0);++auth_count;}
             std::string token="video-token-"+std::to_string(generation);
             assert(opal::tls_write_line(c.ssl,"OK "+token));
-            while(run.load()&&opal::tls_read_line_timeout(c.ssl,line,500)){
+            while(run.load()){
+                pollfd peer{c.fd,POLLIN,0};
+                int ready=poll(&peer,1,3000);
+                if(ready<0)break;
+                if(ready==0)continue;
+                if(peer.revents&(POLLERR|POLLHUP|POLLNVAL))break;
+                if(!(peer.revents&POLLIN))continue;
+                if(!opal::tls_read_line_timeout(c.ssl,line,500))break;
                 if(line=="PING"){
                     if(generation==1){opal::close_tls(c);break;}
                     assert(opal::tls_write_line(c.ssl,"PONG"));
