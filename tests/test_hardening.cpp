@@ -30,10 +30,13 @@ int main(){
     const auto host=read_all("src/host.cpp");
     assert(host.find("sanitize_label")!=std::string::npos);
     assert(host.find("video_session_active")!=std::string::npos);
+    assert(host.find("CHALLENGE OPAL2 ")!=std::string::npos);
 
     const auto session=read_all("src/session.cpp");
     assert(session.find("SDL_VIDEODRIVER=wayland")!=std::string::npos);
     assert(session.find("control queue overflow")!=std::string::npos);
+    assert(session.find("incompatible OPAL host protocol")!=std::string::npos);
+    assert(session.find("normalize_pairing_code")!=std::string::npos);
 
     const auto service=read_all("systemd/opal-host.service");
     assert(service.find("NoNewPrivileges=true")!=std::string::npos);
