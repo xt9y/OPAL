@@ -30,7 +30,7 @@ printf '%s\n' "$*" >> "$ZROK_TEST_LOG"
 case "$1" in
   status)
     echo 'Config:'
-    if [ "$ZROK_TEST_MODE" = enabled ]; then
+    if [ "$ZROK_TEST_MODE" = enabled ] || [ -f "$ZROK_TEST_MARKER" ]; then
       echo 'Environment:'
       echo 'EnvZId <<SET>>'
     else
@@ -81,6 +81,7 @@ int main() {
         auto log=read_all(root/"zrok.log");
         assert(log.find("status\n")!=std::string::npos);
         assert(log.find("enable TEST-ENABLE-TOKEN\n")!=std::string::npos);
+        assert(log.find("status\n",log.find("enable TEST-ENABLE-TOKEN\n"))!=std::string::npos);
     }
 
     {
