@@ -37,6 +37,18 @@ int main(){
     assert(opal::absolute_pointer_command(-50,5000,1920,1080)=="POINTER 0 65535");
     assert(opal::absolute_pointer_command(0,0,0,1080).empty());
 
+    // ffplay preserves the host aspect ratio in fullscreen. A 1920x1080 host
+    // shown on a 1920x1200 client therefore occupies y=60..1139. Pointer
+    // normalization must use that video viewport rather than the black bars.
+    assert(opal::video_pointer_command(0,60,1920,1200,1920,1080)=="POINTER 0 0");
+    assert(opal::video_pointer_command(1919,1139,1920,1200,1920,1080)=="POINTER 65535 65535");
+    assert(opal::video_pointer_command(960,600,1920,1200,1920,1080)=="POINTER 32785 32798");
+    assert(opal::video_pointer_command(500,0,1920,1200,1920,1080).rfind("POINTER ",0)==0);
+    // Pillarboxing is symmetric too: a 4:3 host on a 16:9 client maps the
+    // centered video edges to the host edges.
+    assert(opal::video_pointer_command(240,0,1920,1080,1440,1080)=="POINTER 0 0");
+    assert(opal::video_pointer_command(1679,1079,1920,1080,1440,1080)=="POINTER 65535 65535");
+
     opal::HeldInputState held;
     assert(held.press_key(30));
     assert(!held.press_key(30));
