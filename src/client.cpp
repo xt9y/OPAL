@@ -55,27 +55,6 @@ bool raw_motion_values(const XIRawEvent*raw,double&dx,double&dy){
     return dx!=0.0||dy!=0.0;
 }
 
-struct PointerResolution{int x=0;int y=0;};
-PointerResolution pointer_resolution(Display*d,int deviceid){
-    PointerResolution result;
-    if(deviceid<=0)return result;
-    int count=0;
-    XIDeviceInfo*info=XIQueryDevice(d,deviceid,&count);
-    if(!info)return result;
-    for(int i=0;i<count;i++){
-        for(int j=0;j<info[i].num_classes;j++){
-            XIAnyClassInfo*base=info[i].classes[j];
-            if(!base||base->type!=XIValuatorClass)continue;
-            auto*valuator=reinterpret_cast<XIValuatorClassInfo*>(base);
-            if(valuator->mode!=XIModeRelative)continue;
-            if(valuator->number==0)result.x=valuator->resolution;
-            else if(valuator->number==1)result.y=valuator->resolution;
-        }
-    }
-    XIFreeDeviceInfo(info);
-    return result;
-}
-
 bool send_key_event(SessionSupervisor&session,HeldInputState&held,unsigned long&generation,unsigned int keycode,bool down,bool&run){
     sync_generation(session,held,generation);
     int code=linux_keycode_from_x11(keycode);
@@ -96,7 +75,6 @@ void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&sess
     int keyboard_grab=XGrabKeyboard(d,root,True,GrabModeAsync,GrabModeAsync,CurrentTime);
     XGrabPointer(d,root,True,0,GrabModeAsync,GrabModeAsync,None,None,CurrentTime);
     XFlush(d);
-    int resolution_device=-1;PointerResolution resolution;
     bool run=true;
     while(run&&session.running()){
         XEvent event;XNextEvent(d,&event);
@@ -124,9 +102,7 @@ void run_xinput2_control(Display*d,Window root,int opcode,SessionSupervisor&sess
             case XI_RawMotion:{
                 double dx=0.0,dy=0.0;
                 if(raw_motion_values(raw,dx,dy)){
-                    int source=raw->sourceid>0?raw->sourceid:raw->deviceid;
-                    if(source!=resolution_device){resolution=pointer_resolution(d,source);resolution_device=source;}
-                    auto command=normalized_motion_command(dx,dy,resolution.x,resolution.y,sensitivity);
+                    auto command=normalized_motion_command(dx,dy,0,0,sensitivity);
                     if(!command.empty())send_ok=session.send_input(command);
                 }
                 break;
