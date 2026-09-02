@@ -40,12 +40,36 @@ test "$recovered" -eq 1
 kill -0 "$hp"
 kill -0 "$cp"
 grep -q 'Connected' "$base/client.log"
+grep -q 'Video stalled; reconnecting...' "$base/client.log"
+grep -q 'Video restored.' "$base/client.log"
 ! grep -q 'FFPLAY_DEBUG_NOISE' "$base/client.log"
 ! grep -q '^capture:' "$base/host.log"
 
 test -s "$server/authorized_clients"
 grep -q '^\[127.0.0.1\]' "$client/hosts.ini"
 grep -q '^paired=true$' "$client/hosts.ini"
+
+first_count="$(cat "$base/player.count")"
+kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
+sleep 0.2
+kill -0 "$hp"
+
+OPAL_TEST_PLAYER_COUNT="$base/player.count" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY= "$BIN" connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
+second_connected=0
+i=0
+while test "$i" -lt 100; do
+    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -gt "$first_count"; then second_connected=1; break; fi
+    kill -0 "$cp" 2>/dev/null || break
+    sleep 0.1
+    i=$((i+1))
+done
+
+test "$second_connected" -eq 1
+kill -0 "$hp"
+kill -0 "$cp"
+grep -q 'Connected' "$base/client2.log"
+! grep -q 'Pairing password:' "$base/client2.log"
+! grep -q 'authentication denied' "$base/client2.log"
 
 kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
 kill "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true; hp=""
