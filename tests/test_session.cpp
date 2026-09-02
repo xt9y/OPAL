@@ -87,7 +87,7 @@ int main(){
             ++generation;++control_accepts;
             std::string nonce="nonce-"+std::to_string(generation);
             std::string challenge=nonce+" 1920 1080 00:11:22:33:44:55";
-            assert(opal::tls_write_line(c.ssl,"CHALLENGE "+challenge));
+            assert(opal::tls_write_line(c.ssl,"CHALLENGE OPAL2 "+challenge));
             std::string line;assert(opal::tls_read_line_timeout(c.ssl,line,3000));
             if(generation==1){
                 std::istringstream auth(line);std::string mode,pubkey,proof;auth>>mode>>pubkey>>proof;
