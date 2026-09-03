@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -63,7 +64,7 @@ struct AudioOutput::Impl {
             {
                 std::unique_lock<std::mutex> lock(mutex);
                 cv.wait(lock,[&]{return !run||!queue.empty();});
-                if(!run&&queue.empty())break;
+                if(!run){clear_locked();break;}
                 if(test_sink=="hold"){lock.unlock();std::this_thread::sleep_for(std::chrono::milliseconds(5));continue;}
                 chunk=std::move(queue.front());queue.pop_front();queue_ms-=chunk.ms;
             }
