@@ -40,7 +40,12 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
     auto&frame=frame_it->second;if(frame.count!=header.fragment_count)return ReassemblyStatus::Ignored;
 
     if(header.media_type==VideoMediaType::Fec){
-        if(payload.size()<kVideoFecMetadataBytes||header.fec_group>=frame.groups())return ReassemblyStatus::Ignored;const std::size_t start=static_cast<std::size_t>(header.fec_group)*10,group_count=payload[0];if(group_count==0||group_count>10||start>=frame.count||group_count!=std::min<std::size_t>(10,frame.count-start))return ReassemblyStatus::Ignored;if(!frame.parity_present[header.fec_group]){std::memcpy(frame.parity_ptr(header.fec_group),payload.data(),payload.size());frame.parity_lengths[header.fec_group]=static_cast<std::uint16_t>(payload.size());frame.parity_present[header.fec_group]=1;}
+        if(payload.size()<kVideoFecMetadataBytes||header.fec_group>=frame.groups())return ReassemblyStatus::Ignored;
+        const std::size_t start=static_cast<std::size_t>(header.fec_group)*10,group_count=payload[0];
+        if(group_count==0||group_count>10||start>=frame.count||group_count!=std::min<std::size_t>(10,frame.count-start))return ReassemblyStatus::Ignored;
+        if(frame.type_known&&frame.type!=VideoMediaType::VideoH264)return ReassemblyStatus::Ignored;
+        frame.type=VideoMediaType::VideoH264;frame.type_known=true;frame.flags|=header.flags;
+        if(!frame.parity_present[header.fec_group]){std::memcpy(frame.parity_ptr(header.fec_group),payload.data(),payload.size());frame.parity_lengths[header.fec_group]=static_cast<std::uint16_t>(payload.size());frame.parity_present[header.fec_group]=1;}
     }else{
         if(header.fragment_index>=frame.count||payload.size()>kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;if(frame.type_known&&frame.type!=header.media_type)return ReassemblyStatus::Ignored;frame.type=header.media_type;frame.type_known=true;frame.flags|=header.flags;
         if(frame.type==VideoMediaType::VideoH264&&(frame.flags&FrameConfig)==0&&frame.video_order==0){frame.video_order=++impl.video_order;for(auto it=impl.frames.begin();it!=impl.frames.end();){if(it==frame_it){++it;continue;}const auto&older=it->second;if(older.type_known&&older.type==VideoMediaType::VideoH264&&older.video_order>0&&frame.video_order>=older.video_order+2){impl.bytes-=older.storage_bytes;it=impl.frames.erase(it);need_idr=true;impl.awaiting_idr=true;}else ++it;}}
