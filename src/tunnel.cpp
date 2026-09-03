@@ -2,6 +2,7 @@
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
 #include <arpa/inet.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -50,10 +51,31 @@ bool basename_is_zrok2(const std::string &arg){return std::filesystem::path(arg)
 bool has_opal_endpoint(const std::vector<std::string> &args){for(const auto &arg:args)if(arg=="127.0.0.1:47990"||arg=="127.0.0.1:47991")return true;return false;}
 bool is_zrok_private_process(pid_t pid,bool endpoints_only){auto args=process_args(pid);for(std::size_t i=0;i+2<args.size();++i){if(!basename_is_zrok2(args[i]))continue;if((args[i+1]!="access"&&args[i+1]!="share")||args[i+2]!="private")return false;return !endpoints_only||has_opal_endpoint(args);}return false;}
 bool pid_exists(pid_t pid){return pid>0&&kill(pid,0)==0;}
+bool process_active_or_reap(pid_t pid){
+    if(pid<=0||pid==getpid())return false;
+    int status=0;
+    const pid_t rc=waitpid(pid,&status,WNOHANG);
+    if(rc==pid)return false;
+    if(rc<0&&errno!=ECHILD&&errno!=EINTR)return pid_exists(pid);
+    return pid_exists(pid);
+}
 void terminate_pids(const std::vector<pid_t> &pids){
-    for(auto pid:pids)if(pid>0&&pid!=getpid())kill(pid,SIGTERM);auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(1200);
-    while(std::chrono::steady_clock::now()<deadline){bool any=false;for(auto pid:pids)if(pid>0&&pid!=getpid()&&pid_exists(pid))any=true;if(!any)return;std::this_thread::sleep_for(std::chrono::milliseconds(50));}
-    for(auto pid:pids)if(pid>0&&pid!=getpid()&&pid_exists(pid))kill(pid,SIGKILL);
+    for(auto pid:pids)if(pid>0&&pid!=getpid())kill(pid,SIGTERM);
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(1200);
+    while(std::chrono::steady_clock::now()<deadline){
+        bool any=false;
+        for(auto pid:pids)if(process_active_or_reap(pid))any=true;
+        if(!any)return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    for(auto pid:pids)if(process_active_or_reap(pid))kill(pid,SIGKILL);
+    deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);
+    while(std::chrono::steady_clock::now()<deadline){
+        bool any=false;
+        for(auto pid:pids)if(process_active_or_reap(pid))any=true;
+        if(!any)return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 }
 std::vector<pid_t> scan_zrok_private_processes(bool endpoints_only){std::vector<pid_t> pids;std::error_code ec;for(const auto &entry:std::filesystem::directory_iterator("/proc",ec)){if(ec)break;auto name=entry.path().filename().string();if(name.empty()||name.find_first_not_of("0123456789")!=std::string::npos)continue;pid_t pid=0;try{pid=static_cast<pid_t>(std::stol(name));}catch(...){continue;}if(pid!=getpid()&&is_zrok_private_process(pid,endpoints_only))pids.push_back(pid);}return pids;}
 std::filesystem::path pid_file(const char *kind){return Paths::load().root/(std::string("tunnel-")+kind+".pids");}
