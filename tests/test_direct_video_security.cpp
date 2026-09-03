@@ -1,5 +1,6 @@
 #include <opal/direct_video_session.hpp>
 #include <opal/net.hpp>
+#include <opal/video_packet.hpp>
 #include <arpa/inet.h>
 #include <cassert>
 #include <chrono>
