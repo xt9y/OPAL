@@ -1,0 +1,23 @@
+#include <opal/media_profile.hpp>
+#include <algorithm>
+
+namespace opal {
+StreamOptions default_stream_options(){return {};}
+
+bool stream_mode_limit(const std::string &mode,int &max_width,int &max_height){
+    if(mode=="max"){max_width=0;max_height=0;return true;}
+    if(mode=="1080p"){max_width=1920;max_height=1080;return true;}
+    if(mode=="1440p"){max_width=2560;max_height=1440;return true;}
+    if(mode=="4k"){max_width=3840;max_height=2160;return true;}
+    return false;
+}
+
+int automatic_bitrate_kbps(int width,int height,int fps){
+    fps=std::clamp(fps,15,240);
+    if(width<=0||height<=0)return 60000;
+    constexpr long long reference=1920LL*1080LL*60LL;
+    long long pixel_rate=static_cast<long long>(width)*height*fps;
+    long long bitrate=18000LL+(12000LL*pixel_rate)/reference;
+    return static_cast<int>(std::clamp<long long>(bitrate,20000,100000));
+}
+}
