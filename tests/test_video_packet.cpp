@@ -25,6 +25,15 @@ int main(){
     assert(opal::use_fec_for_media(opal::VideoMediaType::VideoH264));
     assert(!opal::use_fec_for_media(opal::VideoMediaType::AudioAac));
     assert(!opal::use_fec_for_media(opal::VideoMediaType::Probe));
+    assert(!opal::use_fec_for_media(opal::VideoMediaType::Keepalive));
+
+    std::uint64_t keepalive_sequence=4000;
+    opal::VideoFragmentCursor keepalive(opal::VideoMediaType::Keepalive,0,7,99,100,1234,{},keepalive_sequence,false);
+    assert(keepalive.valid());opal::VideoPacketHeader keepalive_header;std::span<const std::uint8_t> keepalive_payload;
+    assert(keepalive.next(keepalive_header,keepalive_payload));assert(keepalive_header.media_type==opal::VideoMediaType::Keepalive);
+    assert(keepalive_header.payload_length==0&&keepalive_payload.empty());assert(!keepalive.next(keepalive_header,keepalive_payload));
+    auto keepalive_wire=opal::serialize_video_header(keepalive_header);opal::VideoPacketHeader keepalive_parsed;
+    assert(opal::parse_video_header(keepalive_wire,keepalive_parsed));assert(keepalive_parsed.media_type==opal::VideoMediaType::Keepalive);
 
     std::vector<std::uint8_t> frame(100*1024);
     for(std::size_t i=0;i<frame.size();++i)frame[i]=static_cast<std::uint8_t>((i*17u)&0xffu);
@@ -44,9 +53,6 @@ int main(){
     assert(fec_packets==(data_packets+9)/10);
     assert(sequence==1+fragments.size());
 
-    // Sender-facing fragmentation must walk spans over the encoded access unit
-    // and one reusable FEC buffer instead of allocating a payload vector for
-    // every ~1.1 KiB datagram.
     std::uint64_t cursor_sequence=5000;
     opal::VideoFragmentCursor cursor(opal::VideoMediaType::VideoH264,opal::FrameKeyframe,
         3,99,11,888000,frame,cursor_sequence,true);
