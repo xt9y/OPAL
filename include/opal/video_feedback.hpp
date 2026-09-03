@@ -39,6 +39,16 @@ std::string clock_sync_reply_line(std::uint32_t generation,std::int64_t t0_us,
 bool parse_clock_sync_line(const std::string&,std::uint32_t generation,
                            std::int64_t &t0_us,std::int64_t &t1_us,std::int64_t &t2_us);
 
+struct HostMediaDebugSample {
+    std::uint64_t frame_id=0,frame_bytes=0,stale_frames=0,idr_requests=0,restarts=0;
+    std::uint32_t data_fragments=0,fec_fragments=0,send_span_us=0,capture_to_packet_us=0;
+    int target_kbps=0,active_kbps=0;
+    bool chain_valid=false;
+};
+std::string host_media_debug_line(std::uint32_t generation,const HostMediaDebugSample&);
+bool parse_host_media_debug_line(const std::string&,std::uint32_t generation,HostMediaDebugSample&);
+std::string format_host_media_debug(const HostMediaDebugSample&);
+
 struct LatencyTelemetry {
     double capture_to_packet_ms=0,network_ms=0,reassembly_ms=0,
            decode_ms=0,present_ms=0,total_ms=0,loss_percent=0;
