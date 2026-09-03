@@ -24,6 +24,7 @@ public:
     VideoReassembler(const VideoReassembler&)=delete;
     VideoReassembler& operator=(const VideoReassembler&)=delete;
     void reset(std::uint32_t generation,std::uint64_t session_id);
+    void require_idr();
     ReassemblyStatus accept(const VideoPacketHeader&,std::span<const std::uint8_t>,ReassembledFrame&);
     ReassemblyStatus accept(const VideoPlainPacket&,ReassembledFrame&);
     std::size_t frames_in_flight() const;
