@@ -101,7 +101,7 @@ test-video-present: | $(BUILD)
 	$(BUILD)/test-video-present
 
 test-audio-output: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_audio_output.cpp $(AUDIO_OUTPUT_SRCS) -lavcodec -lavutil $(AUDIOLIBS) -lpthread -o $(BUILD)/test-audio-output
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_audio_output.cpp $(AUDIO_OUTPUT_SRCS) $(VIDEO_CAPTURE_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp $(AVLIBS) $(AUDIOLIBS) -lpthread -o $(BUILD)/test-audio-output
 	$(BUILD)/test-audio-output
 
 test-video-feedback: | $(BUILD)
