@@ -1,8 +1,13 @@
 CXX ?= c++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic
-CPPFLAGS += -Iinclude
-AVLIBS := -lavformat -lavcodec -lavutil
-AUDIOLIBS := -lswresample -lpulse-simple -lpulse
+PKG_CONFIG ?= pkg-config
+AV_PKGS := libavformat libavcodec libavutil
+FFMPEG_PKGS := $(AV_PKGS) libswresample
+FFMPEG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(FFMPEG_PKGS) 2>/dev/null)
+AVLIBS := $(shell $(PKG_CONFIG) --libs $(AV_PKGS) 2>/dev/null)
+SWRLIBS := $(shell $(PKG_CONFIG) --libs libswresample 2>/dev/null)
+CPPFLAGS += -Iinclude $(FFMPEG_CFLAGS)
+AUDIOLIBS := $(SWRLIBS) -lpulse-simple -lpulse
 GLLIBS := -lGL
 NATIVE_MEDIA_LIBS := $(AVLIBS) $(AUDIOLIBS) $(GLLIBS)
 LDLIBS += -lssl -lcrypto -lX11 -lXi -lpthread $(NATIVE_MEDIA_LIBS)
@@ -40,17 +45,26 @@ DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
 DIRECT_MEDIA_SRCS := $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS)
 SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel_access.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) src/config.cpp src/crypto.cpp
 APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(INPUT_SRCS)
+MEDIA_TEST_TARGETS := test-video-capture test-video-decoder test-video-present test-audio-output test-direct-video-pipeline test-session
 
 all: $(PRODUCT) $(INPUT)
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(PRODUCT): $(APP_SRCS) include/opal/*.hpp | $(BUILD)
+deps-check:
+	@PKG_CONFIG="$(PKG_CONFIG)" sh ./scripts/check-build-deps.sh
+
+$(PRODUCT): $(APP_SRCS) include/opal/*.hpp | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(APP_SRCS) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(INPUT): src/input_helper.cpp | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
+
+$(MEDIA_TEST_TARGETS): | deps-check
+
+test-build-flags:
+	sh ./tests/test_build_flags.sh
 
 test-core: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_core.cpp $(CORE_SRCS) $(PROFILE_SRCS) -lcrypto -o $(BUILD)/test-core
@@ -148,7 +162,7 @@ test-hardening: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_hardening.cpp src/crypto.cpp -lcrypto -o $(BUILD)/test-hardening
 	$(BUILD)/test-hardening
 
-test-direct-media-sanitize: test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress
+test-direct-media-sanitize: deps-check test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress
 
 test-clean: all
 	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
@@ -156,7 +170,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
+test: all test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -197,4 +211,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-direct-media-sanitize test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
+.PHONY: all deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-direct-media-sanitize test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
