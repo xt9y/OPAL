@@ -20,6 +20,7 @@ struct VideoCapture::Impl {
     int video_stream=-1;
     int audio_stream=-1;
     int read_timeout_ms=5000;
+    bool terminal=false;
     std::vector<MediaConfig> configs;
 
     static int read(void *opaque,std::uint8_t *buffer,int size){
@@ -51,6 +52,7 @@ bool VideoCapture::start(const StreamOptions &stream,int bitrate_kbps,bool audio
                          const std::string &portal_token_file){
     stop();
     if(!impl_)impl_=std::make_unique<Impl>();
+    impl_->terminal=false;
 
     std::string command;
     if(const char *override_command=std::getenv("OPAL_CAPTURE_CMD");override_command&&*override_command)
@@ -118,7 +120,10 @@ bool VideoCapture::next(EncodedMediaUnit &unit,int timeout_ms){
     bool produced=false;
     for(;;){
         int rc=av_read_frame(impl_->format,packet);
-        if(rc<0)break;
+        if(rc<0){
+            if(rc!=AVERROR(EAGAIN))impl_->terminal=true;
+            break;
+        }
         int stream_index=packet->stream_index;
         if(stream_index!=impl_->video_stream&&stream_index!=impl_->audio_stream){
             av_packet_unref(packet);
@@ -144,6 +149,8 @@ bool VideoCapture::next(EncodedMediaUnit &unit,int timeout_ms){
     return produced;
 }
 
+bool VideoCapture::ended() const{return impl_&&impl_->terminal;}
+
 const std::vector<MediaConfig>& VideoCapture::configs() const{
     static const std::vector<MediaConfig> empty;
     return impl_?impl_->configs:empty;
@@ -163,6 +170,7 @@ void VideoCapture::stop(){
     stop_capture(impl_->capture);
     impl_->video_stream=-1;
     impl_->audio_stream=-1;
+    impl_->terminal=false;
     impl_->configs.clear();
 }
 }
