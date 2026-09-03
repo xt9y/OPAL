@@ -61,16 +61,23 @@ struct SessionSupervisor::Impl {
     bool start_receiver(DirectVideoPath path){auto next=std::make_unique<VideoReceiver>();if(!next->start(std::move(path),[this](const std::string &line){this->enqueue(line);})){set_error("could not start direct video receiver");return false;}std::lock_guard<std::mutex>l(receiver_mu);receiver=std::move(next);return true;}
     void clear_queue(){std::lock_guard<std::mutex>l(queue_mu);outbound.clear();}
     bool dispatch_control_line(const std::string &line){if(line=="PONG")return true;std::lock_guard<std::mutex>l(receiver_mu);return receiver&&receiver->handle_control_line(line);}
-    bool recover_control(unsigned long failed){
-        std::lock_guard<std::mutex>r(recovery_mu);if(!run.load())return false;if(generation.load()!=failed)return true;std::cout<<"Control interrupted; recovering direct session...\n"<<std::flush;stop_receiver();clear_queue();int fd=control_fd.exchange(-1);if(fd>=0)shutdown(fd,SHUT_RDWR);{std::lock_guard<std::mutex>l(control_mu);close_tls(control);}if(!ensure_tunnel()){run.store(false);queue_cv.notify_all();return false;}
-        TlsConn next;std::string token,fp;if(!connect_authenticated(false,next,token,fp)){run.store(false);queue_cv.notify_all();return false;}const unsigned long next_generation=failed+1;DirectVideoPath path;if(!negotiate_media(next,token,fp,next_generation,path)){close_tls(next);run.store(false);queue_cv.notify_all();return false;}install_control(next,fp,next_generation);if(!start_receiver(std::move(path))){run.store(false);queue_cv.notify_all();return false;}std::cout<<"Control restored. Direct video rekeyed.\n"<<std::flush;return true;
+    bool receiver_failed() const{std::lock_guard<std::mutex>l(receiver_mu);return receiver&&receiver->failed();}
+    bool recover_control(unsigned long failed,bool video_stall=false){
+        std::lock_guard<std::mutex>r(recovery_mu);if(!run.load())return false;if(generation.load()!=failed)return true;
+        std::cout<<(video_stall?"Direct video stalled; recovering direct session...\n":"Control interrupted; recovering direct session...\n")<<std::flush;
+        stop_receiver();clear_queue();int fd=control_fd.exchange(-1);if(fd>=0)shutdown(fd,SHUT_RDWR);{std::lock_guard<std::mutex>l(control_mu);close_tls(control);}if(!ensure_tunnel()){run.store(false);queue_cv.notify_all();return false;}
+        TlsConn next;std::string token,fp;if(!connect_authenticated(false,next,token,fp)){run.store(false);queue_cv.notify_all();return false;}const unsigned long next_generation=failed+1;DirectVideoPath path;if(!negotiate_media(next,token,fp,next_generation,path)){close_tls(next);run.store(false);queue_cv.notify_all();return false;}install_control(next,fp,next_generation);if(!start_receiver(std::move(path))){run.store(false);queue_cv.notify_all();return false;}
+        std::cout<<(video_stall?"Direct video restored with fresh keys.\n":"Control restored. Direct video rekeyed.\n")<<std::flush;return true;
     }
     bool write_control(const std::string&line,int timeout){std::lock_guard<std::mutex>l(control_mu);return control.ssl&&tls_write_line_timeout(control.ssl,line,timeout);}
     bool read_control(std::string&line,int timeout){std::lock_guard<std::mutex>l(control_mu);return control.ssl&&tls_read_line_timeout(control.ssl,line,timeout);}
     int current_control_fd(){return control_fd.load();}
     void control_loop(){
         auto next_ping=std::chrono::steady_clock::now()+2s;bool awaiting_pong=false;auto pong_deadline=next_ping;
-        while(run.load()){unsigned long g=generation.load();std::string command;{std::lock_guard<std::mutex>l(queue_mu);if(!outbound.empty()){command=std::move(outbound.front());outbound.pop_front();}}
+        while(run.load()){
+            unsigned long g=generation.load();
+            if(receiver_failed()){set_error("direct video path timed out");if(!recover_control(g,true))break;next_ping=std::chrono::steady_clock::now()+2s;awaiting_pong=false;continue;}
+            std::string command;{std::lock_guard<std::mutex>l(queue_mu);if(!outbound.empty()){command=std::move(outbound.front());outbound.pop_front();}}
             if(!command.empty()&&!write_control(command,250)){if(!recover_control(g))break;next_ping=std::chrono::steady_clock::now()+2s;awaiting_pong=false;continue;}
             bool got_input=false;int fd=current_control_fd();if(fd>=0){{std::lock_guard<std::mutex>l(control_mu);if(control.ssl)got_input=tls_line_ready(control.ssl)||SSL_pending(control.ssl)>0;}if(!got_input&&command.empty())got_input=wait_for_input(fd,20);}
             if(got_input){std::string line;if(!read_control(line,250)){if(!recover_control(g))break;next_ping=std::chrono::steady_clock::now()+2s;awaiting_pong=false;continue;}if(line=="PONG")awaiting_pong=false;else if(!dispatch_control_line(line)){set_error("unexpected OPAL control message");if(!recover_control(g))break;next_ping=std::chrono::steady_clock::now()+2s;awaiting_pong=false;continue;}}
