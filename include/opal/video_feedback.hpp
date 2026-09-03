@@ -53,9 +53,11 @@ std::string format_host_media_debug(const HostMediaDebugSample&);
 
 struct LatencyTelemetry {
     double capture_to_packet_ms=0,network_ms=0,reassembly_ms=0,
-           decode_ms=0,present_ms=0,total_ms=0,loss_percent=0;
+           decode_ms=0,present_ms=0,total_ms=0,loss_percent=0,
+           decoded_fps=0,presented_fps=0;
     std::uint64_t stale_frames=0;
     int bitrate_kbps=0;
+    std::string decoder_backend="unconfigured";
 };
 std::string format_latency_telemetry(const LatencyTelemetry&);
 
