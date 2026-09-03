@@ -22,6 +22,10 @@ int main(){
     auto bad_version=wire;bad_version[4]=2;assert(!opal::parse_plain_video_packet(bad_version,parsed));
     auto bad_length=wire;bad_length.pop_back();assert(!opal::parse_plain_video_packet(bad_length,parsed));
 
+    assert(opal::use_fec_for_media(opal::VideoMediaType::VideoH264));
+    assert(!opal::use_fec_for_media(opal::VideoMediaType::AudioAac));
+    assert(!opal::use_fec_for_media(opal::VideoMediaType::Probe));
+
     std::vector<std::uint8_t> frame(100*1024);
     for(std::size_t i=0;i<frame.size();++i)frame[i]=static_cast<std::uint8_t>((i*17u)&0xffu);
     std::uint64_t sequence=1;
