@@ -38,7 +38,7 @@ int main() {
     assert(cmd.find("gpu-screen-recorder") != std::string::npos);
     assert(cmd.find(" -w screen ") != std::string::npos);
     assert(cmd.find(" -f 60 ") != std::string::npos);
-    assert(cmd.find(" -fm cfr ") != std::string::npos);
+    assert(cmd.find(" -fm vfr ") != std::string::npos);
     assert(cmd.find(" -keyint 0.25 ") != std::string::npos);
     assert(cmd.find(" -keyint 1 ") == std::string::npos);
     assert(cmd.find(" -k h264 ") != std::string::npos);
