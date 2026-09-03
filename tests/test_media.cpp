@@ -10,6 +10,7 @@
 namespace opal {
 bool stream_mode_limit(const std::string&,int&,int&);
 int automatic_bitrate_kbps(int,int,int);
+std::uint64_t capture_stale_budget_us(int);
 }
 
 static std::string read_file(const char *path){std::ifstream f(path);return std::string((std::istreambuf_iterator<char>(f)),{});}
@@ -54,6 +55,7 @@ int main() {
         assert(opal::automatic_bitrate_kbps(2560,1440,60)>=39000);
         assert(opal::automatic_bitrate_kbps(3840,2160,60)==66000);
         assert(opal::automatic_bitrate_kbps(3840,2160,120)==100000);
+        assert(opal::capture_stale_budget_us(60)>=32000&&opal::capture_stale_budget_us(60)<=34000);
     }
     {
         setenv("WAYLAND_DISPLAY","wayland-0",1);
@@ -82,6 +84,8 @@ int main() {
         assert(fallback.find("scale=")!=std::string::npos);
         assert(fallback.find("-bf 0")!=std::string::npos);
         assert(fallback.find("-g 15")!=std::string::npos);
+        assert(fallback.find("-bufsize 1000k")!=std::string::npos);
+        assert(fallback.find("-bufsize 30000k")==std::string::npos);
         assert(fallback.find("-f flv pipe:1")!=std::string::npos); // demuxed before UDP
     }
     {
@@ -94,6 +98,8 @@ int main() {
         assert(host.find("DIRECT_MEDIA_READY")!=std::string::npos);
         auto sender=read_file("src/video_sender.cpp");
         assert(sender.find("automatic_bitrate_kbps")!=std::string::npos);
+        assert(sender.find("type==VideoMediaType::VideoH264")!=std::string::npos);
+        assert(sender.find("fragment_media_unit")!=std::string::npos);
     }
     std::cout<<"media tests passed\n";
 }
