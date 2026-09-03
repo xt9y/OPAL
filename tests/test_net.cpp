@@ -82,6 +82,35 @@ int main() {
     opal::close_tls(c);
     server.join();
 
+    // Short polling must never consume and lose a partial control line. It
+    // must also preserve a second complete line received in the same TLS read.
+    uint16_t fragmented_port=free_port();
+    std::thread fragmented_server([&]{
+        int listen_fd=opal::listen_tcp(fragmented_port,"127.0.0.1");
+        assert(listen_fd>=0);
+        auto peer=opal::accept_tls(server_ctx,listen_fd);
+        assert(peer.ssl);
+        const std::string first="UDP_SEL";
+        assert(opal::tls_write_all(peer.ssl,first.data(),first.size()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        const std::string rest="ECTED 7 127.0.0.1 4567\nPONG\n";
+        assert(opal::tls_write_all(peer.ssl,rest.data(),rest.size()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        opal::close_tls(peer);
+        close(listen_fd);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    auto fragmented=opal::connect_tls(client_ctx,"127.0.0.1",fragmented_port);
+    assert(fragmented.ssl);
+    line.clear();
+    assert(!opal::tls_read_line_timeout(fragmented.ssl,line,30));
+    assert(opal::tls_read_line_timeout(fragmented.ssl,line,1000));
+    assert(line=="UDP_SELECTED 7 127.0.0.1 4567");
+    assert(opal::tls_read_line_timeout(fragmented.ssl,line,100));
+    assert(line=="PONG");
+    opal::close_tls(fragmented);
+    fragmented_server.join();
+
     uint16_t delayed_port=free_port();
     std::thread delayed_server([&]{
         int listen_fd=opal::listen_tcp(delayed_port,"127.0.0.1");
