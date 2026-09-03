@@ -11,12 +11,13 @@ INSTALL ?= install
 BUILD := build
 PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
+PROFILE_SRCS := src/media_profile.cpp
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
 TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
-SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/media.cpp src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(INPUT_SRCS)
+SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/media.cpp $(PROFILE_SRCS) src/config.cpp src/crypto.cpp
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
 
@@ -34,11 +35,11 @@ test-core: | $(BUILD)
 	$(BUILD)/test-core
 
 test-media-profile: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_media_profile.cpp src/media_profile.cpp -o $(BUILD)/test-media-profile
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_media_profile.cpp $(PROFILE_SRCS) -o $(BUILD)/test-media-profile
 	$(BUILD)/test-media-profile
 
 test-media: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_media.cpp src/media.cpp -o $(BUILD)/test-media
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_media.cpp src/media.cpp $(PROFILE_SRCS) -o $(BUILD)/test-media
 	$(BUILD)/test-media
 
 test-input: | $(BUILD)
