@@ -11,26 +11,28 @@ namespace {
 void put16(std::uint8_t *p,std::uint16_t v){v=htons(v);std::memcpy(p,&v,2);}
 void put32(std::uint8_t *p,std::uint32_t v){v=htonl(v);std::memcpy(p,&v,4);}
 
-std::uint16_t fake_stun_once(bool wrong_tx,bool malformed){
+std::uint16_t fake_stun_once(int mode){
     int fd=socket(AF_INET6,SOCK_DGRAM|SOCK_CLOEXEC,0);assert(fd>=0);
     sockaddr_in6 bind_addr{};bind_addr.sin6_family=AF_INET6;bind_addr.sin6_addr=in6addr_loopback;bind_addr.sin6_port=0;
     assert(bind(fd,reinterpret_cast<sockaddr*>(&bind_addr),sizeof(bind_addr))==0);
     socklen_t len=sizeof(bind_addr);assert(getsockname(fd,reinterpret_cast<sockaddr*>(&bind_addr),&len)==0);
     std::uint16_t port=ntohs(bind_addr.sin6_port);
-    std::thread([fd,wrong_tx,malformed]{
+    std::thread([fd,mode]{
         std::uint8_t request[256]{};sockaddr_storage peer{};socklen_t peer_len=sizeof(peer);
         ssize_t n=recvfrom(fd,request,sizeof(request),0,reinterpret_cast<sockaddr*>(&peer),&peer_len);
         if(n>=20){
-            std::uint8_t response[32]{};
-            put16(response,0x0101);put16(response+2,12);put32(response+4,0x2112A442);
-            std::memcpy(response+8,request+8,12);
-            if(wrong_tx)response[8]^=0x80;
-            put16(response+20,0x0020);put16(response+22,malformed?9:8);
+            std::vector<std::uint8_t> response(mode==3?1100:32);
+            put16(response.data(),0x0101);
+            put16(response.data()+2,static_cast<std::uint16_t>(response.size()-20));
+            put32(response.data()+4,0x2112A442);
+            std::memcpy(response.data()+8,request+8,12);
+            if(mode==1)response[8]^=0x80;
+            put16(response.data()+20,0x0020);put16(response.data()+22,mode==2?9:8);
             response[24]=0;response[25]=0x01;
-            put16(response+26,static_cast<std::uint16_t>(45678u^(0x2112A442u>>16)));
+            put16(response.data()+26,static_cast<std::uint16_t>(45678u^(0x2112A442u>>16)));
             std::uint32_t addr=0;inet_pton(AF_INET,"203.0.113.7",&addr);
-            std::uint32_t host_addr=ntohl(addr)^0x2112A442u;put32(response+28,host_addr);
-            sendto(fd,response,sizeof(response),0,reinterpret_cast<sockaddr*>(&peer),peer_len);
+            put32(response.data()+28,ntohl(addr)^0x2112A442u);
+            sendto(fd,response.data(),response.size(),0,reinterpret_cast<sockaddr*>(&peer),peer_len);
         }
         close(fd);
     }).detach();
@@ -54,17 +56,21 @@ int main(){
     auto defaults=opal::default_stun_endpoints();assert(defaults.size()>=2);
 
     {
-        std::uint16_t port=fake_stun_once(false,false);
+        std::uint16_t port=fake_stun_once(0);
         auto mapped=opal::discover_server_reflexive_candidate(a,{{"::1",port}},1000);
         assert(mapped&&mapped->type==opal::CandidateType::ServerReflexive);
         assert(mapped->host=="203.0.113.7"&&mapped->port==45678);
     }
     {
-        std::uint16_t port=fake_stun_once(true,false);
+        std::uint16_t port=fake_stun_once(1);
         assert(!opal::discover_server_reflexive_candidate(a,{{"::1",port}},150));
     }
     {
-        std::uint16_t port=fake_stun_once(false,true);
+        std::uint16_t port=fake_stun_once(2);
+        assert(!opal::discover_server_reflexive_candidate(a,{{"::1",port}},150));
+    }
+    {
+        std::uint16_t port=fake_stun_once(3);
         assert(!opal::discover_server_reflexive_candidate(a,{{"::1",port}},150));
     }
     {
