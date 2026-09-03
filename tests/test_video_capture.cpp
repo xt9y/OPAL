@@ -18,6 +18,7 @@ int main(){
     assert(capture_source.find("unit.data.clear()")!=std::string::npos);
     assert(capture_source.find("8*1024")!=std::string::npos);
     assert(capture_source.find("AVFMT_FLAG_NOBUFFER")!=std::string::npos);
+    assert(capture_source.find("next_view")!=std::string::npos);
     assert(capture_source.find("64*1024") == std::string::npos);
 
     const char *command="ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=60 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 2 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -c:a aac -b:a 96k -f flv pipe:1";
