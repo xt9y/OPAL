@@ -8,6 +8,7 @@ extern "C" {
 }
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <utility>
 
@@ -36,6 +37,10 @@ namespace {
 std::vector<std::uint8_t> copy_extra(const AVCodecParameters *par){
     if(!par||!par->extradata||par->extradata_size<=0)return {};
     return {par->extradata,par->extradata+par->extradata_size};
+}
+std::uint64_t monotonic_us(){
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 }
 
@@ -128,6 +133,7 @@ bool VideoCapture::next(EncodedMediaUnit &unit,int timeout_ms){
         std::int64_t timestamp=packet->pts!=AV_NOPTS_VALUE?packet->pts:packet->dts;
         if(timestamp!=AV_NOPTS_VALUE&&stream_info)
             unit.pts_us=av_rescale_q(timestamp,stream_info->time_base,AVRational{1,1000000});
+        unit.capture_time_us=monotonic_us();
         unit.keyframe=unit.kind==MediaKind::VideoH264&&(packet->flags&AV_PKT_FLAG_KEY)!=0;
         produced=!unit.data.empty();
         av_packet_unref(packet);
