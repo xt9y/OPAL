@@ -1,4 +1,5 @@
 #include <opal/media.hpp>
+#include <opal/media_profile.hpp>
 #include <algorithm>
 #include <cerrno>
 #include <csignal>
@@ -20,6 +21,9 @@ static void stop_group(pid_t pid){if(pid<=0)return;int status=0;pid_t rc=waitpid
 std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::string &portal_token_file,int max_width,int max_height){
     fps=std::clamp(fps,15,240);bitrate=std::clamp(bitrate,1000,100000);
     const int gop=std::max(1,fps/4);
+    const auto stale_budget=capture_stale_budget_us(fps);
+    const long long vbv_bits=static_cast<long long>(bitrate)*stale_budget;
+    const int vbv_kbits=std::max(250,static_cast<int>((vbv_bits+999999LL)/1000000LL));
     if(max_width<0||max_height<0){max_width=0;max_height=0;}
     const std::string scale=std::to_string(max_width)+"x"+std::to_string(max_height);
     if(gsr){
@@ -35,7 +39,7 @@ std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::s
     }
     std::string filter;
     if(max_width>0&&max_height>0)filter="-vf \"scale='min(iw,"+std::to_string(max_width)+")':'min(ih,"+std::to_string(max_height)+")':force_original_aspect_ratio=decrease\" ";
-    return "ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 1 -framerate "+std::to_string(fps)+" -i ${DISPLAY:-:0.0} "+(audio?"-f pulse -i default ":"")+filter+"-c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g "+std::to_string(gop)+" -keyint_min "+std::to_string(gop)+" -sc_threshold 0 -b:v "+std::to_string(bitrate)+"k -maxrate "+std::to_string(bitrate)+"k -bufsize "+std::to_string(bitrate)+"k "+(audio?"-c:a aac -b:a 128k ":"")+"-f flv pipe:1";
+    return "ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 1 -framerate "+std::to_string(fps)+" -i ${DISPLAY:-:0.0} "+(audio?"-f pulse -i default ":"")+filter+"-c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g "+std::to_string(gop)+" -keyint_min "+std::to_string(gop)+" -sc_threshold 0 -b:v "+std::to_string(bitrate)+"k -maxrate "+std::to_string(bitrate)+"k -bufsize "+std::to_string(vbv_kbits)+"k "+(audio?"-c:a aac -b:a 128k ":"")+"-f flv pipe:1";
 }
 
 CaptureProcess start_capture(const std::string &command){int fds[2];if(pipe(fds)!=0)return{};cloexec(fds[0]);cloexec(fds[1]);pid_t pid=fork();if(pid<0){close(fds[0]);close(fds[1]);return{};}if(pid==0){group_child();dup2(fds[1],STDOUT_FILENO);close(fds[0]);close(fds[1]);execl("/bin/sh","sh","-c",command.c_str(),static_cast<char*>(nullptr));_exit(127);}group_parent(pid);close(fds[1]);return{pid,fds[0]};}
