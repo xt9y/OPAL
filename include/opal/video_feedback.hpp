@@ -38,6 +38,8 @@ std::string clock_sync_reply_line(std::uint32_t generation,std::int64_t t0_us,
                                   std::int64_t t1_us,std::int64_t t2_us);
 bool parse_clock_sync_line(const std::string&,std::uint32_t generation,
                            std::int64_t &t0_us,std::int64_t &t1_us,std::int64_t &t2_us);
+std::string debug_media_request_line(std::uint32_t generation,bool enabled);
+bool parse_debug_media_request_line(const std::string&,std::uint32_t generation,bool &enabled);
 
 struct HostMediaDebugSample {
     std::uint64_t frame_id=0,frame_bytes=0,stale_frames=0,idr_requests=0,restarts=0;
