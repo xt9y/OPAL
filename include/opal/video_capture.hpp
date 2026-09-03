@@ -19,6 +19,7 @@ struct EncodedMediaUnit {
     MediaKind kind=MediaKind::VideoH264;
     std::vector<std::uint8_t> data;
     std::int64_t pts_us=0;
+    std::uint64_t capture_time_us=0;
     bool keyframe=false;
 };
 
