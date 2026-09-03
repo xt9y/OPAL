@@ -40,6 +40,10 @@ struct RendezvousMessage {
 std::string rendezvous_id_from_public_key(std::string_view public_key_hex);
 std::string format_connection_code(std::string_view rendezvous_id);
 bool parse_connection_code(std::string_view code,std::string &rendezvous_id);
+std::string rendezvous_lease_transcript(std::string_view id,std::string_view public_key,std::string_view nonce);
+std::string rendezvous_accept_transcript(std::string_view id,std::string_view session_id,
+                                         std::string_view client_public_key,std::string_view client_nonce,
+                                         std::string_view host_nonce);
 
 std::string serialize_rendezvous_message(const RendezvousMessage&);
 bool parse_rendezvous_message(std::string_view wire,RendezvousMessage&);
