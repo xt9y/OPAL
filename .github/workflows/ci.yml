@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     paths:
+      - .github/workflows/ci.yml
       - tests/test_session.cpp
       - tests/test_direct_video_pipeline.cpp
       - include/opal/video_receiver.hpp
