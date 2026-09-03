@@ -104,6 +104,11 @@ bool tls_read_line_timeout(SSL*s,std::string&line,int timeout_ms,size_t limit){
     }
 }
 bool tls_read_line(SSL*s,std::string&line,size_t limit){return tls_read_line_timeout(s,line,30000,limit);}
+bool tls_line_ready(SSL*s){
+    if(!s)return false;const int index=tls_line_state_index();if(index<0)return false;
+    auto *state=static_cast<TlsLineState*>(SSL_get_ex_data(s,index));
+    return state&&state->pending.find('\n')!=std::string::npos;
+}
 std::string peer_fingerprint(SSL*s){X509*c=SSL_get1_peer_certificate(s);if(!c)return{};auto out=fingerprint_x509(c);X509_free(c);return out;}
 std::string local_fingerprint(SSL*s){return s?fingerprint_x509(SSL_get_certificate(s)):std::string();}
 std::string primary_ipv4(){ifaddrs*list=nullptr;if(getifaddrs(&list)!=0)return"127.0.0.1";std::string out="127.0.0.1";for(auto*p=list;p;p=p->ifa_next){if(!p->ifa_addr||p->ifa_addr->sa_family!=AF_INET)continue;auto*a=reinterpret_cast<sockaddr_in*>(p->ifa_addr);char buf[INET_ADDRSTRLEN]{};if(!inet_ntop(AF_INET,&a->sin_addr,buf,sizeof(buf)))continue;std::string ip=buf;if(ip.rfind("127.",0)!=0){out=ip;break;}}freeifaddrs(list);return out;}
