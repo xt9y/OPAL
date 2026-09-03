@@ -22,6 +22,7 @@ struct RendezvousIntroduction {
     std::string local_nonce;
     std::string peer_nonce;
     RendezvousEndpoint peer_observed;
+    RendezvousEndpoint peer_local;
 };
 
 struct RelayAllocation {
