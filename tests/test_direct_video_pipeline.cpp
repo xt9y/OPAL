@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 namespace {
 
@@ -31,12 +32,14 @@ opal::DirectVideoPath make_path(opal::UdpSocket socket,std::uint16_t peer_port,b
 
 void wire_control(opal::VideoSender &sender,opal::VideoReceiver &receiver,std::atomic<int> &idr_requests,
                   opal::DirectVideoPath sender_path,opal::DirectVideoPath receiver_path){
+    // Sender state/generation must exist before the receiver's immediate
+    // feedback/clock tick can route a control line back to it.
+    assert(sender.start(std::move(sender_path),{320,180,60},false,[&](const std::string &line){
+        assert(receiver.handle_control_line(line));
+    }));
     assert(receiver.start(std::move(receiver_path),[&](const std::string &line){
         if(line.rfind("REQUEST_IDR ",0)==0)++idr_requests;
         assert(sender.handle_control_line(line));
-    }));
-    assert(sender.start(std::move(sender_path),{320,180,60},false,[&](const std::string &line){
-        assert(receiver.handle_control_line(line));
     }));
 }
 
