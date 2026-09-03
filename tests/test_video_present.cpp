@@ -26,6 +26,8 @@ int main(){
     assert(source.find("glXSwapIntervalEXT")!=std::string::npos||source.find("glXSwapIntervalMESA")!=std::string::npos);
     assert(source.find("_NET_WM_BYPASS_COMPOSITOR")!=std::string::npos);
     assert(source.find("glTexSubImage2D")!=std::string::npos);
+    assert(source.find("GL_UNPACK_ROW_LENGTH")!=std::string::npos);
+    assert(source.find("std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv") == std::string::npos);
 
     opal::VideoPresenter presenter;assert(presenter.open(320,180,false));assert(presenter.x11_window()!=0);auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
     assert(presenter.present(make_frame(48)));assert(presenter.pending_frame_count()<=1);
