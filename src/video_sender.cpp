@@ -63,6 +63,10 @@ struct VideoSender::Impl {
         active_kbps.store(bitrate);last_restart=Clock::now();tokens=2.0*kVideoMaxDatagramBytes;token_time=last_restart;return true;
     }
 
+    bool restart_capture(){
+        idr_requested.store(false);capture.stop();if(!start_capture())return false;send_configs();return true;
+    }
+
     void refill_tokens(){
         const auto now=Clock::now();if(token_time.time_since_epoch().count()==0)token_time=now;
         const double us=static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now-token_time).count());token_time=now;
@@ -121,7 +125,7 @@ struct VideoSender::Impl {
         const bool bitrate_change=std::abs(target-active)*100>=active*15&&now-last_restart>=std::chrono::seconds(2);
         const bool idr_change=idr_requested.load()&&now-last_restart>=std::chrono::milliseconds(250);
         if(!bitrate_change&&!idr_change)return true;
-        idr_requested.store(false);capture.stop();if(!start_capture())return false;send_configs();return true;
+        return restart_capture();
     }
 
     void debug_sample(const EncodedMediaUnit &unit){
@@ -136,7 +140,11 @@ struct VideoSender::Impl {
         send_configs();
         while(run.load()){
             if(!maybe_restart()){run.store(false);break;}
-            EncodedMediaUnit unit;if(!capture.next(unit,100)){continue;}
+            EncodedMediaUnit unit;
+            if(!capture.next(unit,100)){
+                if(capture.ended()&&!restart_capture()){run.store(false);break;}
+                continue;
+            }
             const auto type=unit.kind==MediaKind::VideoH264?VideoMediaType::VideoH264:VideoMediaType::AudioAac;
             const std::uint16_t flags=unit.keyframe?FrameKeyframe:0;send_frame(type,flags,unit.data,unit.capture_time_us);debug_sample(unit);
         }
