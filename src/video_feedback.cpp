@@ -70,6 +70,15 @@ bool parse_clock_sync_line(const std::string &line,std::uint32_t generation,std:
     if(!(in>>word>>gen>>t0>>t1>>t2)||in>>extra||word!="CLOCK_SYNC"||gen!=generation)return false;return true;
 }
 
+std::string debug_media_request_line(std::uint32_t generation,bool enabled){
+    return "DEBUG_MEDIA "+std::to_string(generation)+" "+(enabled?"1":"0");
+}
+bool parse_debug_media_request_line(const std::string &line,std::uint32_t generation,bool &enabled){
+    std::istringstream in(line);std::string word,extra;unsigned long long gen=0,value=0;
+    if(!(in>>word>>gen>>value)||in>>extra||word!="DEBUG_MEDIA"||gen!=generation||value>1)return false;
+    enabled=value==1;return true;
+}
+
 std::string host_media_debug_line(std::uint32_t generation,const HostMediaDebugSample &s){
     return "HOST_MEDIA "+std::to_string(generation)+" "+std::to_string(s.frame_id)+" "+std::to_string(s.frame_bytes)+" "+
         std::to_string(s.data_fragments)+" "+std::to_string(s.fec_fragments)+" "+std::to_string(s.send_span_us)+" "+
