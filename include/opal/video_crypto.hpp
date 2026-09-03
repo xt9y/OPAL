@@ -2,6 +2,7 @@
 #include <array>
 #include <bitset>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -15,6 +16,25 @@ struct VideoKeys {
 
 bool derive_video_keys(SSL*,std::string_view session_token,
     std::string_view client_pub,std::string_view host_fp,bool client_side,VideoKeys&);
+
+class VideoCipher {
+public:
+    explicit VideoCipher(const VideoKeys&);
+    ~VideoCipher();
+    VideoCipher(const VideoCipher&)=delete;
+    VideoCipher& operator=(const VideoCipher&)=delete;
+    bool valid() const;
+    bool seal(std::uint64_t seq,std::span<const std::uint8_t> aad,
+              std::span<const std::uint8_t> plaintext,std::span<std::uint8_t> output,
+              std::size_t &output_size);
+    bool open(std::uint64_t seq,std::span<const std::uint8_t> aad,
+              std::span<const std::uint8_t> ciphertext_tag,std::span<std::uint8_t> output,
+              std::size_t &output_size);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 bool seal_video_datagram(const VideoKeys&,std::uint64_t seq,
     std::span<const std::uint8_t> aad,std::span<const std::uint8_t> plaintext,
     std::vector<std::uint8_t>& ciphertext_tag);
