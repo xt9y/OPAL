@@ -6,11 +6,8 @@
 
 namespace opal {
 struct SessionOptions {
-    std::string target;
-    int control_port=47990;
-    bool tunneled=false;
-    std::string control_token;
-    std::string fingerprint;
+    std::string rendezvous_id;
+    std::string expected_host_public_key;
     std::string client_public_key;
     std::string client_private_key_path;
     bool paired=false;
@@ -37,7 +34,9 @@ public:
     int remote_width() const;
     int remote_height() const;
     std::string remote_mac() const;
+    std::string host_public_key() const;
     std::string fingerprint() const;
+    std::string path_name() const;
     std::string last_error() const;
 
 private:
