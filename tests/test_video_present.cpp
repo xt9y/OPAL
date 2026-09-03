@@ -1,6 +1,9 @@
 #include <opal/video_present.hpp>
 #include <cassert>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <string>
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/imgutils.h>
@@ -13,7 +16,17 @@ static opal::DecodedVideoFrame make_frame(int value){
     return {frame,value*1000};
 }
 
+static std::string read_all(const char *path){
+    std::ifstream in(path);assert(in.good());
+    return std::string(std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>());
+}
+
 int main(){
+    const auto source=read_all("src/video_present.cpp");
+    assert(source.find("glXSwapIntervalEXT")!=std::string::npos||source.find("glXSwapIntervalMESA")!=std::string::npos);
+    assert(source.find("_NET_WM_BYPASS_COMPOSITOR")!=std::string::npos);
+    assert(source.find("glTexSubImage2D")!=std::string::npos);
+
     opal::VideoPresenter presenter;assert(presenter.open(320,180,false));assert(presenter.x11_window()!=0);auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
     assert(presenter.present(make_frame(48)));assert(presenter.pending_frame_count()<=1);
     assert(presenter.present(make_frame(96)));assert(presenter.pending_frame_count()<=1);
