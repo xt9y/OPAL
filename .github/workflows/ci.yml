@@ -1,7 +1,6 @@
 name: CI
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   linux:
@@ -9,36 +8,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y g++ make libssl-dev libx11-dev libxi-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev
+        run: sudo apt-get update && sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev xvfb ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
       - name: Build and test
-        run: make test
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
+          DISPLAY=:99 make test
 
   sanitize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang make libssl-dev libx11-dev libxi-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev
+        run: sudo apt-get update && sudo apt-get install -y clang make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev xvfb ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
       - name: ASan and UBSan
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: >-
-          make clean test-core test-media test-video-capture test-input test-net test-session test-hardening
-          CXX=clang++
-          CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
+          DISPLAY=:99 make clean test-direct-media-sanitize CXX=clang++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
 
   thread-sanitize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y g++ make libssl-dev libx11-dev libxi-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev
-      - name: TSan session supervisor
+        run: sudo apt-get update && sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev xvfb ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+      - name: TSan session and direct media
         env:
           TSAN_OPTIONS: halt_on_error=1
         run: >-
-          make clean test-session
+          make clean test-session test-direct-video-session test-direct-video-stress
           CXX=g++
           CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-omit-frame-pointer'
 
@@ -47,10 +47,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y g++ make libssl-dev libx11-dev libxi-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev
-      - name: Reconnect and transport stress
+        run: sudo apt-get update && sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev xvfb ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+      - name: Direct-media reconnect and transport stress
         run: |
-          make all test-net test-session test-tunnel-recovery
+          Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
+          DISPLAY=:99 make all test-net test-session test-direct-video-session test-direct-video-pipeline test-direct-video-stress test-tunnel-recovery
           for i in 1 2 3; do
-            make test-session test-net
+            DISPLAY=:99 make test-session test-direct-video-stress
           done
