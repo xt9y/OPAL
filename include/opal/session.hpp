@@ -1,5 +1,4 @@
 #pragma once
-#include <algorithm>
 #include <functional>
 #include <memory>
 #include <string>
@@ -9,10 +8,8 @@ namespace opal {
 struct SessionOptions {
     std::string target;
     int control_port=47990;
-    int video_port=47991;
     bool tunneled=false;
     std::string control_token;
-    std::string video_token;
     std::string fingerprint;
     std::string client_public_key;
     std::string client_private_key_path;
