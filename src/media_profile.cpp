@@ -25,4 +25,9 @@ std::uint64_t capture_stale_budget_us(int fps){
     fps=std::clamp(fps,15,240);
     return static_cast<std::uint64_t>(std::clamp(2000000/fps,20000,150000));
 }
+
+int normal_gop_frames(int fps){
+    fps=std::clamp(fps,15,240);
+    return fps*2;
+}
 }
