@@ -83,6 +83,9 @@ bool VideoDecoder::decode_latest(std::span<const std::uint8_t> unit,std::int64_t
         const int rc=avcodec_receive_frame(impl_->ctx,impl_->scratch);
         if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF)break;
         if(rc<0)return false;
+        if((impl_->scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||impl_->scratch->decode_error_flags!=0){
+            av_frame_unref(impl_->scratch);impl_->clear_latest();return false;
+        }
         av_frame_unref(impl_->latest);
         av_frame_move_ref(impl_->latest,impl_->scratch);
         ++decoded;
