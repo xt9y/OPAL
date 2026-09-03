@@ -42,6 +42,10 @@ test-media: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_media.cpp src/media.cpp $(PROFILE_SRCS) -o $(BUILD)/test-media
 	$(BUILD)/test-media
 
+test-video-capture: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_capture.cpp src/video_capture.cpp src/media.cpp $(PROFILE_SRCS) src/config.cpp -o $(BUILD)/test-video-capture
+	$(BUILD)/test-video-capture
+
 test-input: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp $(INPUT_SRCS) -o $(BUILD)/test-input
 	$(BUILD)/test-input
@@ -80,7 +84,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-core test-media-profile test-media test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
+test: all test-core test-media-profile test-media test-video-capture test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -116,10 +120,9 @@ install: all
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
-	rm -f "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"
 	-rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-media-profile test-media test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
+.PHONY: all test test-core test-media-profile test-media test-video-capture test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
