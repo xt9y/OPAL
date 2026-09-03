@@ -17,6 +17,7 @@ int main(){
 
     opal::VideoCapture capture;
     assert(capture.start({320,180,60},8000,true,""));
+    assert(!capture.ended());
     bool video=false,audio=false,keyframe=false;
     for(int i=0;i<300&&!(video&&audio&&keyframe);++i){
         opal::EncodedMediaUnit unit;
@@ -32,7 +33,17 @@ int main(){
         audio_config|=config.kind==opal::MediaKind::AudioAac&&!config.extradata.empty()&&config.sample_rate==48000&&config.channels>0;
     }
     assert(video_config&&audio_config);
+
+    // Drain the bounded fixture. A temporary read timeout may still return
+    // false while the process is alive, but permanent EOF must become visible
+    // so VideoSender can restart capture instead of spinning forever.
+    for(int i=0;i<500&&!capture.ended();++i){
+        opal::EncodedMediaUnit unit;
+        (void)capture.next(unit,50);
+    }
+    assert(capture.ended());
     capture.stop();
+    assert(!capture.ended());
     unsetenv("OPAL_CAPTURE_CMD");
 
     auto gsr=opal::capture_command(true,60,30000,true,"",1920,1080);
