@@ -21,35 +21,17 @@ int main(){
         opal::RendezvousMessage out;assert(opal::parse_rendezvous_message(wire,out));return out;
     };
 
-    opal::RendezvousMessage hello;hello.type=opal::RendezvousType::LeaseHello;hello.id=id;hello.public_key=pub;
-    auto hello2=roundtrip(hello);assert(hello2.type==hello.type&&hello2.id==id&&hello2.public_key==pub);
-
-    opal::RendezvousMessage challenge;challenge.type=opal::RendezvousType::LeaseChallenge;challenge.id=id;challenge.nonce=std::string(32,'a');
-    assert(roundtrip(challenge).nonce==challenge.nonce);
-
-    opal::RendezvousMessage proof;proof.type=opal::RendezvousType::LeaseProof;proof.id=id;proof.public_key=pub;proof.nonce=std::string(32,'b');proof.signature=std::string(128,'c');
-    assert(roundtrip(proof).signature==proof.signature);
-
-    opal::RendezvousMessage ok;ok.type=opal::RendezvousType::LeaseOk;ok.id=id;ok.ttl_seconds=45;
-    assert(roundtrip(ok).ttl_seconds==45);
-
-    opal::RendezvousMessage intro;intro.type=opal::RendezvousType::Introduce;intro.id=id;intro.public_key=pub;intro.nonce=std::string(32,'d');
-    assert(roundtrip(intro).id==id);
-
-    opal::RendezvousMessage offer;offer.type=opal::RendezvousType::Offer;offer.id=id;offer.session_id=std::string(32,'e');offer.public_key=pub;offer.host="2001:db8::1";offer.port=5555;offer.nonce=std::string(32,'f');
-    auto offer2=roundtrip(offer);assert(offer2.host==offer.host&&offer2.port==5555&&offer2.session_id==offer.session_id);
-
-    opal::RendezvousMessage ready=offer;ready.type=opal::RendezvousType::Ready;ready.host="203.0.113.9";ready.port=6000;
-    assert(roundtrip(ready).port==6000);
-
-    opal::RendezvousMessage relay;relay.type=opal::RendezvousType::RelayRequest;relay.session_id=std::string(32,'1');relay.public_key=pub;relay.nonce=std::string(32,'2');relay.signature=std::string(128,'3');
-    assert(roundtrip(relay).session_id==relay.session_id);
-
-    opal::RendezvousMessage relay_ready;relay_ready.type=opal::RendezvousType::RelayReady;relay_ready.session_id=std::string(32,'4');relay_ready.host="198.51.100.5";relay_ready.port=47993;relay_ready.allocation_id=std::string(32,'5');relay_ready.ttl_seconds=30;
-    auto rr=roundtrip(relay_ready);assert(rr.allocation_id==relay_ready.allocation_id&&rr.ttl_seconds==30);
-
-    opal::RendezvousMessage error;error.type=opal::RendezvousType::Error;error.error_code="HOST_OFFLINE";
-    assert(roundtrip(error).error_code=="HOST_OFFLINE");
+    opal::RendezvousMessage hello;hello.type=opal::RendezvousType::LeaseHello;hello.id=id;hello.public_key=pub;auto hello2=roundtrip(hello);assert(hello2.type==hello.type&&hello2.id==id&&hello2.public_key==pub);
+    opal::RendezvousMessage challenge;challenge.type=opal::RendezvousType::LeaseChallenge;challenge.id=id;challenge.nonce=std::string(32,'a');assert(roundtrip(challenge).nonce==challenge.nonce);
+    opal::RendezvousMessage proof;proof.type=opal::RendezvousType::LeaseProof;proof.id=id;proof.public_key=pub;proof.nonce=std::string(32,'b');proof.signature=std::string(128,'c');assert(roundtrip(proof).signature==proof.signature);
+    opal::RendezvousMessage ok;ok.type=opal::RendezvousType::LeaseOk;ok.id=id;ok.ttl_seconds=45;assert(roundtrip(ok).ttl_seconds==45);
+    opal::RendezvousMessage intro;intro.type=opal::RendezvousType::Introduce;intro.id=id;intro.public_key=pub;intro.nonce=std::string(32,'d');assert(roundtrip(intro).id==id);
+    opal::RendezvousMessage offer;offer.type=opal::RendezvousType::Offer;offer.id=id;offer.session_id=std::string(32,'e');offer.public_key=pub;offer.host="2001:db8::1";offer.port=5555;offer.nonce=std::string(32,'f');auto offer2=roundtrip(offer);assert(offer2.host==offer.host&&offer2.port==5555&&offer2.session_id==offer.session_id);
+    opal::RendezvousMessage accept;accept.type=opal::RendezvousType::Accept;accept.id=id;accept.session_id=offer.session_id;accept.public_key=pub;accept.nonce=std::string(32,'1');auto accept2=roundtrip(accept);assert(accept2.session_id==accept.session_id&&accept2.port==0&&accept2.host.empty());
+    opal::RendezvousMessage ready=accept;ready.type=opal::RendezvousType::Ready;ready.host="203.0.113.9";ready.port=6000;assert(roundtrip(ready).port==6000);
+    opal::RendezvousMessage relay;relay.type=opal::RendezvousType::RelayRequest;relay.session_id=std::string(32,'2');relay.public_key=pub;relay.nonce=std::string(32,'3');relay.signature=std::string(128,'4');assert(roundtrip(relay).session_id==relay.session_id);
+    opal::RendezvousMessage relay_ready;relay_ready.type=opal::RendezvousType::RelayReady;relay_ready.session_id=std::string(32,'5');relay_ready.host="198.51.100.5";relay_ready.port=47993;relay_ready.allocation_id=std::string(32,'6');relay_ready.ttl_seconds=30;auto rr=roundtrip(relay_ready);assert(rr.allocation_id==relay_ready.allocation_id&&rr.ttl_seconds==30);
+    opal::RendezvousMessage error;error.type=opal::RendezvousType::Error;error.error_code="HOST_OFFLINE";assert(roundtrip(error).error_code=="HOST_OFFLINE");
 
     opal::RendezvousMessage out;
     assert(!opal::parse_rendezvous_message("",out));
