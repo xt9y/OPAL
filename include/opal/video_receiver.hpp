@@ -1,7 +1,7 @@
 #pragma once
 
-#include <opal/direct_video_session.hpp>
 #include <opal/video_crypto.hpp>
+#include <opal/video_path.hpp>
 #include <X11/Xlib.h>
 #include <cstdint>
 #include <functional>
