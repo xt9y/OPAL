@@ -18,23 +18,6 @@ static void group_child(){setpgid(0,0);}
 static void group_parent(pid_t pid){if(pid>0)setpgid(pid,pid);}
 static void stop_group(pid_t pid){if(pid<=0)return;int status=0;pid_t rc=waitpid(pid,&status,WNOHANG);kill(-pid,SIGTERM);auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);while(rc==0&&std::chrono::steady_clock::now()<deadline){usleep(25000);rc=waitpid(pid,&status,WNOHANG);}kill(-pid,SIGKILL);if(rc==0)while(waitpid(pid,&status,0)<0&&errno==EINTR){};}
 
-bool stream_mode_limit(const std::string &mode,int &max_width,int &max_height){
-    if(mode=="max"){max_width=0;max_height=0;return true;}
-    if(mode=="1080p"){max_width=1920;max_height=1080;return true;}
-    if(mode=="1440p"){max_width=2560;max_height=1440;return true;}
-    if(mode=="4k"){max_width=3840;max_height=2160;return true;}
-    return false;
-}
-
-int automatic_bitrate_kbps(int width,int height,int fps){
-    fps=std::clamp(fps,15,240);
-    if(width<=0||height<=0)return 60000;
-    constexpr long long reference=1920LL*1080LL*60LL;
-    long long pixel_rate=static_cast<long long>(width)*height*fps;
-    long long bitrate=18000LL+(12000LL*pixel_rate)/reference;
-    return static_cast<int>(std::clamp<long long>(bitrate,20000,100000));
-}
-
 std::string video_request_line(const std::string &token,int max_width,int max_height,int fps){
     if(max_width==0&&max_height==0&&fps==60)return "VIDEO "+token;
     return "VIDEO "+token+" "+std::to_string(max_width)+" "+std::to_string(max_height)+" "+std::to_string(fps);
