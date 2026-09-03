@@ -16,12 +16,14 @@ PROFILE_SRCS := src/media_profile.cpp
 VIDEO_CAPTURE_SRCS := src/video_capture.cpp
 UDP_TRANSPORT_SRCS := src/udp_transport.cpp
 VIDEO_CRYPTO_SRCS := src/video_crypto.cpp
+VIDEO_PACKET_SRCS := src/video_packet.cpp
+VIDEO_REASSEMBLY_SRCS := src/video_reassembly.cpp
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
 TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
 SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/media.cpp $(PROFILE_SRCS) src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(VIDEO_CAPTURE_SRCS) $(UDP_TRANSPORT_SRCS) $(INPUT_SRCS)
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(VIDEO_CAPTURE_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
 
@@ -57,6 +59,14 @@ test-udp-transport: | $(BUILD)
 test-video-crypto: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_crypto.cpp $(VIDEO_CRYPTO_SRCS) $(NET_SRCS) -lssl -lcrypto -lpthread -o $(BUILD)/test-video-crypto
 	$(BUILD)/test-video-crypto
+
+test-video-packet: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_packet.cpp $(VIDEO_PACKET_SRCS) -o $(BUILD)/test-video-packet
+	$(BUILD)/test-video-packet
+
+test-video-reassembly: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_reassembly.cpp $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -o $(BUILD)/test-video-reassembly
+	$(BUILD)/test-video-reassembly
 
 test-input: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp $(INPUT_SRCS) -o $(BUILD)/test-input
@@ -96,7 +106,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
+test: all test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -137,4 +147,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
+.PHONY: all test test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
