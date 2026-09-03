@@ -5,7 +5,7 @@
 Native Linux remote desktop.
 
 - Native-resolution fullscreen desktop mirroring and remote control.
-- 60 FPS H.264/Matroska capture target with automatic video-session recovery.
+- 60 FPS H.264/AAC capture target with automatic video-session recovery.
 - XInput2 keyboard/pointer capture with an X11 compatibility fallback.
 - Linux uinput injection with full `KEY_MAX` support and stuck-input cleanup.
 - TLS 1.3 transport with Ed25519 device authentication and certificate-bound first pairing.
@@ -16,16 +16,16 @@ Native Linux remote desktop.
 
 ## Dependencies
 
-Fedora / Fedora Asahi Remix:
+Fedora / Fedora Asahi Remix with RPM Fusion FFmpeg:
 
 ```bash
-sudo dnf install -y gcc-c++ make openssl-devel libX11-devel libXi-devel ffmpeg
+sudo dnf install -y gcc-c++ make openssl-devel libX11-devel libXi-devel ffmpeg ffmpeg-devel
 ```
 
 Debian / Ubuntu:
 
 ```bash
-sudo apt-get install -y g++ make libssl-dev libx11-dev libxi-dev ffmpeg
+sudo apt-get install -y g++ make libssl-dev libx11-dev libxi-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev
 ```
 
 GPU Screen Recorder is recommended for Wayland capture. OPAL enables H.264 CPU fallback when a usable hardware encoder is unavailable.
