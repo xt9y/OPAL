@@ -37,8 +37,6 @@ int BitrateController::floor_kbps() const{return floor_;}
 
 ClockEstimate estimate_clock_offset(std::int64_t t0,std::int64_t t1,std::int64_t t2,std::int64_t t3){
     ClockEstimate out;
-    // steady_clock epochs are local to each machine, so never compare t0/t3 directly
-    // with t1/t2. Only durations measured within the same clock domain are valid.
     if(t2<t1||t3<t0)return out;
     const std::int64_t local_elapsed=t3-t0,remote_elapsed=t2-t1;
     if(local_elapsed>60000000LL||remote_elapsed>60000000LL)return out;
@@ -112,7 +110,8 @@ std::string format_latency_telemetry(const LatencyTelemetry &t){
         <<"OPAL latency capture->packet="<<t.capture_to_packet_ms<<"ms network="<<t.network_ms
         <<"ms reassembly="<<t.reassembly_ms<<"ms decode="<<t.decode_ms<<"ms present="<<t.present_ms
         <<"ms total="<<t.total_ms<<"ms loss="<<t.loss_percent<<"% stale="<<t.stale_frames
-        <<" bitrate="<<t.bitrate_kbps<<"kbps";return out.str();
+        <<" bitrate="<<t.bitrate_kbps<<"kbps decoder="<<t.decoder_backend
+        <<" decode_fps="<<t.decoded_fps<<" present_fps="<<t.presented_fps;return out.str();
 }
 
 }
