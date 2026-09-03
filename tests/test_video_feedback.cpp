@@ -7,18 +7,19 @@ int main(){
     const auto start=steady_clock::now();
     opal::BitrateController controller(30000);assert(controller.target_kbps()==30000);assert(controller.floor_kbps()==10500);
     opal::VideoFeedbackSample bad{};bad.received=970;bad.lost=30;bad.rtt_us=20000;
-    assert(controller.on_feedback(bad,start)==30000);
-    assert(controller.on_feedback(bad,start+milliseconds(100))==24000);
+    assert(controller.on_feedback(bad,start)==22500);
+    assert(controller.on_feedback(bad,start+milliseconds(100))==16875);
     opal::VideoFeedbackSample worse{};worse.received=950;worse.lost=50;worse.rtt_us=40000;
-    controller.on_feedback(worse,start+milliseconds(200));assert(controller.on_feedback(worse,start+milliseconds(300))==19200);
-    for(int i=0;i<20;++i){controller.on_feedback(worse,start+milliseconds(400+i*100));controller.on_feedback(worse,start+milliseconds(450+i*100));}
-    assert(controller.target_kbps()>=controller.floor_kbps());
+    assert(controller.on_feedback(worse,start+milliseconds(200))==12656);
+    assert(controller.on_feedback(worse,start+milliseconds(300))==controller.floor_kbps());
+    for(int i=0;i<20;++i)controller.on_feedback(worse,start+milliseconds(400+i*100));
+    assert(controller.target_kbps()==controller.floor_kbps());
 
-    opal::BitrateController recovery(30000);recovery.on_feedback(bad,start);recovery.on_feedback(bad,start+milliseconds(100));assert(recovery.target_kbps()==24000);
+    opal::BitrateController recovery(30000);assert(recovery.on_feedback(bad,start)==22500);
     opal::VideoFeedbackSample good{};good.received=1000;good.lost=0;good.rtt_us=20000;
-    recovery.on_feedback(good,start+milliseconds(200));
-    assert(recovery.on_feedback(good,start+milliseconds(1201))==25200);
-    for(int i=0;i<20;++i)recovery.on_feedback(good,start+milliseconds(2300+i*1100));
+    recovery.on_feedback(good,start+milliseconds(100));
+    assert(recovery.on_feedback(good,start+milliseconds(1101))==23625);
+    for(int i=0;i<20;++i)recovery.on_feedback(good,start+milliseconds(2200+i*1100));
     assert(recovery.target_kbps()<=30000);
 
     auto line=opal::video_feedback_line(7,{1234,99,1,15000,3000});opal::VideoFeedbackSample parsed;
