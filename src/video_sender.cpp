@@ -136,7 +136,7 @@ struct VideoSender::Impl {
         send_configs();
         while(run.load()){
             if(!maybe_restart()){run.store(false);break;}
-            EncodedMediaUnit unit;if(!capture.next(unit,100)){std::this_thread::sleep_for(std::chrono::milliseconds(1));continue;}
+            EncodedMediaUnit unit;if(!capture.next(unit,100)){continue;}
             const auto type=unit.kind==MediaKind::VideoH264?VideoMediaType::VideoH264:VideoMediaType::AudioAac;
             const std::uint16_t flags=unit.keyframe?FrameKeyframe:0;send_frame(type,flags,unit.data,unit.capture_time_us);debug_sample(unit);
         }
