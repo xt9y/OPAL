@@ -35,6 +35,37 @@ int main(){
     }
     assert(!completed);
 
+    // An incomplete H.264 reference must not remain indefinitely just because
+    // newer frames complete and leave the three-frame memory window. Two newer
+    // observed video frames make the old reference stale: request an IDR, drop
+    // dependent P-frames, and resume only from a fresh keyframe.
+    reassembler.reset(5,77);
+    auto lost_reference=make_frame(50,opal::kVideoDataFragmentBytes+100);
+    assert(reassembler.accept(lost_reference.front(),complete)==opal::ReassemblyStatus::Incomplete);
+    auto next_reference=make_frame(51,500);
+    bool next_complete=false;
+    for(const auto &packet:next_reference)
+        if(reassembler.accept(packet,complete)==opal::ReassemblyStatus::Complete)next_complete=true;
+    assert(next_complete);
+    auto stale_edge=make_frame(52,500);
+    bool need_idr=false;
+    for(const auto &packet:stale_edge)
+        if(reassembler.accept(packet,complete)==opal::ReassemblyStatus::NeedIdr)need_idr=true;
+    assert(need_idr);
+    auto dependent=make_frame(53,500);
+    bool dependent_complete=false;
+    for(const auto &packet:dependent)
+        if(reassembler.accept(packet,complete)==opal::ReassemblyStatus::Complete)dependent_complete=true;
+    assert(!dependent_complete);
+    auto recovery=make_frame(54,500,opal::FrameKeyframe);
+    bool recovery_complete=false;
+    for(const auto &packet:recovery){
+        if(reassembler.accept(packet,complete)==opal::ReassemblyStatus::Complete){
+            recovery_complete=true;assert(complete.keyframe);
+        }
+    }
+    assert(recovery_complete);
+
     reassembler.reset(5,77);
     opal::ReassemblyStatus fourth=opal::ReassemblyStatus::Incomplete;
     for(std::uint64_t id=10;id<14;++id){
