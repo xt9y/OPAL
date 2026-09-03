@@ -38,6 +38,7 @@ bool parse_video_request_line(const std::string &line,std::string &token,int &ma
 
 std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::string &portal_token_file,int max_width,int max_height){
     fps=std::clamp(fps,15,240);bitrate=std::clamp(bitrate,1000,100000);
+    const int gop=std::max(1,fps/4);
     if(max_width<0||max_height<0){max_width=0;max_height=0;}
     const std::string scale=std::to_string(max_width)+"x"+std::to_string(max_height);
     if(gsr){
@@ -49,11 +50,11 @@ std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::s
             portal_args+=" -portal-session-token-filepath "+quote_arg(portal_token_file);
             if(std::filesystem::exists(portal_token_file))portal_args+=" -restore-portal-session yes";
         }
-        return "gpu-screen-recorder -w "+source+" -f "+std::to_string(fps)+" -fm cfr -keyint 1 -k h264 -fallback-cpu-encoding yes -bm cbr -q "+std::to_string(bitrate)+" -v no -cursor yes -s "+scale+(audio?" -a default_output":"")+portal_args+" -c flv"+(debug_enabled?"":" 2>/dev/null");
+        return "gpu-screen-recorder -w "+source+" -f "+std::to_string(fps)+" -fm cfr -keyint 0.25 -k h264 -fallback-cpu-encoding yes -bm cbr -tune performance -q "+std::to_string(bitrate)+" -v no -cursor yes -s "+scale+(audio?" -a default_output":"")+portal_args+" -c flv"+(debug_enabled?"":" 2>/dev/null");
     }
     std::string filter;
     if(max_width>0&&max_height>0)filter="-vf \"scale='min(iw,"+std::to_string(max_width)+")':'min(ih,"+std::to_string(max_height)+")':force_original_aspect_ratio=decrease\" ";
-    return "ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 1 -framerate "+std::to_string(fps)+" -i ${DISPLAY:-:0.0} "+(audio?"-f pulse -i default ":"")+filter+"-c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g "+std::to_string(fps)+" -keyint_min "+std::to_string(fps)+" -sc_threshold 0 -b:v "+std::to_string(bitrate)+"k -maxrate "+std::to_string(bitrate)+"k -bufsize "+std::to_string(bitrate)+"k "+(audio?"-c:a aac -b:a 128k ":"")+"-f flv pipe:1";
+    return "ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 1 -framerate "+std::to_string(fps)+" -i ${DISPLAY:-:0.0} "+(audio?"-f pulse -i default ":"")+filter+"-c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g "+std::to_string(gop)+" -keyint_min "+std::to_string(gop)+" -sc_threshold 0 -b:v "+std::to_string(bitrate)+"k -maxrate "+std::to_string(bitrate)+"k -bufsize "+std::to_string(bitrate)+"k "+(audio?"-c:a aac -b:a 128k ":"")+"-f flv pipe:1";
 }
 
 CaptureProcess start_capture(const std::string &command){int fds[2];if(pipe(fds)!=0)return{};cloexec(fds[0]);cloexec(fds[1]);pid_t pid=fork();if(pid<0){close(fds[0]);close(fds[1]);return{};}if(pid==0){group_child();dup2(fds[1],STDOUT_FILENO);close(fds[0]);close(fds[1]);execl("/bin/sh","sh","-c",command.c_str(),static_cast<char*>(nullptr));_exit(127);}group_parent(pid);close(fds[1]);return{pid,fds[0]};}
