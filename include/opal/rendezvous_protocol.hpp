@@ -31,9 +31,11 @@ struct RendezvousMessage {
     std::string signature;
     std::string session_id;
     std::string host;
+    std::string local_host;
     std::string allocation_id;
     std::string error_code;
     std::uint16_t port=0;
+    std::uint16_t local_port=0;
     std::uint32_t ttl_seconds=0;
 };
 
