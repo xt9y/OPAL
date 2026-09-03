@@ -1,6 +1,7 @@
 #include <opal/video_crypto.hpp>
 #include <opal/net.hpp>
 #include <arpa/inet.h>
+#include <array>
 #include <cassert>
 #include <filesystem>
 #include <thread>
@@ -48,6 +49,21 @@ int main(){
     auto bad_aad=aad;bad_aad[0]^=1;assert(!opal::open_video_datagram(server_keys,42,bad_aad,sealed,opened));
     assert(opal::seal_video_datagram(server_keys,99,aad,plaintext,sealed));
     assert(opal::open_video_datagram(client_keys,99,aad,sealed,opened)&&opened==plaintext);
+
+    // The direct media hot path must reuse its EVP contexts and caller-owned
+    // buffers across thousands of datagrams instead of allocating a cipher
+    // context/vector for every ~1.1 KiB UDP packet.
+    opal::VideoCipher client_cipher(client_keys),server_cipher(server_keys);
+    assert(client_cipher.valid()&&server_cipher.valid());
+    std::array<std::uint8_t,1200> sealed_buffer{},opened_buffer{};
+    for(std::uint64_t sequence=1000;sequence<6000;++sequence){
+        std::size_t sealed_size=0,opened_size=0;
+        assert(client_cipher.seal(sequence,aad,plaintext,sealed_buffer,sealed_size));
+        assert(sealed_size==plaintext.size()+16);
+        assert(server_cipher.open(sequence,aad,std::span<const std::uint8_t>(sealed_buffer.data(),sealed_size),opened_buffer,opened_size));
+        assert(opened_size==plaintext.size());
+        assert(std::equal(plaintext.begin(),plaintext.end(),opened_buffer.begin()));
+    }
 
     opal::ReplayWindow1024 replay;
     assert(replay.accept(100));assert(!replay.accept(100));
