@@ -3,12 +3,14 @@
 #include <opal/direct_video_session.hpp>
 #include <opal/net.hpp>
 #include <opal/tunnel_access.hpp>
+#include <opal/video_feedback.hpp>
 #include <opal/video_receiver.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <iostream>
@@ -25,6 +27,7 @@ using namespace std::chrono_literals;
 bool wait_for_input(int fd,int timeout_ms){pollfd p{fd,POLLIN,0};for(;;){int rc=poll(&p,1,timeout_ms);if(rc<0&&errno==EINTR)continue;if(rc<=0)return false;if(p.revents&(POLLERR|POLLHUP|POLLNVAL))return false;return(p.revents&POLLIN)!=0;}}
 bool pointer_command(const std::string&s){return s.rfind("POINTER ",0)==0;}
 bool valid_mac(const std::string&s){if(s.size()!=17)return false;for(size_t i=0;i<s.size();++i){if((i+1)%3==0){if(s[i]!=':')return false;}else if(!std::isxdigit(static_cast<unsigned char>(s[i])))return false;}return true;}
+bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 }
 
 struct SessionSupervisor::Impl {
@@ -49,7 +52,7 @@ struct SessionSupervisor::Impl {
         if(!negotiate_client_direct_video(c.ssl,token,options.client_public_key,fp,static_cast<std::uint32_t>(g),default_stun_endpoints(),send,read,path,negotiation_error,5000)){set_error(negotiation_error.empty()?direct_video_unavailable_error():negotiation_error);return false;}
         if(!start_receiver(std::move(path))){return false;}
         if(!tls_write_line_timeout(c.ssl,"DIRECT_RECEIVER_READY "+gs,1000)){stop_receiver();set_error("direct receiver readiness exchange failed");return false;}
-        std::string result;if(!tls_read_line_timeout(c.ssl,result,12000)){stop_receiver();set_error("direct media startup timed out");return false;}if(result=="DIRECT_MEDIA_READY "+gs)return true;
+        std::string result;if(!tls_read_line_timeout(c.ssl,result,12000)){stop_receiver();set_error("direct media startup timed out");return false;}if(result=="DIRECT_MEDIA_READY "+gs){if(debug_enabled()&&!tls_write_line_timeout(c.ssl,debug_media_request_line(static_cast<std::uint32_t>(g),true),500)){stop_receiver();set_error("remote media debug request failed");return false;}return true;}
         stop_receiver();const std::string prefix="DIRECT_MEDIA_ERROR "+gs+" ";if(result.rfind(prefix,0)==0){set_error(result.substr(prefix.size()));return false;}set_error("direct media startup protocol error");return false;
     }
     void install_control(TlsConn&next,const std::string&fp,unsigned long g){{std::lock_guard<std::mutex>l(control_mu);close_tls(control);control=next;next={};control_fd.store(control.fd);} {std::lock_guard<std::mutex>l(state_mu);if(observed_fingerprint.empty())observed_fingerprint=fp;if(options.fingerprint.empty())options.fingerprint=observed_fingerprint;error.clear();}generation.store(g);}
