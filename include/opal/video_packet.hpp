@@ -35,6 +35,7 @@ struct VideoPlainPacket {
     std::vector<std::uint8_t> payload;
 };
 
+bool use_fec_for_media(VideoMediaType);
 std::array<std::uint8_t,kVideoHeaderBytes> serialize_video_header(const VideoPacketHeader&);
 bool parse_video_header(std::span<const std::uint8_t>,VideoPacketHeader&);
 std::vector<std::uint8_t> serialize_plain_video_packet(const VideoPlainPacket&);
