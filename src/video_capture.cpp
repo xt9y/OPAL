@@ -17,6 +17,7 @@ struct VideoCapture::Impl {
     CaptureProcess capture;
     AVFormatContext *format=nullptr;
     AVIOContext *avio=nullptr;
+    AVPacket *packet=nullptr;
     int video_stream=-1;
     int audio_stream=-1;
     int read_timeout_ms=5000;
@@ -25,6 +26,8 @@ struct VideoCapture::Impl {
     std::int64_t timeline_origin_pts_us=0;
     std::uint64_t timeline_origin_monotonic_us=0;
     std::vector<MediaConfig> configs;
+
+    ~Impl(){if(packet)av_packet_free(&packet);}
 
     static int read(void *opaque,std::uint8_t *buffer,int size){
         auto *impl=static_cast<Impl*>(opaque);
@@ -59,6 +62,8 @@ bool VideoCapture::start(const StreamOptions &stream,int bitrate_kbps,bool audio
     impl_->timeline_anchored=false;
     impl_->timeline_origin_pts_us=0;
     impl_->timeline_origin_monotonic_us=0;
+    if(!impl_->packet)impl_->packet=av_packet_alloc();
+    if(!impl_->packet)return false;
 
     std::string command;
     if(const char *override_command=std::getenv("OPAL_CAPTURE_CMD");override_command&&*override_command)
@@ -118,30 +123,29 @@ bool VideoCapture::start(const StreamOptions &stream,int bitrate_kbps,bool audio
 }
 
 bool VideoCapture::next(EncodedMediaUnit &unit,int timeout_ms){
-    if(!impl_||!impl_->format)return false;
+    if(!impl_||!impl_->format||!impl_->packet)return false;
     impl_->read_timeout_ms=std::max(1,timeout_ms);
-    AVPacket *packet=av_packet_alloc();
-    if(!packet)return false;
 
     bool produced=false;
     for(;;){
-        int rc=av_read_frame(impl_->format,packet);
+        av_packet_unref(impl_->packet);
+        int rc=av_read_frame(impl_->format,impl_->packet);
         if(rc<0){
             if(rc!=AVERROR(EAGAIN))impl_->terminal=true;
             break;
         }
-        int stream_index=packet->stream_index;
-        if(stream_index!=impl_->video_stream&&stream_index!=impl_->audio_stream){
-            av_packet_unref(packet);
-            continue;
-        }
+        int stream_index=impl_->packet->stream_index;
+        if(stream_index!=impl_->video_stream&&stream_index!=impl_->audio_stream)continue;
 
         AVStream *stream_info=impl_->format->streams[stream_index];
-        unit={};
         unit.kind=stream_index==impl_->video_stream?MediaKind::VideoH264:MediaKind::AudioAac;
-        if(packet->data&&packet->size>0)
-            unit.data.assign(packet->data,packet->data+packet->size);
-        std::int64_t timestamp=packet->pts!=AV_NOPTS_VALUE?packet->pts:packet->dts;
+        unit.data.clear();
+        unit.pts_us=0;
+        unit.capture_time_us=0;
+        unit.keyframe=false;
+        if(impl_->packet->data&&impl_->packet->size>0)
+            unit.data.assign(impl_->packet->data,impl_->packet->data+impl_->packet->size);
+        std::int64_t timestamp=impl_->packet->pts!=AV_NOPTS_VALUE?impl_->packet->pts:impl_->packet->dts;
         if(timestamp!=AV_NOPTS_VALUE&&stream_info)
             unit.pts_us=av_rescale_q(timestamp,stream_info->time_base,AVRational{1,1000000});
         const auto now=monotonic_us();
@@ -156,13 +160,12 @@ bool VideoCapture::next(EncodedMediaUnit &unit,int timeout_ms){
         }else{
             unit.capture_time_us=now;
         }
-        unit.keyframe=unit.kind==MediaKind::VideoH264&&(packet->flags&AV_PKT_FLAG_KEY)!=0;
+        unit.keyframe=unit.kind==MediaKind::VideoH264&&(impl_->packet->flags&AV_PKT_FLAG_KEY)!=0;
         produced=!unit.data.empty();
-        av_packet_unref(packet);
         break;
     }
 
-    av_packet_free(&packet);
+    av_packet_unref(impl_->packet);
     return produced;
 }
 
@@ -175,6 +178,7 @@ const std::vector<MediaConfig>& VideoCapture::configs() const{
 
 void VideoCapture::stop(){
     if(!impl_)return;
+    if(impl_->packet)av_packet_unref(impl_->packet);
     if(impl_->format){
         avformat_close_input(&impl_->format);
         impl_->format=nullptr;
