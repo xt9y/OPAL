@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -10,6 +11,7 @@
 #include <poll.h>
 #include <random>
 #include <set>
+#include <string>
 #include <unistd.h>
 
 namespace opal {
@@ -31,6 +33,10 @@ void put32(std::uint8_t *p,std::uint32_t v){
 void random_bytes(std::uint8_t *p,std::size_t size){
     std::random_device rd;
     for(std::size_t i=0;i<size;++i)p[i]=static_cast<std::uint8_t>(rd());
+}
+bool env_enabled(const char *name){
+    const char *value=std::getenv(name);if(!value||!*value)return false;
+    const std::string text=value;return text!="0"&&text!="false"&&text!="FALSE"&&text!="off"&&text!="OFF";
 }
 
 std::optional<UdpCandidate> parse_stun_response(
@@ -126,6 +132,7 @@ std::vector<UdpCandidate> local_udp_candidates(const UdpSocket &socket){
 }
 
 std::vector<StunEndpoint> default_stun_endpoints(){
+    if(env_enabled("OPAL_DISABLE_STUN"))return {};
     return {{"stun.cloudflare.com",3478},{"stunserver2025.stunprotocol.org",3478}};
 }
 
