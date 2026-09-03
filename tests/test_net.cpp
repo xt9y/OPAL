@@ -106,8 +106,10 @@ int main() {
     assert(!opal::tls_read_line_timeout(fragmented.ssl,line,30));
     assert(opal::tls_read_line_timeout(fragmented.ssl,line,1000));
     assert(line=="UDP_SELECTED 7 127.0.0.1 4567");
+    assert(opal::tls_line_ready(fragmented.ssl));
     assert(opal::tls_read_line_timeout(fragmented.ssl,line,100));
     assert(line=="PONG");
+    assert(!opal::tls_line_ready(fragmented.ssl));
     opal::close_tls(fragmented);
     fragmented_server.join();
 
