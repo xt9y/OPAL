@@ -26,7 +26,7 @@ constexpr std::uint64_t kFirstMediaSequence=1ULL<<32;
 std::uint64_t monotonic_us(){return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());}
 bool debug_enabled(){const char *v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 void put32(std::vector<std::uint8_t> &out,std::uint32_t value){out.push_back(static_cast<std::uint8_t>(value>>24));out.push_back(static_cast<std::uint8_t>(value>>16));out.push_back(static_cast<std::uint8_t>(value>>8));out.push_back(static_cast<std::uint8_t>(value));}
-}}
+}
 
 struct VideoSender::Impl {
     DirectVideoPath path;StreamOptions stream;bool audio=false;std::function<void(const std::string&)> control_send;VideoCapture capture;std::unique_ptr<VideoCipher> cipher;std::array<std::uint8_t,kVideoMaxDatagramBytes> wire_buffer{};std::thread thread;std::atomic<bool> run{false},idr_requested{false};std::atomic<int> target_kbps{30000},active_kbps{30000};std::atomic<std::uint64_t> stale{0};std::unique_ptr<BitrateController> controller;std::mutex feedback_mu;std::uint64_t packet_sequence=kFirstMediaSequence,frame_id=1;Clock::time_point last_restart{},token_time{},last_debug{},last_media_send{};double tokens=0.0,capture_to_packet_ewma=0.0;std::string portal_token;int test_drop_fragments=0;bool test_drop_done=false;
