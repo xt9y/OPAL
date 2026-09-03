@@ -164,15 +164,6 @@ bool negotiate(bool client_side,SSL *ssl,const std::string &token,const std::str
 }
 }
 
-DirectVideoPath::~DirectVideoPath(){close_udp_socket(socket);}
-DirectVideoPath::DirectVideoPath(DirectVideoPath &&other) noexcept{*this=std::move(other);}
-DirectVideoPath& DirectVideoPath::operator=(DirectVideoPath &&other) noexcept{
-    if(this!=&other){
-        close_udp_socket(socket);socket=other.socket;other.socket={};peer=other.peer;peer_len=other.peer_len;other.peer_len=0;
-        keys=other.keys;session_id=other.session_id;other.session_id=0;generation=other.generation;other.generation=0;
-    }
-    return *this;
-}
 const char* direct_video_unavailable_error(){return kUnavailable;}
 
 bool negotiate_client_direct_video(SSL *ssl,const std::string &token,const std::string &pub,
