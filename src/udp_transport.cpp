@@ -1,5 +1,6 @@
 #include <opal/udp_transport.hpp>
 #include <algorithm>
+#include <array>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -13,6 +14,7 @@
 #include <set>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 namespace opal {
 namespace {
@@ -196,30 +198,31 @@ int recv_datagram(int fd,std::span<std::uint8_t> data,sockaddr_storage &source,
 
 std::optional<UdpCandidate> discover_server_reflexive_candidate(
     const UdpSocket &socket,const std::vector<StunEndpoint> &endpoints,int timeout_ms){
-    if(socket.fd<0||timeout_ms<=0)return std::nullopt;
+    if(socket.fd<0||timeout_ms<=0||endpoints.empty())return std::nullopt;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(timeout_ms);
+    struct Pending {std::array<std::uint8_t,12> tx{};};
+    std::vector<Pending> pending;pending.reserve(endpoints.size());
 
     for(const auto &endpoint:endpoints){
+        if(std::chrono::steady_clock::now()>=deadline)break;
         sockaddr_storage target{};socklen_t target_length=0;
         if(!resolve_udp_endpoint(endpoint.host,endpoint.port,target,target_length))continue;
         std::uint8_t request[20]{};
-        put16(request,0x0001);
-        put16(request+2,0);
-        put32(request+4,kStunMagic);
-        random_bytes(request+8,12);
-        if(!send_datagram(socket.fd,target,target_length,
-                          std::span<const std::uint8_t>(request,sizeof(request))))continue;
+        put16(request,0x0001);put16(request+2,0);put32(request+4,kStunMagic);random_bytes(request+8,12);
+        if(!send_datagram(socket.fd,target,target_length,std::span<const std::uint8_t>(request,sizeof(request))))continue;
+        Pending entry;std::copy_n(request+8,12,entry.tx.begin());pending.push_back(entry);
+    }
+    if(pending.empty())return std::nullopt;
 
-        for(;;){
-            const auto now=std::chrono::steady_clock::now();
-            if(now>=deadline)return std::nullopt;
-            const int remaining=static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count());
-            std::uint8_t response[2048]{};
-            sockaddr_storage source{};socklen_t source_length=sizeof(source);
-            const int received=recv_datagram(socket.fd,response,source,source_length,std::max(1,remaining));
-            if(received==-2||received<0)break;
-            if(auto mapped=parse_stun_response(response,static_cast<std::size_t>(received),request+8))return mapped;
-        }
+    while(std::chrono::steady_clock::now()<deadline){
+        const auto now=std::chrono::steady_clock::now();
+        const int remaining=std::max(1,static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count()));
+        std::uint8_t response[2048]{};sockaddr_storage source{};socklen_t source_length=sizeof(source);
+        const int received=recv_datagram(socket.fd,response,source,source_length,remaining);
+        if(received==-2)return std::nullopt;
+        if(received<0)continue;
+        for(const auto &entry:pending)
+            if(auto mapped=parse_stun_response(response,static_cast<std::size_t>(received),entry.tx.data()))return mapped;
     }
     return std::nullopt;
 }
