@@ -1,6 +1,8 @@
 #include <opal/video_decoder.hpp>
 
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -17,6 +19,7 @@ struct VideoDecoder::Impl {
     AVFrame *scratch=nullptr;
     AVFrame *latest=nullptr;
     std::vector<std::uint8_t> packet_bytes;
+    std::string backend="unconfigured";
 
     bool ensure_io(){
         if(!packet)packet=av_packet_alloc();
@@ -33,15 +36,19 @@ VideoDecoder::VideoDecoder():impl_(new Impl){}
 bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
     if(!impl_)return false;
     if(impl_->ctx)avcodec_free_context(&impl_->ctx);
-    impl_->clear_latest();
+    impl_->clear_latest();impl_->backend="unconfigured";
+    const char*requested=std::getenv("OPAL_DECODER");
+    if(requested&&*requested&&std::string(requested)!="software"&&std::string(requested)!="auto")return false;
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);
     if(!codec||!impl_->ensure_io())return false;
     impl_->ctx=avcodec_alloc_context3(codec);
     if(!impl_->ctx)return false;
     impl_->ctx->flags|=AV_CODEC_FLAG_LOW_DELAY;
     impl_->ctx->flags2|=AV_CODEC_FLAG2_FAST;
-    impl_->ctx->thread_count=1;
-    impl_->ctx->thread_type=0;
+    // Frame threading adds decode latency. Slice threading can parallelize work
+    // inside one picture without intentionally buffering future pictures.
+    impl_->ctx->thread_count=0;
+    impl_->ctx->thread_type=FF_THREAD_SLICE;
     impl_->ctx->pkt_timebase=AVRational{1,1000000};
     impl_->ctx->time_base=AVRational{1,1000000};
     if(!extradata.empty()){
@@ -55,6 +62,7 @@ bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
         avcodec_free_context(&impl_->ctx);
         return false;
     }
+    impl_->backend=(impl_->ctx->active_thread_type&FF_THREAD_SLICE)?"software-slice":"software-lowdelay";
     return true;
 }
 
@@ -107,6 +115,8 @@ bool VideoDecoder::decode(std::span<const std::uint8_t> unit,std::int64_t pts_us
     out.push_back({owned,latest.pts_us});
     return true;
 }
+
+std::string VideoDecoder::backend_name() const{return impl_?impl_->backend:"unavailable";}
 
 void VideoDecoder::flush(){
     if(!impl_)return;
