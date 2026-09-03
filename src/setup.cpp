@@ -88,7 +88,7 @@ void configure_host_wol() {
     std::cout<<". Ensure WoL is enabled in firmware/NIC settings.\n";
 }
 
-int connect_default(const Ini &cfg) {
+int connect_default(const Ini &cfg,const StreamOptions &stream) {
     auto name=cfg.get("opal","default_host");
     if(name.empty()) return -1;
     auto p=Paths::load();Ini hosts;hosts.load(p.hosts);
@@ -97,7 +97,7 @@ int connect_default(const Ini &cfg) {
         (void)wake_named(name);
     }
     std::cout<<"Connecting to "<<name<<" through OPAL tunnel...\n";
-    return client_connect(name);
+    return client_connect(name,"",stream);
 }
 
 int ensure_host_service() {
@@ -109,7 +109,7 @@ int ensure_host_service() {
     return 0;
 }
 
-int first_setup() {
+int first_setup(const StreamOptions &stream={}) {
     std::cout<<"OPAL SETUP\n--------------------------------\n1  Host this computer\n2  Connect to another computer\n3  Quit\n> ";
     std::string choice;if(!std::getline(std::cin,choice)) return 0;choice=trim(choice);
     if(choice=="1") {
@@ -128,7 +128,7 @@ int first_setup() {
         if(!tunnel_connection_code(code,&control,&video)) {std::cerr<<"Invalid OPAL connection code. Expected: opal:CONTROL,VIDEO\n";return 2;}
         auto name=read_line("Save as [desktop]: ","desktop");
         if(hosts_add(name,code)!=0||!save_role("client",name)) return 1;
-        return client_connect(name);
+        return client_connect(name,"",stream);
     }
     return 0;
 }
@@ -173,16 +173,16 @@ int interactive_remove() {
     return 0;
 }
 
-int interactive_run() {
+int interactive_run(const StreamOptions &stream) {
     auto p=Paths::load();Ini cfg;
-    if(!cfg.load(p.config)||cfg.get("opal","role").empty()) return first_setup();
+    if(!cfg.load(p.config)||cfg.get("opal","role").empty()) return first_setup(stream);
     auto role=cfg.get("opal","role");
     if(role=="host") return ensure_host_service();
     if(role=="client") {
-        int rc=connect_default(cfg);
-        if(rc==-1) return first_setup();
+        int rc=connect_default(cfg,stream);
+        if(rc==-1) return first_setup(stream);
         return rc;
     }
-    return first_setup();
+    return first_setup(stream);
 }
 }
