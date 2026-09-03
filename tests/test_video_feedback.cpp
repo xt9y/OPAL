@@ -28,6 +28,10 @@ int main(){
 
     auto estimate=opal::estimate_clock_offset(1000000,1005500,1005600,1001100);
     assert(estimate.valid);assert(estimate.rtt_us==1000);assert(estimate.offset_us==5000);
+    // steady_clock epochs are machine-local. A host that booted much later can be
+    // hundreds of seconds behind the client while the measured RTT is still tiny.
+    auto cross_boot=opal::estimate_clock_offset(200000000,1000500,1000600,200001100);
+    assert(cross_boot.valid);assert(cross_boot.rtt_us==1000);assert(cross_boot.offset_us==-198999500);
     auto request=opal::clock_sync_request_line(4,123);std::int64_t t0=0,t1=0,t2=0;
     assert(opal::parse_clock_sync_line(request,4,t0,t1,t2)&&t0==123&&t1==0&&t2==0);
     auto reply=opal::clock_sync_reply_line(4,123,456,457);assert(opal::parse_clock_sync_line(reply,4,t0,t1,t2)&&t1==456&&t2==457);
