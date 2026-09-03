@@ -6,21 +6,19 @@ hp=""; cp=""
 trap 'test -n "$cp" && kill "$cp" 2>/dev/null || true; test -n "$hp" && kill "$hp" 2>/dev/null || true; rm -rf "$base"' EXIT
 server="$base/server"; client="$base/client"
 mkdir -p "$base/bin"
-cat >"$base/bin/ffplay" <<'EOF'
+
+cat >"$base/bin/capture" <<'EOF'
 #!/bin/sh
-count_file="${OPAL_TEST_PLAYER_COUNT:?}"
-n=0
-if test -f "$count_file"; then n="$(cat "$count_file")"; fi
-n=$((n+1))
-printf '%s\n' "$n" >"$count_file"
-if test -n "${OPAL_TEST_PLAYER_DRIVER:-}"; then
-    printf '%s\n' "${SDL_VIDEODRIVER:-}" >"$OPAL_TEST_PLAYER_DRIVER"
-fi
-echo 'FFPLAY_DEBUG_NOISE' >&2
-head -c 8 >/dev/null || true
-exit 0
+printf 'start\n' >>"${OPAL_TEST_CAPTURE_COUNT:?}"
+exec ffmpeg -hide_banner -loglevel error -re \
+  -f lavfi -i testsrc=size=320x180:rate=60 \
+  -f lavfi -i anullsrc=r=48000:cl=stereo \
+  -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency \
+  -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 \
+  -c:a aac -b:a 96k -f flv pipe:1
 EOF
-chmod +x "$base/bin/ffplay"
+chmod +x "$base/bin/capture"
+: >"$base/captures.log"
 
 OPAL_HOME="$server" "$BIN" --internal-host-setup >"$base/setup"
 password="$(sed -n 's/^Pairing password: //p' "$base/setup")"
@@ -28,28 +26,29 @@ test -n "$password"
 lower_password="$(printf '%s' "$password" | tr '[:upper:]' '[:lower:]')"
 
 OPAL_HOME="$server" \
-OPAL_CAPTURE_CMD="while :; do printf OPALTEST; sleep 0.05; done" \
+OPAL_DISABLE_STUN=1 \
+OPAL_CAPTURE_CMD="$base/bin/capture" \
+OPAL_TEST_CAPTURE_COUNT="$base/captures.log" \
 OPAL_INPUT_HELPER="$INPUT_BIN" \
 OPAL_TEST_CONTROL_CLOSE_AFTER_PINGS=1 \
 OPAL_TEST_AUTH_LOG="$base/auth.log" \
-OPAL_TEST_VIDEO_TOKEN_LOG="$base/video-tokens.log" \
 "$BIN" --internal-host-run >"$base/host.log" 2>&1 & hp=$!
 sleep 0.5
-! grep -q '^Password ' "$base/host.log"
+kill -0 "$hp"
+! grep -q '47991' "$base/host.log"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" --internal-connect 127.0.0.1 "$lower_password" >"$base/client.log" 2>&1 & cp=$!
+OPAL_DISABLE_STUN=1 OPAL_AUDIO_TEST_SINK=discard OPAL_HOME="$client" \
+"$BIN" --internal-connect 127.0.0.1 "$lower_password" >"$base/client.log" 2>&1 & cp=$!
+
 recovered=0
 i=0
-while test "$i" -lt 140; do
-    distinct_tokens=0
-    if test -f "$base/video-tokens.log"; then distinct_tokens="$(sort -u "$base/video-tokens.log" | wc -l)"; fi
-    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -ge 2 \
+while test "$i" -lt 180; do
+    captures=0; test -f "$base/captures.log" && captures="$(wc -l <"$base/captures.log")"
+    if test "$captures" -ge 2 \
        && test -f "$base/auth.log" && grep -q '^PAIR$' "$base/auth.log" && grep -q '^AUTH$' "$base/auth.log" \
-       && test "$distinct_tokens" -ge 2 \
        && grep -q 'Connected' "$base/client.log" \
-       && grep -q 'Control interrupted; recovering...' "$base/client.log" \
-       && grep -q 'Control restored.' "$base/client.log" \
-       && grep -q 'Video restored.' "$base/client.log"; then recovered=1; break; fi
+       && grep -q 'Control interrupted; recovering direct session...' "$base/client.log" \
+       && grep -q 'Control restored. Direct video rekeyed.' "$base/client.log"; then recovered=1; break; fi
     kill -0 "$cp" 2>/dev/null || break
     sleep 0.1
     i=$((i+1))
@@ -59,29 +58,25 @@ test "$recovered" -eq 1
 kill -0 "$hp"
 kill -0 "$cp"
 grep -q 'Connected' "$base/client.log"
-grep -q 'Video interrupted; recovering...' "$base/client.log"
-grep -q 'Video restored.' "$base/client.log"
-grep -q 'Control restored.' "$base/client.log"
+! grep -qi 'ffplay' "$base/client.log"
 ! grep -q 'Pairing password:' "$base/client.log"
-grep -qx 'x11' "$base/player.driver"
-! grep -q 'FFPLAY_DEBUG_NOISE' "$base/client.log"
-! grep -q '^capture:' "$base/host.log"
-
 test -s "$server/authorized_clients"
 grep -q '^\[127.0.0.1\]' "$client/hosts.ini"
 grep -q '^paired=true$' "$client/hosts.ini"
 grep -q '^mouse_sensitivity=1.0$' "$client/hosts.ini"
 
-first_count="$(cat "$base/player.count")"
+first_count="$(wc -l <"$base/captures.log")"
 kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
 sleep 0.2
 kill -0 "$hp"
 
-OPAL_TEST_PLAYER_COUNT="$base/player.count" OPAL_TEST_PLAYER_DRIVER="$base/player.driver" PATH="$base/bin:$PATH" OPAL_HOME="$client" DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=x11 "$BIN" --internal-connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
+OPAL_DISABLE_STUN=1 OPAL_AUDIO_TEST_SINK=discard OPAL_HOME="$client" \
+"$BIN" --internal-connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
 second_connected=0
 i=0
-while test "$i" -lt 100; do
-    if test -f "$base/player.count" && test "$(cat "$base/player.count")" -gt "$first_count" && grep -q 'Connected' "$base/client2.log"; then second_connected=1; break; fi
+while test "$i" -lt 120; do
+    count="$(wc -l <"$base/captures.log")"
+    if test "$count" -gt "$first_count" && grep -q 'Connected' "$base/client2.log"; then second_connected=1; break; fi
     kill -0 "$cp" 2>/dev/null || break
     sleep 0.1
     i=$((i+1))
@@ -91,9 +86,9 @@ test "$second_connected" -eq 1
 kill -0 "$hp"
 kill -0 "$cp"
 grep -q 'Connected' "$base/client2.log"
-grep -qx 'x11' "$base/player.driver"
 ! grep -q 'Pairing password:' "$base/client2.log"
 ! grep -q 'authentication denied' "$base/client2.log"
+! grep -qi 'ffplay' "$base/client2.log"
 
 kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
 kill "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true; hp=""
