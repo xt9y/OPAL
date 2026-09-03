@@ -9,7 +9,7 @@ void put64(std::uint8_t *p,std::uint64_t value){for(int i=0;i<8;++i)p[i]=static_
 std::uint16_t get16(const std::uint8_t *p){return static_cast<std::uint16_t>((p[0]<<8)|p[1]);}
 std::uint32_t get32(const std::uint8_t *p){std::uint32_t v=0;for(int i=0;i<4;++i)v=(v<<8)|p[i];return v;}
 std::uint64_t get64(const std::uint8_t *p){std::uint64_t v=0;for(int i=0;i<8;++i)v=(v<<8)|p[i];return v;}
-bool valid_type(VideoMediaType type){const auto v=static_cast<unsigned>(type);return v>=1&&v<=5;}
+bool valid_type(VideoMediaType type){const auto v=static_cast<unsigned>(type);return v>=1&&v<=6;}
 }
 
 bool use_fec_for_media(VideoMediaType type){return type==VideoMediaType::VideoH264;}
@@ -104,5 +104,4 @@ std::vector<VideoPlainPacket> fragment_media_unit(
     VideoPacketHeader header;std::span<const std::uint8_t> payload;
     while(cursor.next(header,payload))packets.push_back({header,std::vector<std::uint8_t>(payload.begin(),payload.end())});
     return packets;
-}
 }
