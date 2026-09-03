@@ -3,6 +3,7 @@
 #include <opal/crypto.hpp>
 #include <opal/direct_video_session.hpp>
 #include <opal/input.hpp>
+#include <opal/media.hpp>
 #include <opal/media_profile.hpp>
 #include <opal/net.hpp>
 #include <opal/tunnel.hpp>
@@ -77,9 +78,6 @@ static void control_client(TlsConn c){
     auto negotiation_send=[&](const std::string &message,int timeout){return send_line(message,timeout);};auto negotiation_read=[&](std::string &message,int timeout){return tls_read_line_timeout(c.ssl,message,timeout);};
     if(!negotiate_host_direct_video(c.ssl,token,pub,fp,generation,default_stun_endpoints(),negotiation_send,negotiation_read,path,negotiation_error,5000)){close_tls(c);return;}
 
-    // The client's UDP receiver must be actively draining before capture starts;
-    // otherwise the first configuration/IDR burst can overflow the deliberately
-    // small receive queue and force an avoidable recovery cycle.
     if(!tls_read_line_timeout(c.ssl,line,3000)||!receiver_ready_line(line,generation)){
         send_line("DIRECT_MEDIA_ERROR "+std::to_string(generation)+" receiver-not-ready",1000);
         close_tls(c);return;
