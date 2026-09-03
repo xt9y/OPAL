@@ -35,8 +35,13 @@ int BitrateController::target_kbps() const{return target_;}
 int BitrateController::floor_kbps() const{return floor_;}
 
 ClockEstimate estimate_clock_offset(std::int64_t t0,std::int64_t t1,std::int64_t t2,std::int64_t t3){
-    ClockEstimate out;if(t1<t0-60000000LL||t2<t1||t3<t0)return out;
-    const std::int64_t rtt=(t3-t0)-(t2-t1);if(rtt<0||rtt>60000000LL)return out;
+    ClockEstimate out;
+    // steady_clock epochs are local to each machine, so never compare t0/t3 directly
+    // with t1/t2. Only durations measured within the same clock domain are valid.
+    if(t2<t1||t3<t0)return out;
+    const std::int64_t local_elapsed=t3-t0,remote_elapsed=t2-t1;
+    if(local_elapsed>60000000LL||remote_elapsed>60000000LL)return out;
+    const std::int64_t rtt=local_elapsed-remote_elapsed;if(rtt<0||rtt>60000000LL)return out;
     out.offset_us=((t1-t0)+(t2-t3))/2;out.rtt_us=static_cast<std::uint32_t>(std::min<std::int64_t>(rtt,0xffffffffLL));out.valid=true;return out;
 }
 
