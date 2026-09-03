@@ -36,15 +36,21 @@ void VideoReassembler::reset(std::uint32_t generation,std::uint64_t session_id){
 }
 
 ReassemblyStatus VideoReassembler::accept(const VideoPlainPacket &packet,ReassembledFrame &output){
+    return accept(packet.header,packet.payload,output);
+}
+
+ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader &header,
+                                           std::span<const std::uint8_t> payload,
+                                           ReassembledFrame &output){
     auto &impl=*impl_;
-    if(!impl.active||packet.header.generation!=impl.generation||packet.header.session_id!=impl.session_id)
+    if(!impl.active||header.generation!=impl.generation||header.session_id!=impl.session_id)
         return ReassemblyStatus::Ignored;
-    if(packet.payload.size()!=packet.header.payload_length||packet.payload.size()>kVideoPlaintextBytes||
-       packet.header.fragment_count==0||packet.header.fragment_count>kMaxFragments)
+    if(payload.size()!=header.payload_length||payload.size()>kVideoPlaintextBytes||
+       header.fragment_count==0||header.fragment_count>kMaxFragments)
         return ReassemblyStatus::Ignored;
 
     bool need_idr=false;
-    auto frame_it=impl.frames.find(packet.header.frame_id);
+    auto frame_it=impl.frames.find(header.frame_id);
     if(frame_it==impl.frames.end()){
         while(impl.frames.size()>=3){
             auto victim=std::min_element(impl.frames.begin(),impl.frames.end(),[](const auto &a,const auto &b){
@@ -57,28 +63,28 @@ ReassemblyStatus VideoReassembler::accept(const VideoPlainPacket &packet,Reassem
             impl.bytes-=victim->second.bytes;
             impl.frames.erase(victim);
         }
-        Impl::Frame frame;frame.id=packet.header.frame_id;frame.timestamp=packet.header.capture_timestamp_us;
-        frame.order=++impl.order;frame.count=packet.header.fragment_count;frame.fragments.resize(frame.count);
+        Impl::Frame frame;frame.id=header.frame_id;frame.timestamp=header.capture_timestamp_us;
+        frame.order=++impl.order;frame.count=header.fragment_count;frame.fragments.resize(frame.count);
         frame_it=impl.frames.emplace(frame.id,std::move(frame)).first;
     }
     auto &frame=frame_it->second;
-    if(frame.count!=packet.header.fragment_count)return ReassemblyStatus::Ignored;
+    if(frame.count!=header.fragment_count)return ReassemblyStatus::Ignored;
 
-    if(packet.header.media_type==VideoMediaType::Fec){
-        if(packet.payload.size()<kVideoFecMetadataBytes)return ReassemblyStatus::Ignored;
-        const std::size_t start=static_cast<std::size_t>(packet.header.fec_group)*10;
-        const std::size_t group_count=packet.payload[0];
+    if(header.media_type==VideoMediaType::Fec){
+        if(payload.size()<kVideoFecMetadataBytes)return ReassemblyStatus::Ignored;
+        const std::size_t start=static_cast<std::size_t>(header.fec_group)*10;
+        const std::size_t group_count=payload[0];
         if(group_count==0||group_count>10||start>=frame.count||
            group_count!=std::min<std::size_t>(10,frame.count-start))return ReassemblyStatus::Ignored;
-        if(!frame.parity.contains(packet.header.fec_group)){
-            if(impl.bytes+packet.payload.size()>kMaxBytes)return ReassemblyStatus::Ignored;
-            frame.parity[packet.header.fec_group]=packet.payload;
-            frame.bytes+=packet.payload.size();impl.bytes+=packet.payload.size();
+        if(!frame.parity.contains(header.fec_group)){
+            if(impl.bytes+payload.size()>kMaxBytes)return ReassemblyStatus::Ignored;
+            frame.parity[header.fec_group]=std::vector<std::uint8_t>(payload.begin(),payload.end());
+            frame.bytes+=payload.size();impl.bytes+=payload.size();
         }
     }else{
-        if(packet.header.fragment_index>=frame.count||packet.payload.size()>kVideoDataFragmentBytes)
+        if(header.fragment_index>=frame.count||payload.size()>kVideoDataFragmentBytes)
             return ReassemblyStatus::Ignored;
-        frame.type=packet.header.media_type;frame.type_known=true;frame.flags|=packet.header.flags;
+        frame.type=header.media_type;frame.type_known=true;frame.flags|=header.flags;
 
         // frame_id is shared with audio/config units, so use a dedicated count
         // of newly observed H.264 access units as the video freshness clock.
@@ -108,10 +114,11 @@ ReassemblyStatus VideoReassembler::accept(const VideoPlainPacket &packet,Reassem
             return ReassemblyStatus::NeedIdr;
         }
 
-        auto &fragment=frame.fragments[packet.header.fragment_index];
+        auto &fragment=frame.fragments[header.fragment_index];
         if(!fragment){
-            if(impl.bytes+packet.payload.size()>kMaxBytes)return ReassemblyStatus::Ignored;
-            fragment=packet.payload;frame.bytes+=packet.payload.size();impl.bytes+=packet.payload.size();
+            if(impl.bytes+payload.size()>kMaxBytes)return ReassemblyStatus::Ignored;
+            fragment=std::vector<std::uint8_t>(payload.begin(),payload.end());
+            frame.bytes+=payload.size();impl.bytes+=payload.size();
         }
     }
 
