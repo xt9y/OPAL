@@ -3,6 +3,7 @@
 #include <opal/video_decoder.hpp>
 #include <X11/Xlib.h>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -19,6 +20,7 @@ public:
     Window x11_window() const;
     std::pair<int,int> drawable_size() const;
     std::size_t pending_frame_count() const;
+    std::uint64_t presented_frames() const;
     void close();
     ~VideoPresenter();
 private:
