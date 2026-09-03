@@ -27,6 +27,8 @@ std::vector<std::string> fields(std::string_view text){std::istringstream in{std
 VideoKeys channel_video_keys(const PeerChannelKeys&keys){VideoKeys result;result.send_key=keys.send_key;result.recv_key=keys.recv_key;result.send_nonce_base=keys.send_nonce_base;result.recv_nonce_base=keys.recv_nonce_base;return result;}
 bool same_source(const sockaddr_storage&a,const sockaddr_storage&b){if(a.ss_family!=b.ss_family)return false;if(a.ss_family==AF_INET6){const auto*x=reinterpret_cast<const sockaddr_in6*>(&a),*y=reinterpret_cast<const sockaddr_in6*>(&b);return x->sin6_port==y->sin6_port&&std::memcmp(&x->sin6_addr,&y->sin6_addr,sizeof(in6_addr))==0;}if(a.ss_family==AF_INET){const auto*x=reinterpret_cast<const sockaddr_in*>(&a),*y=reinterpret_cast<const sockaddr_in*>(&b);return x->sin_port==y->sin_port&&x->sin_addr.s_addr==y->sin_addr.s_addr;}return false;}
 bool retryable_path_error(const std::string&e){return e.find("timed out")!=std::string::npos||e.find("receive")!=std::string::npos||e.find("send failed")!=std::string::npos||e.find("confirmation")!=std::string::npos;}
+bool usable_endpoint(const RendezvousEndpoint&e){return !e.host.empty()&&e.port>0;}
+bool same_endpoint(const RendezvousEndpoint&a,const RendezvousEndpoint&b){return a.host==b.host&&a.port==b.port;}
 }
 
 struct PeerSession::Impl {
@@ -63,7 +65,22 @@ struct PeerSession::Impl {
 };
 
 PeerSession::PeerSession():impl_(std::make_unique<Impl>()){}PeerSession::~PeerSession(){stop();}
-bool PeerSession::start(PeerSessionOptions options,std::string&error){stop();impl_=std::make_unique<Impl>();impl_->options=std::move(options);impl_->session_numeric=numeric_session_id(impl_->options.handshake.session_id);if(impl_->options.socket.fd<0||impl_->session_numeric==0||impl_->options.handshake.generation==0||impl_->options.peer.host.empty()||impl_->options.peer.port==0||impl_->options.identity_private_key.empty()){error="invalid peer session options";impl_->set_error(error);return false;}std::string direct_error;if(impl_->attempt(impl_->options.peer,false,impl_->options.direct_handshake_timeout_ms,direct_error)){impl_->path="direct";}else{if(!impl_->options.relay||!retryable_path_error(direct_error)){error=direct_error;impl_->set_error(error);return false;}std::string relay_error;if(!impl_->attempt(impl_->options.relay->endpoint,true,impl_->options.relay_handshake_timeout_ms,relay_error)){error="direct: "+direct_error+"; relay: "+relay_error;impl_->set_error(error);return false;}impl_->path="relay";}impl_->run.store(true);impl_->thread=std::thread([this]{impl_->loop();});error.clear();return true;}
+bool PeerSession::start(PeerSessionOptions options,std::string&error){
+    stop();impl_=std::make_unique<Impl>();impl_->options=std::move(options);impl_->session_numeric=numeric_session_id(impl_->options.handshake.session_id);
+    if(impl_->options.socket.fd<0||impl_->session_numeric==0||impl_->options.handshake.generation==0||!usable_endpoint(impl_->options.peer)||impl_->options.identity_private_key.empty()){error="invalid peer session options";impl_->set_error(error);return false;}
+    bool connected=false;std::string lan_error,direct_error;
+    if(impl_->options.lan_peer&&usable_endpoint(*impl_->options.lan_peer)&&!same_endpoint(*impl_->options.lan_peer,impl_->options.peer)){
+        if(impl_->attempt(*impl_->options.lan_peer,false,impl_->options.lan_handshake_timeout_ms,lan_error)){impl_->path="lan";connected=true;}
+    }
+    if(!connected){
+        if(impl_->attempt(impl_->options.peer,false,impl_->options.direct_handshake_timeout_ms,direct_error)){impl_->path="direct";connected=true;}
+        else{
+            if(!impl_->options.relay||!retryable_path_error(direct_error)){error=direct_error;if(!lan_error.empty())error="lan: "+lan_error+"; direct: "+direct_error;impl_->set_error(error);return false;}
+            std::string relay_error;if(!impl_->attempt(impl_->options.relay->endpoint,true,impl_->options.relay_handshake_timeout_ms,relay_error)){error="direct: "+direct_error+"; relay: "+relay_error;if(!lan_error.empty())error="lan: "+lan_error+"; "+error;impl_->set_error(error);return false;}impl_->path="relay";connected=true;
+        }
+    }
+    impl_->run.store(true);impl_->thread=std::thread([this]{impl_->loop();});error.clear();return true;
+}
 bool PeerSession::send_input(std::string command){if(command.rfind("POINTER ",0)==0)return send_pointer(std::move(command));if(!impl_||!impl_->run.load()||command.empty()||command.size()>kReliableControlMaxPayload)return false;std::uint64_t sequence=0;{std::lock_guard<std::mutex>lock(impl_->reliable_mu);sequence=impl_->reliable_sender.enqueue(std::move(command),monotonic_ms());impl_->reliable_pending_count.store(impl_->reliable_sender.pending());}impl_->send_due();return sequence!=0&&impl_->run.load();}
 bool PeerSession::send_pointer(std::string command){if(!impl_||!impl_->run.load()||command.rfind("POINTER ",0)!=0||command.size()>kSessionPacketMaxPayload)return false;const auto sequence=impl_->pointer_send_sequence.fetch_add(1)+1;return impl_->send_encrypted(SessionPacketType::Pointer,sequence,command);}
 bool PeerSession::send_media_datagram(std::span<const std::uint8_t>wire){return impl_&&impl_->run.load()&&wire.size()<=kRelayMaxInnerBytes&&impl_->send_wire(wire);}
