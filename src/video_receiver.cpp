@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <span>
 #include <string>
 #include <thread>
 #include <utility>
@@ -32,6 +34,8 @@ struct VideoReceiver::Impl {
     std::function<void(const std::string&)> control_send;
     VideoReassembler reassembler;
     ReplayWindow1024 replay;
+    std::unique_ptr<VideoCipher> cipher;
+    std::array<std::uint8_t,kVideoPlaintextBytes> plaintext_buffer{};
     VideoDecoder decoder;
     VideoPresenter presenter;
     AudioOutput audio_output;
@@ -124,12 +128,14 @@ struct VideoReceiver::Impl {
                 const auto arrival=monotonic_us();const auto bytes=std::span<const std::uint8_t>(wire.data(),static_cast<std::size_t>(received));VideoPacketHeader header;
                 if(parse_video_header(bytes,header)&&header.generation==path.generation&&header.session_id==path.session_id&&header.media_type!=VideoMediaType::Probe&&header.media_type!=VideoMediaType::ProbeAck&&
                    bytes.size()==kVideoHeaderBytes+static_cast<std::size_t>(header.payload_length)+kVideoAeadTagBytes){
-                    std::vector<std::uint8_t> plaintext;
-                    if(open_video_datagram(path.keys,header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext)&&plaintext.size()==header.payload_length&&replay.accept(header.packet_sequence)){
+                    std::size_t plaintext_size=0;
+                    if(cipher&&cipher->open(header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext_buffer,plaintext_size)&&
+                       plaintext_size==header.payload_length&&replay.accept(header.packet_sequence)){
                         if(header.media_type==VideoMediaType::VideoH264)last_video_packet=Clock::now();
                         note_sequence(header.packet_sequence);if(!frame_first_arrival.contains(header.frame_id))frame_first_arrival[header.frame_id]=arrival;
                         while(frame_first_arrival.size()>8)frame_first_arrival.erase(frame_first_arrival.begin());
-                        VideoPlainPacket packet{header,std::move(plaintext)};ReassembledFrame assembled;const auto status=reassembler.accept(packet,assembled);
+                        ReassembledFrame assembled;const auto plaintext=std::span<const std::uint8_t>(plaintext_buffer.data(),plaintext_size);
+                        const auto status=reassembler.accept(header,plaintext,assembled);
                         if(status==ReassemblyStatus::NeedIdr)request_idr();
                         else if(status==ReassemblyStatus::Complete){auto it=frame_first_arrival.find(assembled.frame_id);const auto first=it==frame_first_arrival.end()?arrival:it->second;if(it!=frame_first_arrival.end())frame_first_arrival.erase(it);handle_complete(assembled,static_cast<double>(arrival-first)/1000.0,first);}
                     }
@@ -147,7 +153,9 @@ struct VideoReceiver::Impl {
 VideoReceiver::VideoReceiver():impl_(std::make_unique<Impl>()){}
 bool VideoReceiver::start(DirectVideoPath path,std::function<void(const std::string&)> control_send){
     stop();impl_=std::make_unique<Impl>();if(path.socket.fd<0||path.peer_len==0||path.session_id==0||path.generation==0)return false;
-    impl_->path=std::move(path);impl_->control_send=std::move(control_send);impl_->run.store(true);impl_->thread=std::thread([this]{impl_->loop();});return true;
+    impl_->path=std::move(path);impl_->control_send=std::move(control_send);
+    impl_->cipher=std::make_unique<VideoCipher>(impl_->path.keys);if(!impl_->cipher->valid())return false;
+    impl_->run.store(true);impl_->thread=std::thread([this]{impl_->loop();});return true;
 }
 bool VideoReceiver::handle_control_line(const std::string &line){return impl_&&impl_->handle_control(line);}
 bool VideoReceiver::media_started() const{return impl_&&impl_->media.load();}
