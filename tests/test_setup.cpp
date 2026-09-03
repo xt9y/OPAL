@@ -1,6 +1,6 @@
 #include <opal/setup.hpp>
 #include <opal/config.hpp>
-#include <opal/media.hpp>
+#include <opal/media_profile.hpp>
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -70,6 +70,7 @@ int main(){
         assert(run_default("2\nopal:control-token,video-token\ndesktop\n")==0);
         opal::Ini c;assert(c.load(p/"config.ini"));assert(c.get("opal","role")=="client");assert(c.get("opal","default_host")=="desktop");
         assert(opal::add_calls==1);assert(opal::added_address=="opal:control-token,video-token");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
+        assert(opal::client_stream.max_width==1920&&opal::client_stream.max_height==1080&&opal::client_stream.fps==60);
     }
     {
         fresh("opal-setup-invalid-code-test");reset_calls();std::string err;
@@ -84,6 +85,7 @@ int main(){
     {
         auto p=fresh("opal-auto-client-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.set("desktop","mac","00:11:22:33:44:55");h.save(p/"hosts.ini");
         assert(run_default("")==0);assert(opal::wake_calls==1);assert(opal::wake_target=="desktop");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
+        assert(opal::client_stream.max_width==1920&&opal::client_stream.max_height==1080&&opal::client_stream.fps==60);
     }
     {
         auto p=fresh("opal-stream-override-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.save(p/"hosts.ini");
