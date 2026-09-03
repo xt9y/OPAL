@@ -3,7 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <opal/media.hpp>
+#include <opal/media_profile.hpp>
 
 namespace opal {
 struct SessionOptions {
