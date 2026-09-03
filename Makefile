@@ -113,7 +113,7 @@ test-direct-video-pipeline: | $(BUILD)
 	$(BUILD)/test-direct-video-pipeline
 
 test-direct-video-stress: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_stress.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -lcrypto -o $(BUILD)/test-direct-video-stress
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_stress.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -lssl -lcrypto -o $(BUILD)/test-direct-video-stress
 	$(BUILD)/test-direct-video-stress
 
 test-input: | $(BUILD)
