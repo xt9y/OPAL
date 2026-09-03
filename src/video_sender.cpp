@@ -8,11 +8,13 @@
 #include <opal/video_feedback.hpp>
 #include <opal/video_packet.hpp>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <span>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -29,13 +31,6 @@ std::uint64_t monotonic_us(){
 
 bool debug_enabled(){const char *v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 
-std::vector<std::uint8_t> encrypt_packet(const DirectVideoPath &path,const VideoPlainPacket &packet){
-    const auto aad=serialize_video_header(packet.header);std::vector<std::uint8_t> sealed;
-    if(!seal_video_datagram(path.keys,packet.header.packet_sequence,aad,packet.payload,sealed))return {};
-    std::vector<std::uint8_t> wire;wire.reserve(aad.size()+sealed.size());wire.insert(wire.end(),aad.begin(),aad.end());wire.insert(wire.end(),sealed.begin(),sealed.end());
-    if(wire.size()>kVideoMaxDatagramBytes)return {};return wire;
-}
-
 void put32(std::vector<std::uint8_t> &out,std::uint32_t value){out.push_back(static_cast<std::uint8_t>(value>>24));out.push_back(static_cast<std::uint8_t>(value>>16));out.push_back(static_cast<std::uint8_t>(value>>8));out.push_back(static_cast<std::uint8_t>(value));}
 }
 
@@ -45,6 +40,8 @@ struct VideoSender::Impl {
     bool audio=false;
     std::function<void(const std::string&)> control_send;
     VideoCapture capture;
+    std::unique_ptr<VideoCipher> cipher;
+    std::array<std::uint8_t,kVideoMaxDatagramBytes> wire_buffer{};
     std::thread thread;
     std::atomic<bool> run{false},idr_requested{false};
     std::atomic<int> target_kbps{30000},active_kbps{30000};
@@ -74,7 +71,7 @@ struct VideoSender::Impl {
         tokens=std::min(2.0*kVideoMaxDatagramBytes,tokens+us*bytes_per_us);
     }
 
-    bool paced_send(const std::vector<std::uint8_t> &wire,Clock::time_point deadline,bool droppable){
+    bool paced_send(std::span<const std::uint8_t> wire,Clock::time_point deadline,bool droppable){
         if(wire.empty()||wire.size()>kVideoMaxDatagramBytes)return false;
         for(;;){
             refill_tokens();if(tokens>=wire.size())break;
@@ -87,6 +84,17 @@ struct VideoSender::Impl {
         tokens-=wire.size();return send_datagram(path.socket.fd,path.peer,path.peer_len,wire);
     }
 
+    bool encrypt_packet(const VideoPlainPacket &packet,std::size_t &wire_size){
+        wire_size=0;if(!cipher||!cipher->valid())return false;
+        const auto aad=serialize_video_header(packet.header);
+        std::copy(aad.begin(),aad.end(),wire_buffer.begin());
+        std::size_t sealed_size=0;
+        auto sealed_output=std::span<std::uint8_t>(wire_buffer).subspan(aad.size());
+        if(!cipher->seal(packet.header.packet_sequence,aad,packet.payload,sealed_output,sealed_size))return false;
+        wire_size=aad.size()+sealed_size;
+        return wire_size<=wire_buffer.size();
+    }
+
     bool send_frame(VideoMediaType type,std::uint16_t flags,std::span<const std::uint8_t> data,std::uint64_t capture_time=0){
         const auto start=Clock::now();const bool ordinary=type==VideoMediaType::VideoH264&&(flags&(FrameKeyframe|FrameConfig))==0;
         const bool audio_frame=type==VideoMediaType::AudioAac&&(flags&FrameConfig)==0;
@@ -97,8 +105,8 @@ struct VideoSender::Impl {
         const bool inject_drop=!test_drop_done&&type==VideoMediaType::VideoH264&&(flags&FrameConfig)==0&&test_drop_fragments>0;
         for(const auto &packet:packets){
             if(inject_drop&&packet.header.media_type!=VideoMediaType::Fec&&deliberately_dropped<test_drop_fragments){++deliberately_dropped;continue;}
-            auto wire=encrypt_packet(path,packet);
-            if(!paced_send(wire,deadline,ordinary||audio_frame)){
+            std::size_t wire_size=0;
+            if(!encrypt_packet(packet,wire_size)||!paced_send(std::span<const std::uint8_t>(wire_buffer.data(),wire_size),deadline,ordinary||audio_frame)){
                 ++failures;
                 if(ordinary||audio_frame)break;
             }
@@ -176,6 +184,7 @@ VideoSender::VideoSender():impl_(std::make_unique<Impl>()){}
 bool VideoSender::start(DirectVideoPath path,const StreamOptions &stream,bool audio,std::function<void(const std::string&)> control_send){
     stop();impl_=std::make_unique<Impl>();if(path.socket.fd<0||path.peer_len==0||path.session_id==0||path.generation==0)return false;
     impl_->path=std::move(path);impl_->stream=stream;impl_->audio=audio;impl_->control_send=std::move(control_send);
+    impl_->cipher=std::make_unique<VideoCipher>(impl_->path.keys);if(!impl_->cipher->valid())return false;
     const int ceiling=automatic_bitrate_kbps(stream.max_width,stream.max_height,stream.fps);impl_->controller=std::make_unique<BitrateController>(ceiling);impl_->target_kbps.store(ceiling);impl_->active_kbps.store(ceiling);
     impl_->portal_token=(Paths::load().root/"portal-session.token").string();
     if(const char *drop=std::getenv("OPAL_TEST_DROP_FRAGMENTS");drop&&*drop)try{impl_->test_drop_fragments=std::clamp(std::stoi(drop),0,10);}catch(...){impl_->test_drop_fragments=0;}
