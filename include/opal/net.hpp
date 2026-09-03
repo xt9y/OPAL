@@ -23,6 +23,7 @@ bool tls_write_line_timeout(SSL *ssl,const std::string&line,int timeout_ms);
 // after a newline for the next read. This makes short control polling lossless.
 bool tls_read_line(SSL *ssl,std::string&line,size_t limit=8192);
 bool tls_read_line_timeout(SSL *ssl,std::string&line,int timeout_ms,size_t limit=8192);
+bool tls_line_ready(SSL *ssl);
 std::string peer_fingerprint(SSL *ssl);
 std::string local_fingerprint(SSL *ssl);
 std::string primary_ipv4();
