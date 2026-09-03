@@ -39,9 +39,11 @@ int main() {
     assert(cmd.find(" -w screen ") != std::string::npos);
     assert(cmd.find(" -f 60 ") != std::string::npos);
     assert(cmd.find(" -fm cfr ") != std::string::npos);
-    assert(cmd.find(" -keyint 1 ") != std::string::npos);
+    assert(cmd.find(" -keyint 0.25 ") != std::string::npos);
+    assert(cmd.find(" -keyint 1 ") == std::string::npos);
     assert(cmd.find(" -k h264 ") != std::string::npos);
     assert(cmd.find(" -fallback-cpu-encoding yes ") != std::string::npos);
+    assert(cmd.find(" -tune performance ") != std::string::npos);
     assert(cmd.find(" -v h264 ") == std::string::npos);
     assert(cmd.find(" -v no ") != std::string::npos);
     assert(cmd.find(" -cursor yes ") != std::string::npos);
@@ -70,6 +72,9 @@ int main() {
     auto fallback = opal::capture_command(false, 60, 12000, false);
     assert(fallback.find("ffmpeg") != std::string::npos);
     assert(fallback.find("x11grab") != std::string::npos);
+    assert(fallback.find("-bf 0") != std::string::npos);
+    assert(fallback.find("-g 15") != std::string::npos);
+    assert(fallback.find("-keyint_min 15") != std::string::npos);
     assert(fallback.find("-f flv pipe:1") != std::string::npos);
     assert(fallback.find("-f matroska pipe:1") == std::string::npos);
 
