@@ -19,6 +19,7 @@ public:
     bool start(DirectVideoPath path,const StreamOptions& stream,bool audio,
                std::function<void(const std::string&)> control_send);
     void request_idr();
+    bool handle_control_line(const std::string& line);
     void set_target_bitrate(int kbps);
     int target_bitrate() const;
     std::size_t queued_frames() const;
