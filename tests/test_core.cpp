@@ -48,8 +48,9 @@ int main() {
     assert(cmd.find(" -bm cbr ") != std::string::npos);
     assert(cmd.find(" -q 20000") != std::string::npos);
     assert(cmd.find(" -a default_output") != std::string::npos);
-    assert(cmd.find(" -c mkv") != std::string::npos);
-    assert(cmd.find(" -c flv") == std::string::npos);
+    assert(cmd.find(" -c flv") != std::string::npos);
+    assert(cmd.find(" -c mkv") == std::string::npos);
+    assert(cmd.find(" -s 0x0") != std::string::npos);
     assert(cmd.find(" -o -") == std::string::npos);
     assert(cmd.find("2>/dev/null") != std::string::npos);
     assert(cmd.find("WAYLAND_DISPLAY:-screen") == std::string::npos);
@@ -69,7 +70,8 @@ int main() {
     auto fallback = opal::capture_command(false, 60, 12000, false);
     assert(fallback.find("ffmpeg") != std::string::npos);
     assert(fallback.find("x11grab") != std::string::npos);
-    assert(fallback.find("-f matroska pipe:1") != std::string::npos);
+    assert(fallback.find("-f flv pipe:1") != std::string::npos);
+    assert(fallback.find("-f matroska pipe:1") == std::string::npos);
 
     auto packet = opal::wol_packet("00:11:22:33:44:55");
     assert(packet.size() == 102);
