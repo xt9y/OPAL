@@ -19,10 +19,9 @@ int BitrateController::on_feedback(const VideoFeedbackSample &sample,std::chrono
     const bool low_rtt=sample.rtt_us==0||baseline_rtt_us_==0||sample.rtt_us<baseline_rtt_us_+3000;
     if(high_loss||high_rtt){
         good_since_={};
-        if(++bad_samples_>=2){target_=std::max(floor_,target_*80/100);bad_samples_=0;}
+        target_=std::max(floor_,target_*75/100);
         return target_;
     }
-    bad_samples_=0;
     if(low_loss&&low_rtt){
         if(good_since_.time_since_epoch().count()==0)good_since_=now;
         if(now-good_since_>=std::chrono::seconds(1)){
