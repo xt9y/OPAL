@@ -20,6 +20,7 @@ INSTALL ?= install
 BUILD := build
 PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
+RENDEZVOUS_SERVER := $(BUILD)/opal-rendezvous
 
 PROFILE_SRCS := src/media_profile.cpp
 VIDEO_CAPTURE_SRCS := src/video_capture.cpp
@@ -34,17 +35,25 @@ VIDEO_FEEDBACK_SRCS := src/video_feedback.cpp
 AUDIO_OUTPUT_SRCS := src/audio_output.cpp
 VIDEO_SENDER_SRCS := src/video_sender.cpp
 VIDEO_RECEIVER_SRCS := src/video_receiver.cpp
+RENDEZVOUS_PROTOCOL_SRCS := src/rendezvous_protocol.cpp
+RENDEZVOUS_STATE_SRCS := src/rendezvous_server.cpp
+RENDEZVOUS_CLIENT_SRCS := src/rendezvous_client.cpp
+RELAY_SRCS := src/relay_protocol.cpp
+PEER_HANDSHAKE_SRCS := src/peer_handshake.cpp
+SESSION_PACKET_SRCS := src/session_packet.cpp
+RELIABLE_CONTROL_SRCS := src/reliable_control.cpp
+PEER_SESSION_SRCS := src/peer_session.cpp
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
-TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
 DIRECT_VIDEO_BASE_SRCS := $(DIRECT_VIDEO_SESSION_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS)
 DIRECT_MEDIA_COMMON_SRCS := $(VIDEO_FEEDBACK_SRCS)
 DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(VIDEO_PRESENT_SRCS) $(AUDIO_OUTPUT_SRCS)
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
 DIRECT_MEDIA_SRCS := $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS)
-SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel_access.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(INPUT_SRCS)
+NATIVE_CONTROL_SRCS := $(RENDEZVOUS_PROTOCOL_SRCS) $(RENDEZVOUS_CLIENT_SRCS) $(RELAY_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(PEER_SESSION_SRCS)
+SESSION_SRCS := src/session.cpp $(NATIVE_CONTROL_SRCS) $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) src/config.cpp src/crypto.cpp
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(NATIVE_CONTROL_SRCS) $(INPUT_SRCS) src/net.cpp
 MEDIA_TEST_TARGETS := test-video-capture test-video-decoder test-video-present test-audio-output test-direct-video-pipeline test-session
 
 all: $(PRODUCT) $(INPUT)
@@ -60,6 +69,11 @@ $(PRODUCT): $(APP_SRCS) include/opal/*.hpp | $(BUILD) deps-check
 
 $(INPUT): src/input_helper.cpp | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
+
+$(RENDEZVOUS_SERVER): server/rendezvous_server.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp include/opal/*.hpp | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) server/rendezvous_server.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp -lcrypto -lpthread -o $@
+
+rendezvous-server: $(RENDEZVOUS_SERVER)
 
 $(MEDIA_TEST_TARGETS): | deps-check
 
@@ -130,25 +144,45 @@ test-direct-video-stress: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_stress.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -lssl -lcrypto -o $(BUILD)/test-direct-video-stress
 	$(BUILD)/test-direct-video-stress
 
+test-rendezvous-protocol: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_rendezvous_protocol.cpp $(RENDEZVOUS_PROTOCOL_SRCS) -lcrypto -o $(BUILD)/test-rendezvous-protocol
+	$(BUILD)/test-rendezvous-protocol
+
+test-rendezvous-server: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_rendezvous_server.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp -lcrypto -o $(BUILD)/test-rendezvous-server
+	$(BUILD)/test-rendezvous-server
+
+test-peer-handshake: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_peer_handshake.cpp $(PEER_HANDSHAKE_SRCS) src/crypto.cpp -lcrypto -o $(BUILD)/test-peer-handshake
+	$(BUILD)/test-peer-handshake
+
+test-session-packet: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_session_packet.cpp $(SESSION_PACKET_SRCS) -o $(BUILD)/test-session-packet
+	$(BUILD)/test-session-packet
+
+test-reliable-control: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_reliable_control.cpp $(RELIABLE_CONTROL_SRCS) -o $(BUILD)/test-reliable-control
+	$(BUILD)/test-reliable-control
+
+test-peer-session: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_peer_session.cpp $(PEER_SESSION_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(RELAY_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) src/crypto.cpp -lssl -lcrypto -lpthread -o $(BUILD)/test-peer-session
+	$(BUILD)/test-peer-session
+
+test-relay: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_relay.cpp $(RELAY_SRCS) -o $(BUILD)/test-relay
+	$(BUILD)/test-relay
+
 test-input: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp $(INPUT_SRCS) -o $(BUILD)/test-input
 	$(BUILD)/test-input
 
 test-setup: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_setup.cpp src/setup.cpp src/config.cpp $(PROFILE_SRCS) -o $(BUILD)/test-setup
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_setup.cpp src/setup.cpp src/config.cpp $(PROFILE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) -lcrypto -o $(BUILD)/test-setup
 	$(BUILD)/test-setup
 
 test-daemon: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_daemon.cpp -o $(BUILD)/test-daemon
 	$(BUILD)/test-daemon
-
-test-tunnel: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel.cpp src/tunnel.cpp src/config.cpp src/crypto.cpp -lssl -lcrypto -o $(BUILD)/test-tunnel
-	$(BUILD)/test-tunnel
-
-test-tunnel-recovery: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tunnel_recovery.cpp src/tunnel.cpp $(TUNNEL_SUPERVISOR_SRCS) src/config.cpp src/crypto.cpp -lssl -lcrypto -lpthread -o $(BUILD)/test-tunnel-recovery
-	$(BUILD)/test-tunnel-recovery
 
 test-net: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_net.cpp $(NET_SRCS) -lssl -lcrypto -lpthread -o $(BUILD)/test-net
@@ -170,7 +204,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
+test: all test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-relay test-input test-setup test-daemon test-net test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -179,7 +213,7 @@ test: all test-build-flags test-core test-media-profile test-media test-video-ca
 	  test -x "$$tmp$(LIBEXECDIR)/opal-input"; \
 	  test -f "$$tmp$(SYSTEMDUSERDIR)/opal-host.service"; \
 	  test -f "$$tmp$(UDEVDIR)/70-opal-uinput.rules"; \
-	  "$$tmp$(BINDIR)/opal" version | grep -q '^OPAL 0.1.0$$'; \
+	  "$$tmp$(BINDIR)/opal" version | grep -q '^OPAL 0.2.0$$'; \
 	  $(MAKE) uninstall DESTDIR=$$tmp >/dev/null; \
 	  test ! -e "$$tmp$(BINDIR)/opal"; \
 	  rm -rf $$tmp; \
@@ -194,21 +228,21 @@ install: all
 	$(INSTALL) -m 0644 packaging/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"
 	@if [ -z "$(DESTDIR)" ]; then \
 	  if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
-	  if command -v udevadm >/dev/null 2>&1; then \
-	    udevadm control --reload-rules; \
-	    udevadm trigger --action=change --sysname-match=uinput; \
-	    udevadm settle; \
-	  fi; \
+	  if command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules; udevadm trigger --action=change --sysname-match=uinput; udevadm settle; fi; \
 	fi
 	@echo "Installed OPAL to $(DESTDIR)$(PREFIX)"
 	@echo "Run: opal"
 
+install-rendezvous: $(RENDEZVOUS_SERVER)
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
+	$(INSTALL) -m 0755 $(RENDEZVOUS_SERVER) "$(DESTDIR)$(BINDIR)/opal-rendezvous"
+
 uninstall:
-	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
+	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
 	-rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-direct-media-sanitize test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
+.PHONY: all rendezvous-server deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-relay test-direct-media-sanitize test-input test-setup test-daemon test-net test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
