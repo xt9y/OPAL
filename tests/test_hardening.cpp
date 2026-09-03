@@ -25,22 +25,52 @@ int main(){
     assert(wake.find("secret.empty()")!=std::string::npos);
 
     const auto client=read_all("src/client.cpp");
-    assert(client.find("i<300")!=std::string::npos);
+    assert(client.find("i<100")!=std::string::npos);
+    assert(client.find("ffplay")==std::string::npos);
+    assert(client.find("47991")==std::string::npos);
 
     const auto host=read_all("src/host.cpp");
     assert(host.find("sanitize_label")!=std::string::npos);
-    assert(host.find("video_session_active")!=std::string::npos);
     assert(host.find("CHALLENGE OPAL2 ")!=std::string::npos);
+    assert(host.find("negotiate_host_direct_video")!=std::string::npos);
+    assert(host.find("DIRECT_MEDIA_READY")!=std::string::npos);
+    assert(host.find("video_session_active")==std::string::npos);
+    assert(host.find("47991")==std::string::npos);
+    assert(host.find("listen_tcp(static_cast<uint16_t>(cp)")!=std::string::npos);
 
     const auto session=read_all("src/session.cpp");
-    // Input capture is currently X11/XInput2. Keep ffplay in the same X11/
-    // XWayland input domain so OPAL can actually grab keyboard and pointer
-    // events instead of letting a native Wayland ffplay consume them locally.
-    assert(session.find("SDL_VIDEODRIVER=x11")!=std::string::npos);
-    assert(session.find("SDL_VIDEODRIVER=wayland")==std::string::npos);
+    assert(session.find("negotiate_client_direct_video")!=std::string::npos);
+    assert(session.find("VIDEO_PROFILE ")!=std::string::npos);
+    assert(session.find("ffplay")==std::string::npos);
+    assert(session.find("open_video")==std::string::npos);
+    assert(session.find("video_port")==std::string::npos);
     assert(session.find("control queue overflow")!=std::string::npos);
     assert(session.find("incompatible OPAL host protocol")!=std::string::npos);
     assert(session.find("normalize_pairing_code")!=std::string::npos);
+
+    const auto session_header=read_all("include/opal/session.hpp");
+    assert(session_header.find("video_port")==std::string::npos);
+    assert(session_header.find("video_token")==std::string::npos);
+
+    const auto host_header=read_all("include/opal/host.hpp");
+    assert(host_header.find("video_backpressure_timeout_ms")==std::string::npos);
+
+    const auto media=read_all("src/media.cpp");
+    const auto media_header=read_all("include/opal/media.hpp");
+    assert(media.find("video_request_line")==std::string::npos);
+    assert(media.find("parse_video_request_line")==std::string::npos);
+    assert(media.find("video_player_write_timeout_ms")==std::string::npos);
+    assert(media_header.find("video_request_line")==std::string::npos);
+
+    const auto tunnel=read_all("src/tunnel.cpp");
+    assert(tunnel.find("zrok2-control-only")!=std::string::npos);
+    assert(tunnel.find("connection_code=\"opal:\"+control")!=std::string::npos);
+    assert(tunnel.find("video_pid")==std::string::npos);
+    assert(tunnel.find("opal-vid-")==std::string::npos);
+    // 47991 may appear only in legacy-process cleanup recognition, never as a
+    // live host listener/share/access command.
+    assert(tunnel.find("--bind\",\"127.0.0.1:47991") == std::string::npos);
+    assert(tunnel.find("\"127.0.0.1:47991\"},true") == std::string::npos);
 
     const auto service=read_all("systemd/opal-host.service");
     assert(service.find("NoNewPrivileges=true")!=std::string::npos);
@@ -50,10 +80,13 @@ int main(){
 
     const auto readme=read_all("README.md");
     assert(readme.find("mktemp -d")!=std::string::npos);
+    assert(readme.find("direct encrypted UDP")!=std::string::npos);
+    assert(readme.find("No zrok-video")!=std::string::npos||readme.find("no zrok-video")!=std::string::npos);
     assert(readme.find("/tmp/zrok2.tar.gz")==std::string::npos);
-    assert(readme.find("tar -xzf /tmp/zrok2.tar.gz -C /tmp")==std::string::npos);
 
     const auto ci=read_all(".github/workflows/ci.yml");
+    assert(ci.find("workflow_dispatch")!=std::string::npos);
+    assert(ci.find("\n  push:")==std::string::npos);
     assert(ci.find("sanitize")!=std::string::npos);
     assert(ci.find("stress")!=std::string::npos);
     return 0;
