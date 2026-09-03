@@ -91,8 +91,10 @@ bool VideoCipher::seal(std::uint64_t sequence,std::span<const std::uint8_t> aad,
     if(EVP_CIPHER_CTX_ctrl(ctx,EVP_CTRL_AEAD_SET_IVLEN,static_cast<int>(nonce.size()),nullptr)!=1)return false;
     if(EVP_EncryptInit_ex(ctx,nullptr,nullptr,impl_->keys.send_key.data(),nonce.data())!=1)return false;
     if(!aad.empty()&&EVP_EncryptUpdate(ctx,nullptr,&written,aad.data(),static_cast<int>(aad.size()))!=1)return false;
+    written=0;
     if(!plaintext.empty()&&EVP_EncryptUpdate(ctx,output.data(),&written,plaintext.data(),static_cast<int>(plaintext.size()))!=1)return false;
     total=written;
+    written=0;
     if(EVP_EncryptFinal_ex(ctx,output.data()+total,&written)!=1)return false;
     total+=written;
     if(EVP_CIPHER_CTX_ctrl(ctx,EVP_CTRL_AEAD_GET_TAG,static_cast<int>(kTagBytes),output.data()+total)!=1)return false;
@@ -115,10 +117,12 @@ bool VideoCipher::open(std::uint64_t sequence,std::span<const std::uint8_t> aad,
     if(EVP_CIPHER_CTX_ctrl(ctx,EVP_CTRL_AEAD_SET_IVLEN,static_cast<int>(nonce.size()),nullptr)!=1)return false;
     if(EVP_DecryptInit_ex(ctx,nullptr,nullptr,impl_->keys.recv_key.data(),nonce.data())!=1)return false;
     if(!aad.empty()&&EVP_DecryptUpdate(ctx,nullptr,&written,aad.data(),static_cast<int>(aad.size()))!=1)return false;
+    written=0;
     if(ciphertext_size&&EVP_DecryptUpdate(ctx,output.data(),&written,ciphertext_tag.data(),static_cast<int>(ciphertext_size))!=1)return false;
     total=written;
     if(EVP_CIPHER_CTX_ctrl(ctx,EVP_CTRL_AEAD_SET_TAG,static_cast<int>(kTagBytes),
                            const_cast<std::uint8_t*>(ciphertext_tag.data()+ciphertext_size))!=1)return false;
+    written=0;
     if(EVP_DecryptFinal_ex(ctx,output.data()+total,&written)!=1)return false;
     total+=written;
     output_size=static_cast<std::size_t>(total);
