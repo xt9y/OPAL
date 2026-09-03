@@ -151,10 +151,12 @@ bool negotiate(bool client_side,SSL *ssl,const std::string &token,const std::str
             if(host.empty()||!remaining||!control_send("UDP_SELECTED "+std::to_string(generation)+" "+host+" "+std::to_string(port),std::min(200,remaining))){error=kUnavailable;return false;}
             selected_sent=true;
         }
-        std::string control_line;
-        if(control_read(control_line,1)){
-            if(!parse_selected(control_line,generation)){error="direct UDP negotiation protocol error";return false;}
-            peer_selected=true;
+        if(!peer_selected){
+            std::string control_line;
+            if(control_read(control_line,1)){
+                if(!parse_selected(control_line,generation)){error="direct UDP negotiation protocol error";return false;}
+                peer_selected=true;
+            }
         }
         if(local_selected&&peer_selected){path.peer=selected;path.peer_len=selected_length;output=std::move(path);return true;}
     }
