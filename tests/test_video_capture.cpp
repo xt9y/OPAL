@@ -3,10 +3,23 @@
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 
+static std::string read_all(const char *path){
+    std::ifstream in(path);assert(in.good());
+    return std::string(std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>());
+}
+
 int main(){
+    const auto capture_source=read_all("src/video_capture.cpp");
+    assert(capture_source.find("AVPacket *packet=nullptr")!=std::string::npos);
+    assert(capture_source.find("AVPacket *packet=av_packet_alloc()") == std::string::npos);
+    assert(capture_source.find("unit={};") == std::string::npos);
+    assert(capture_source.find("unit.data.clear()")!=std::string::npos);
+
     const char *command=
         "ffmpeg -hide_banner -loglevel error "
         "-f lavfi -i testsrc=size=320x180:rate=60 "
@@ -21,14 +34,16 @@ int main(){
     assert(capture.start({320,180,60},8000,true,""));
     assert(!capture.ended());
     bool video=false,audio=false,keyframe=false;
+    opal::EncodedMediaUnit unit;
+    std::size_t observed_capacity=0;
     for(int i=0;i<300&&!(video&&audio&&keyframe);++i){
-        opal::EncodedMediaUnit unit;
         if(!capture.next(unit,1000))continue;
         video|=unit.kind==opal::MediaKind::VideoH264&&!unit.data.empty();
         audio|=unit.kind==opal::MediaKind::AudioAac&&!unit.data.empty();
         keyframe|=unit.kind==opal::MediaKind::VideoH264&&unit.keyframe;
+        observed_capacity=std::max(observed_capacity,unit.data.capacity());
     }
-    assert(video&&audio&&keyframe);
+    assert(video&&audio&&keyframe&&observed_capacity>0);
     bool video_config=false,audio_config=false;
     for(const auto &config:capture.configs()){
         video_config|=config.kind==opal::MediaKind::VideoH264&&!config.extradata.empty();
@@ -39,10 +54,7 @@ int main(){
     // Drain the bounded fixture. A temporary read timeout may still return
     // false while the process is alive, but permanent EOF must become visible
     // so VideoSender can restart capture instead of spinning forever.
-    for(int i=0;i<500&&!capture.ended();++i){
-        opal::EncodedMediaUnit unit;
-        (void)capture.next(unit,50);
-    }
+    for(int i=0;i<500&&!capture.ended();++i)(void)capture.next(unit,50);
     assert(capture.ended());
     capture.stop();
     assert(!capture.ended());
