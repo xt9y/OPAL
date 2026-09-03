@@ -38,6 +38,21 @@ std::uint16_t fake_stun_once(int mode){
     }).detach();
     return port;
 }
+
+std::uint16_t fake_stun_silent(){
+    int fd=socket(AF_INET6,SOCK_DGRAM|SOCK_CLOEXEC,0);assert(fd>=0);
+    sockaddr_in6 bind_addr{};bind_addr.sin6_family=AF_INET6;bind_addr.sin6_addr=in6addr_loopback;bind_addr.sin6_port=0;
+    assert(bind(fd,reinterpret_cast<sockaddr*>(&bind_addr),sizeof(bind_addr))==0);
+    socklen_t len=sizeof(bind_addr);assert(getsockname(fd,reinterpret_cast<sockaddr*>(&bind_addr),&len)==0);
+    std::uint16_t port=ntohs(bind_addr.sin6_port);
+    std::thread([fd]{
+        std::uint8_t request[64]{};sockaddr_storage peer{};socklen_t peer_len=sizeof(peer);
+        recvfrom(fd,request,sizeof(request),0,reinterpret_cast<sockaddr*>(&peer),&peer_len);
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        close(fd);
+    }).detach();
+    return port;
+}
 }
 
 int main(){
@@ -60,6 +75,15 @@ int main(){
         auto mapped=opal::discover_server_reflexive_candidate(a,{{"::1",port}},1000);
         assert(mapped&&mapped->type==opal::CandidateType::ServerReflexive);
         assert(mapped->host=="203.0.113.7"&&mapped->port==45678);
+    }
+    {
+        const auto silent=fake_stun_silent();
+        const auto good=fake_stun_once(0);
+        const auto start=std::chrono::steady_clock::now();
+        auto mapped=opal::discover_server_reflexive_candidate(a,{{"::1",silent},{"::1",good}},500);
+        const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
+        assert(mapped&&mapped->host=="203.0.113.7"&&mapped->port==45678);
+        assert(elapsed<250);
     }
     {
         std::uint16_t port=fake_stun_once(1);
