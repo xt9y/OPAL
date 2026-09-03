@@ -57,6 +57,10 @@ static bool parse_profile(const std::string &line,std::uint32_t generation,Strea
     const bool native=width==0&&height==0;const bool bounded=width>=16&&height>=16&&width<=16384&&height<=16384;
     if((!native&&!bounded)||fps<15||fps>240)return false;stream.max_width=width;stream.max_height=height;stream.fps=fps;return true;
 }
+static bool receiver_ready_line(const std::string &line,std::uint32_t generation){
+    std::istringstream in(line);std::string word,extra;unsigned long long value=0;
+    return (in>>word>>value)&&!(in>>extra)&&word=="DIRECT_RECEIVER_READY"&&value==generation;
+}
 
 static void control_client(TlsConn c){
     if(!c.ssl)return;std::mutex send_mu;auto send_line=[&](const std::string &line,int timeout){std::lock_guard<std::mutex>lock(send_mu);return tls_write_line_timeout(c.ssl,line,timeout);};
@@ -72,6 +76,14 @@ static void control_client(TlsConn c){
     DirectVideoPath path;std::string negotiation_error;const auto fp=local_fingerprint(c.ssl);
     auto negotiation_send=[&](const std::string &message,int timeout){return send_line(message,timeout);};auto negotiation_read=[&](std::string &message,int timeout){return tls_read_line_timeout(c.ssl,message,timeout);};
     if(!negotiate_host_direct_video(c.ssl,token,pub,fp,generation,default_stun_endpoints(),negotiation_send,negotiation_read,path,negotiation_error,5000)){close_tls(c);return;}
+
+    // The client's UDP receiver must be actively draining before capture starts;
+    // otherwise the first configuration/IDR burst can overflow the deliberately
+    // small receive queue and force an avoidable recovery cycle.
+    if(!tls_read_line_timeout(c.ssl,line,3000)||!receiver_ready_line(line,generation)){
+        send_line("DIRECT_MEDIA_ERROR "+std::to_string(generation)+" receiver-not-ready",1000);
+        close_tls(c);return;
+    }
 
     const bool audio=host_cfg.get_bool("audio","enabled",true);VideoSender sender;
     if(!sender.start(std::move(path),stream,audio,[&](const std::string &message){send_line(message,250);})){send_line("DIRECT_MEDIA_ERROR "+std::to_string(generation)+" capture-startup",1000);close_tls(c);return;}
