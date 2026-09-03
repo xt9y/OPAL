@@ -10,7 +10,6 @@
 
 namespace opal { namespace {
 constexpr char kAlphabet[]="0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
 bool digest(std::string_view input,std::array<unsigned char,32>&out){unsigned int length=0;return EVP_Digest(input.data(),input.size(),out.data(),&length,EVP_sha256(),nullptr)==1&&length==out.size();}
 int alphabet_value(char c){c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));for(int i=0;i<32;++i)if(kAlphabet[i]==c)return i;return -1;}
 bool hex_string(std::string_view value,std::size_t exact){if(value.size()!=exact)return false;for(char c:value)if(!std::isxdigit(static_cast<unsigned char>(c)))return false;return true;}
@@ -26,6 +25,8 @@ bool same_id_key(std::string_view id,std::string_view key){return rendezvous_id_
 std::string rendezvous_id_from_public_key(std::string_view public_key_hex){if(!hex_string(public_key_hex,64))return {};std::string normalized;normalized.reserve(public_key_hex.size());for(char c:public_key_hex)normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));std::array<unsigned char,32> hash{};if(!digest("OPAL-RENDEZVOUS-ID-v1\n"+normalized,hash))return {};std::uint64_t value=0;for(int i=0;i<8;++i)value=(value<<8)|hash[static_cast<std::size_t>(i)];std::string data;data.reserve(10);for(int i=0;i<10;++i){const int shift=59-i*5;data.push_back(kAlphabet[(value>>shift)&31]);}return data+checksum_for(data);}
 std::string format_connection_code(std::string_view rendezvous_id){if(!valid_id(rendezvous_id))return {};std::string upper;upper.reserve(19);upper="opal:";for(std::size_t i=0;i<rendezvous_id.size();++i){if(i&&i%4==0)upper.push_back('-');upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(rendezvous_id[i]))));}return upper;}
 bool parse_connection_code(std::string_view code,std::string &rendezvous_id){rendezvous_id.clear();if(code.size()<5||code.substr(0,5)!="opal:")return false;std::string compact;for(char c:code.substr(5)){if(c=='-')continue;if(alphabet_value(c)<0)return false;compact.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));}if(!valid_id(compact))return false;rendezvous_id=std::move(compact);return true;}
+std::string rendezvous_lease_transcript(std::string_view id,std::string_view public_key,std::string_view nonce){return "OPAL-RENDEZVOUS-LEASE-v1\n"+std::string(id)+"\n"+std::string(public_key)+"\n"+std::string(nonce);}
+std::string rendezvous_accept_transcript(std::string_view id,std::string_view session_id,std::string_view client_public_key,std::string_view client_nonce,std::string_view host_nonce){return "OPAL-RENDEZVOUS-ACCEPT-v1\n"+std::string(id)+"\n"+std::string(session_id)+"\n"+std::string(client_public_key)+"\n"+std::string(client_nonce)+"\n"+std::string(host_nonce);}
 
 std::string serialize_rendezvous_message(const RendezvousMessage &m){
     std::ostringstream out;
@@ -36,7 +37,7 @@ std::string serialize_rendezvous_message(const RendezvousMessage &m){
     case RendezvousType::LeaseOk:if(!valid_id(m.id)||m.ttl_seconds==0||m.ttl_seconds>300)return {};out<<"LEASE_OK "<<m.id<<' '<<m.ttl_seconds;break;
     case RendezvousType::Introduce:if(!valid_id(m.id)||!hex_string(m.public_key,64)||!hex_string(m.nonce,32))return {};out<<"INTRO "<<m.id<<' '<<m.public_key<<' '<<m.nonce;break;
     case RendezvousType::Offer:if(!valid_id(m.id)||!hex_string(m.session_id,32)||!hex_string(m.public_key,64)||!token_string(m.host,255)||m.port==0||!hex_string(m.nonce,32))return {};out<<"OFFER "<<m.id<<' '<<m.session_id<<' '<<m.public_key<<' '<<m.host<<' '<<m.port<<' '<<m.nonce;break;
-    case RendezvousType::Accept:if(!valid_id(m.id)||!hex_string(m.session_id,32)||!hex_string(m.public_key,64)||!same_id_key(m.id,m.public_key)||!hex_string(m.nonce,32))return {};out<<"ACCEPT "<<m.id<<' '<<m.session_id<<' '<<m.public_key<<' '<<m.nonce;break;
+    case RendezvousType::Accept:if(!valid_id(m.id)||!hex_string(m.session_id,32)||!hex_string(m.public_key,64)||!same_id_key(m.id,m.public_key)||!hex_string(m.nonce,32)||!hex_string(m.signature,128))return {};out<<"ACCEPT "<<m.id<<' '<<m.session_id<<' '<<m.public_key<<' '<<m.nonce<<' '<<m.signature;break;
     case RendezvousType::Ready:if(!valid_id(m.id)||!hex_string(m.session_id,32)||!hex_string(m.public_key,64)||!same_id_key(m.id,m.public_key)||!token_string(m.host,255)||m.port==0||!hex_string(m.nonce,32))return {};out<<"READY "<<m.id<<' '<<m.session_id<<' '<<m.public_key<<' '<<m.host<<' '<<m.port<<' '<<m.nonce;break;
     case RendezvousType::RelayRequest:if(!hex_string(m.session_id,32)||!hex_string(m.public_key,64)||!hex_string(m.nonce,32)||!hex_string(m.signature,128))return {};out<<"RELAY_REQUEST "<<m.session_id<<' '<<m.public_key<<' '<<m.nonce<<' '<<m.signature;break;
     case RendezvousType::RelayReady:if(!hex_string(m.session_id,32)||!token_string(m.host,255)||m.port==0||!hex_string(m.allocation_id,32)||m.ttl_seconds==0||m.ttl_seconds>300)return {};out<<"RELAY_READY "<<m.session_id<<' '<<m.host<<' '<<m.port<<' '<<m.allocation_id<<' '<<m.ttl_seconds;break;
@@ -53,7 +54,7 @@ bool parse_rendezvous_message(std::string_view wire,RendezvousMessage &m){
     else if(f[0]=="LEASE_OK"&&f.size()==3){m.type=RendezvousType::LeaseOk;m.id=f[1];if(!parse_u32(f[2],m.ttl_seconds))return false;}
     else if(f[0]=="INTRO"&&f.size()==4){m.type=RendezvousType::Introduce;m.id=f[1];m.public_key=f[2];m.nonce=f[3];}
     else if(f[0]=="OFFER"&&f.size()==7){m.type=RendezvousType::Offer;m.id=f[1];m.session_id=f[2];m.public_key=f[3];m.host=f[4];if(!parse_u16(f[5],m.port))return false;m.nonce=f[6];}
-    else if(f[0]=="ACCEPT"&&f.size()==5){m.type=RendezvousType::Accept;m.id=f[1];m.session_id=f[2];m.public_key=f[3];m.nonce=f[4];}
+    else if(f[0]=="ACCEPT"&&f.size()==6){m.type=RendezvousType::Accept;m.id=f[1];m.session_id=f[2];m.public_key=f[3];m.nonce=f[4];m.signature=f[5];}
     else if(f[0]=="READY"&&f.size()==7){m.type=RendezvousType::Ready;m.id=f[1];m.session_id=f[2];m.public_key=f[3];m.host=f[4];if(!parse_u16(f[5],m.port))return false;m.nonce=f[6];}
     else if(f[0]=="RELAY_REQUEST"&&f.size()==5){m.type=RendezvousType::RelayRequest;m.session_id=f[1];m.public_key=f[2];m.nonce=f[3];m.signature=f[4];}
     else if(f[0]=="RELAY_READY"&&f.size()==6){m.type=RendezvousType::RelayReady;m.session_id=f[1];m.host=f[2];if(!parse_u16(f[3],m.port))return false;m.allocation_id=f[4];if(!parse_u32(f[5],m.ttl_seconds))return false;}
