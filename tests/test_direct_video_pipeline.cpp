@@ -92,6 +92,30 @@ void run_capture_eof_recovery(std::uint32_t generation){
     sender.stop();receiver.stop();std::filesystem::remove(marker);
 }
 
+void run_media_stall_detection(std::uint32_t generation){
+    setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);
+    setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);
+
+    auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();
+    assert(sender_socket.fd>=0&&receiver_socket.fd>=0);
+    auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);
+    auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);
+    opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int> idr_requests{0};
+    wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));
+
+    const auto start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!receiver.media_started()&&std::chrono::steady_clock::now()<start_deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.media_started());
+    sender.stop();
+
+    const auto fail_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+    while(!receiver.failed()&&std::chrono::steady_clock::now()<fail_deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.failed());
+    receiver.stop();
+}
+
 }
 
 int main(){
@@ -101,6 +125,7 @@ int main(){
     run_case(1,false,9);  // one missing fragment is reconstructed by XOR FEC
     run_case(2,true,10);  // two missing fragments require fresh IDR recovery
     run_capture_eof_recovery(11); // finite capture must restart without rebuilding control/UDP
+    run_media_stall_detection(12); // frozen direct path must not leave the last frame forever
 
     unsetenv("OPAL_TEST_DROP_FRAGMENTS");
     unsetenv("OPAL_CAPTURE_CMD");
