@@ -63,7 +63,7 @@ grep -q 'Video interrupted; recovering...' "$base/client.log"
 grep -q 'Video restored.' "$base/client.log"
 grep -q 'Control restored.' "$base/client.log"
 ! grep -q 'Pairing password:' "$base/client.log"
-grep -qx 'wayland' "$base/player.driver"
+grep -qx 'x11' "$base/player.driver"
 ! grep -q 'FFPLAY_DEBUG_NOISE' "$base/client.log"
 ! grep -q '^capture:' "$base/host.log"
 
@@ -91,7 +91,7 @@ test "$second_connected" -eq 1
 kill -0 "$hp"
 kill -0 "$cp"
 grep -q 'Connected' "$base/client2.log"
-grep -qx 'wayland' "$base/player.driver"
+grep -qx 'x11' "$base/player.driver"
 ! grep -q 'Pairing password:' "$base/client2.log"
 ! grep -q 'authentication denied' "$base/client2.log"
 
