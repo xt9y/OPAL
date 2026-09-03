@@ -33,6 +33,7 @@ public:
     bool start(const StreamOptions &stream,int bitrate_kbps,bool audio,
                const std::string &portal_token_file);
     bool next(EncodedMediaUnit &unit,int timeout_ms);
+    bool ended() const;
     const std::vector<MediaConfig>& configs() const;
     void stop();
 
