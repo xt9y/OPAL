@@ -34,10 +34,11 @@ NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
 TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
 DIRECT_VIDEO_BASE_SRCS := $(DIRECT_VIDEO_SESSION_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS)
-DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(VIDEO_PRESENT_SRCS) $(VIDEO_FEEDBACK_SRCS) $(AUDIO_OUTPUT_SRCS)
-DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS) $(VIDEO_FEEDBACK_SRCS)
-DIRECT_MEDIA_SRCS := $(DIRECT_VIDEO_BASE_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(VIDEO_PRESENT_SRCS) $(VIDEO_FEEDBACK_SRCS) $(AUDIO_OUTPUT_SRCS) $(VIDEO_CAPTURE_SRCS) $(VIDEO_SENDER_SRCS) $(VIDEO_RECEIVER_SRCS)
-SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel_access.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_RECEIVER_SRCS) src/config.cpp src/crypto.cpp
+DIRECT_MEDIA_COMMON_SRCS := $(VIDEO_FEEDBACK_SRCS)
+DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(VIDEO_PRESENT_SRCS) $(AUDIO_OUTPUT_SRCS)
+DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
+DIRECT_MEDIA_SRCS := $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS)
+SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel_access.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) src/config.cpp src/crypto.cpp
 APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
@@ -96,7 +97,7 @@ test-video-decoder: | $(BUILD)
 	$(BUILD)/test-video-decoder
 
 test-video-present: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) $(VIDEO_DECODER_SRCS) -lavcodec -lavutil -lX11 $(GLLIBS) -o $(BUILD)/test-video-present
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil -lX11 $(GLLIBS) -o $(BUILD)/test-video-present
 	$(BUILD)/test-video-present
 
 test-audio-output: | $(BUILD)
@@ -108,7 +109,7 @@ test-video-feedback: | $(BUILD)
 	$(BUILD)/test-video-feedback
 
 test-direct-video-pipeline: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lssl -lcrypto -lX11 -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-direct-video-pipeline
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lssl -lcrypto -lX11 -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-direct-video-pipeline
 	$(BUILD)/test-direct-video-pipeline
 
 test-input: | $(BUILD)
