@@ -36,13 +36,13 @@ struct VideoReceiver::Impl {
     VideoPresenter presenter;
     AudioOutput audio_output;
     std::thread thread;
-    std::atomic<bool> run{false},media{false};
+    std::atomic<bool> run{false},media{false},failed{false};
     std::atomic<unsigned long> window{0};
     std::atomic<std::uint64_t> stale{0},highest{0};
     std::atomic<std::int64_t> latest_video_ts{0},clock_offset_us{0};
     std::atomic<std::uint32_t> current_rtt_us{0},last_decode_age_us{0};
     bool decoder_ready=false,audio_ready=false;
-    Clock::time_point last_idr_request{},last_feedback{},last_clock{},last_debug{};
+    Clock::time_point last_idr_request{},last_feedback{},last_clock{},last_debug{},last_video_packet{};
     std::uint64_t interval_first=0,interval_highest=0;std::uint32_t interval_received=0;
     std::map<std::uint64_t,std::uint64_t> frame_first_arrival;
     LatencyTelemetry telemetry;
@@ -126,6 +126,7 @@ struct VideoReceiver::Impl {
                    bytes.size()==kVideoHeaderBytes+static_cast<std::size_t>(header.payload_length)+kVideoAeadTagBytes){
                     std::vector<std::uint8_t> plaintext;
                     if(open_video_datagram(path.keys,header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext)&&plaintext.size()==header.payload_length&&replay.accept(header.packet_sequence)){
+                        if(header.media_type==VideoMediaType::VideoH264)last_video_packet=Clock::now();
                         note_sequence(header.packet_sequence);if(!frame_first_arrival.contains(header.frame_id))frame_first_arrival[header.frame_id]=arrival;
                         while(frame_first_arrival.size()>8)frame_first_arrival.erase(frame_first_arrival.begin());
                         VideoPlainPacket packet{header,std::move(plaintext)};ReassembledFrame assembled;const auto status=reassembler.accept(packet,assembled);
@@ -133,6 +134,9 @@ struct VideoReceiver::Impl {
                         else if(status==ReassemblyStatus::Complete){auto it=frame_first_arrival.find(assembled.frame_id);const auto first=it==frame_first_arrival.end()?arrival:it->second;if(it!=frame_first_arrival.end())frame_first_arrival.erase(it);handle_complete(assembled,static_cast<double>(arrival-first)/1000.0,first);}
                     }
                 }
+            }
+            if(media.load()&&last_video_packet.time_since_epoch().count()!=0&&Clock::now()-last_video_packet>=std::chrono::seconds(1)){
+                failed.store(true);run.store(false);break;
             }
             control_tick();
         }
@@ -147,6 +151,7 @@ bool VideoReceiver::start(DirectVideoPath path,std::function<void(const std::str
 }
 bool VideoReceiver::handle_control_line(const std::string &line){return impl_&&impl_->handle_control(line);}
 bool VideoReceiver::media_started() const{return impl_&&impl_->media.load();}
+bool VideoReceiver::failed() const{return impl_&&impl_->failed.load();}
 Window VideoReceiver::presentation_window() const{return impl_?static_cast<Window>(impl_->window.load()):0;}
 std::uint64_t VideoReceiver::stale_frames() const{return impl_?impl_->stale.load():0;}
 std::uint64_t VideoReceiver::highest_sequence() const{return impl_?impl_->highest.load():0;}
