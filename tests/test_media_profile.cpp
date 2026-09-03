@@ -15,5 +15,8 @@ int main() {
     assert(!opal::stream_mode_limit("invalid",w,h));
 
     assert(opal::automatic_bitrate_kbps(1920,1080,60)==30000);
+    assert(opal::capture_stale_budget_us(60)>=32000&&opal::capture_stale_budget_us(60)<=34000);
+    assert(opal::capture_stale_budget_us(240)==20000);
+    assert(opal::capture_stale_budget_us(15)>=133000&&opal::capture_stale_budget_us(15)<=134000);
     return 0;
 }
