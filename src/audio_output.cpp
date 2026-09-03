@@ -26,7 +26,15 @@ namespace opal {
 struct AudioOutput::Impl {
     struct Chunk {std::vector<std::uint8_t> pcm;std::uint32_t ms=0;std::int64_t pts_us=0;};
     AVCodecContext *decoder=nullptr;
+    SwrContext *swr=nullptr;
+    AVPacket *packet=nullptr;
+    AVFrame *frame=nullptr;
+    AVChannelLayout swr_input_layout{};
+    bool swr_layout_valid=false;
+    AVSampleFormat swr_input_format=AV_SAMPLE_FMT_NONE;
+    int swr_input_rate=0;
     int sample_rate=0,channels=0;
+    std::vector<std::uint8_t> pcm_scratch;
     mutable std::mutex mutex;
     std::condition_variable cv;
     std::deque<Chunk> queue;
@@ -35,7 +43,46 @@ struct AudioOutput::Impl {
     std::thread thread;
     std::string test_sink;
 
+    ~Impl(){release_codec_state();}
+
     void clear_locked(){queue.clear();queue_ms=0;}
+
+    void release_resampler(){
+        if(swr)swr_free(&swr);
+        if(swr_layout_valid){av_channel_layout_uninit(&swr_input_layout);swr_layout_valid=false;}
+        swr_input_format=AV_SAMPLE_FMT_NONE;swr_input_rate=0;
+    }
+
+    void release_codec_state(){
+        release_resampler();
+        if(packet)av_packet_free(&packet);
+        if(frame)av_frame_free(&frame);
+        if(decoder)avcodec_free_context(&decoder);
+        pcm_scratch.clear();
+    }
+
+    bool ensure_resampler(AVFrame *input){
+        if(!input||input->format<0)return false;
+        AVChannelLayout in_layout{};
+        if(input->ch_layout.nb_channels>0){
+            if(av_channel_layout_copy(&in_layout,&input->ch_layout)<0)return false;
+        }else av_channel_layout_default(&in_layout,channels);
+        const auto input_format=static_cast<AVSampleFormat>(input->format);
+        const int input_rate=input->sample_rate>0?input->sample_rate:sample_rate;
+        const bool same=swr&&swr_layout_valid&&swr_input_format==input_format&&swr_input_rate==input_rate&&
+                        av_channel_layout_compare(&swr_input_layout,&in_layout)==0;
+        if(same){av_channel_layout_uninit(&in_layout);return true;}
+
+        release_resampler();
+        if(av_channel_layout_copy(&swr_input_layout,&in_layout)<0){av_channel_layout_uninit(&in_layout);return false;}
+        swr_layout_valid=true;swr_input_format=input_format;swr_input_rate=input_rate;
+        AVChannelLayout out_layout{};av_channel_layout_default(&out_layout,channels);
+        const int alloc_rc=swr_alloc_set_opts2(&swr,&out_layout,AV_SAMPLE_FMT_S16,sample_rate,
+                                                &in_layout,input_format,input_rate,0,nullptr);
+        av_channel_layout_uninit(&out_layout);av_channel_layout_uninit(&in_layout);
+        if(alloc_rc<0||!swr||swr_init(swr)<0){release_resampler();return false;}
+        return true;
+    }
 
     void enqueue(Chunk chunk){
         if(chunk.pcm.empty()||chunk.ms==0)return;
@@ -82,6 +129,8 @@ bool AudioOutput::configure_aac(std::span<const std::uint8_t> extradata,int samp
     if(sample_rate<=0||channels<=0||channels>32)return false;
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_AAC);if(!codec)return false;
     impl_->decoder=avcodec_alloc_context3(codec);if(!impl_->decoder)return false;
+    impl_->packet=av_packet_alloc();impl_->frame=av_frame_alloc();
+    if(!impl_->packet||!impl_->frame){close();return false;}
     impl_->sample_rate=sample_rate;impl_->channels=channels;impl_->decoder->sample_rate=sample_rate;
     av_channel_layout_default(&impl_->decoder->ch_layout,channels);
     if(!extradata.empty()){
@@ -96,38 +145,34 @@ bool AudioOutput::configure_aac(std::span<const std::uint8_t> extradata,int samp
 }
 
 bool AudioOutput::submit(std::span<const std::uint8_t> aac,std::int64_t pts_us,std::int64_t current_video_pts_us){
-    if(!impl_||!impl_->decoder||aac.empty())return false;
+    if(!impl_||!impl_->decoder||!impl_->packet||!impl_->frame||aac.empty())return false;
     if(current_video_pts_us>0&&pts_us+40000<current_video_pts_us)return true;
-    AVPacket *packet=av_packet_alloc();if(!packet)return false;
-    if(av_new_packet(packet,static_cast<int>(aac.size()))<0){av_packet_free(&packet);return false;}
-    std::memcpy(packet->data,aac.data(),aac.size());packet->pts=pts_us;packet->dts=pts_us;
-    int rc=avcodec_send_packet(impl_->decoder,packet);av_packet_free(&packet);if(rc<0)return false;
+    av_packet_unref(impl_->packet);
+    if(av_new_packet(impl_->packet,static_cast<int>(aac.size()))<0)return false;
+    std::memcpy(impl_->packet->data,aac.data(),aac.size());impl_->packet->pts=pts_us;impl_->packet->dts=pts_us;
+    int rc=avcodec_send_packet(impl_->decoder,impl_->packet);av_packet_unref(impl_->packet);if(rc<0)return false;
     for(;;){
-        AVFrame *frame=av_frame_alloc();if(!frame)return false;
-        rc=avcodec_receive_frame(impl_->decoder,frame);
-        if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF){av_frame_free(&frame);break;}
-        if(rc<0){av_frame_free(&frame);return false;}
-        AVChannelLayout out_layout{};av_channel_layout_default(&out_layout,impl_->channels);
-        AVChannelLayout in_layout{};
-        if(frame->ch_layout.nb_channels>0)av_channel_layout_copy(&in_layout,&frame->ch_layout);else av_channel_layout_default(&in_layout,impl_->channels);
-        const int in_rate=frame->sample_rate>0?frame->sample_rate:impl_->sample_rate;
-        SwrContext *swr=nullptr;
-        if(swr_alloc_set_opts2(&swr,&out_layout,AV_SAMPLE_FMT_S16,impl_->sample_rate,&in_layout,
-                               static_cast<AVSampleFormat>(frame->format),in_rate,0,nullptr)<0||!swr||swr_init(swr)<0){
-            if(swr)swr_free(&swr);av_channel_layout_uninit(&in_layout);av_channel_layout_uninit(&out_layout);av_frame_free(&frame);return false;
-        }
-        const int capacity=static_cast<int>(av_rescale_rnd(swr_get_delay(swr,in_rate)+frame->nb_samples,
-                                                            impl_->sample_rate,in_rate,AV_ROUND_UP));
-        std::vector<std::uint8_t> pcm(static_cast<std::size_t>(std::max(0,capacity))*impl_->channels*2);
-        std::uint8_t *out_data[1]={pcm.data()};
-        const auto **input=const_cast<const std::uint8_t **>(frame->extended_data);
-        const int converted=swr_convert(swr,out_data,capacity,input,frame->nb_samples);
-        swr_free(&swr);av_channel_layout_uninit(&in_layout);av_channel_layout_uninit(&out_layout);av_frame_free(&frame);
+        av_frame_unref(impl_->frame);
+        rc=avcodec_receive_frame(impl_->decoder,impl_->frame);
+        if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF)break;
+        if(rc<0)return false;
+        if(!impl_->ensure_resampler(impl_->frame))return false;
+        const int input_rate=impl_->frame->sample_rate>0?impl_->frame->sample_rate:impl_->sample_rate;
+        const int capacity=static_cast<int>(av_rescale_rnd(swr_get_delay(impl_->swr,input_rate)+impl_->frame->nb_samples,
+                                                            impl_->sample_rate,input_rate,AV_ROUND_UP));
+        if(capacity<=0)continue;
+        const std::size_t capacity_bytes=static_cast<std::size_t>(capacity)*impl_->channels*2;
+        impl_->pcm_scratch.resize(capacity_bytes);
+        std::uint8_t *out_data[1]={impl_->pcm_scratch.data()};
+        const auto **input=const_cast<const std::uint8_t **>(impl_->frame->extended_data);
+        const int converted=swr_convert(impl_->swr,out_data,capacity,input,impl_->frame->nb_samples);
         if(converted<0)return false;
-        pcm.resize(static_cast<std::size_t>(converted)*impl_->channels*2);
+        const std::size_t pcm_bytes=static_cast<std::size_t>(converted)*impl_->channels*2;
         const auto duration=static_cast<std::uint32_t>((static_cast<std::uint64_t>(converted)*1000u+impl_->sample_rate-1)/impl_->sample_rate);
-        impl_->enqueue({std::move(pcm),duration,pts_us});
+        AudioOutput::Impl::Chunk chunk;chunk.pcm.assign(impl_->pcm_scratch.begin(),impl_->pcm_scratch.begin()+static_cast<std::ptrdiff_t>(pcm_bytes));chunk.ms=duration;chunk.pts_us=pts_us;
+        impl_->enqueue(std::move(chunk));
     }
+    av_frame_unref(impl_->frame);
     return true;
 }
 
@@ -139,7 +184,7 @@ void AudioOutput::close(){
     {std::lock_guard<std::mutex> lock(impl_->mutex);impl_->run=false;impl_->cv.notify_all();}
     if(impl_->thread.joinable())impl_->thread.join();
     {std::lock_guard<std::mutex> lock(impl_->mutex);impl_->clear_locked();}
-    if(impl_->decoder)avcodec_free_context(&impl_->decoder);
+    impl_->release_codec_state();
 }
 
 AudioOutput::~AudioOutput(){close();}
