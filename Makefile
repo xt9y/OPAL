@@ -1,7 +1,8 @@
 CXX ?= c++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic
 CPPFLAGS += -Iinclude
-LDLIBS += -lssl -lcrypto -lX11 -lXi -lpthread
+AVLIBS := -lavformat -lavcodec -lavutil
+LDLIBS += -lssl -lcrypto -lX11 -lXi -lpthread $(AVLIBS)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 LIBEXECDIR ?= $(PREFIX)/libexec/opal
@@ -12,12 +13,13 @@ BUILD := build
 PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
 PROFILE_SRCS := src/media_profile.cpp
+VIDEO_CAPTURE_SRCS := src/video_capture.cpp
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
 TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
 SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/media.cpp $(PROFILE_SRCS) src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(INPUT_SRCS)
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(VIDEO_CAPTURE_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
 
@@ -43,7 +45,7 @@ test-media: | $(BUILD)
 	$(BUILD)/test-media
 
 test-video-capture: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_capture.cpp src/video_capture.cpp src/media.cpp $(PROFILE_SRCS) src/config.cpp -o $(BUILD)/test-video-capture
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_capture.cpp $(VIDEO_CAPTURE_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp $(AVLIBS) -o $(BUILD)/test-video-capture
 	$(BUILD)/test-video-capture
 
 test-input: | $(BUILD)
