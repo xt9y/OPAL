@@ -1,4 +1,5 @@
 #include <opal/session.hpp>
+#include <opal/media.hpp>
 #include <opal/crypto.hpp>
 #include <opal/net.hpp>
 #include <openssl/pem.h>
