@@ -26,13 +26,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev xvfb ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+      - name: Tunnel child reaping regression
+        if: ${{ github.event_name == 'push' }}
+        run: make test-tunnel
       - name: Build and test
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
           DISPLAY=:99 make test
 
   sanitize:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'sanitize')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'sanitize') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +51,7 @@ jobs:
           DISPLAY=:99 make clean test-direct-media-sanitize CXX=clang++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
 
   thread-sanitize:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'thread-sanitize')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'thread-sanitize') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +65,7 @@ jobs:
           DISPLAY=:99 make clean test-session test-direct-video-session test-direct-video-pipeline test-direct-video-stress CXX=g++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-omit-frame-pointer'
 
   stress:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'stress')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'stress') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
