@@ -1,6 +1,7 @@
 #include <opal/video_feedback.hpp>
 #include <cassert>
 #include <chrono>
+#include <string>
 
 int main(){
     using namespace std::chrono;
@@ -35,5 +36,27 @@ int main(){
     auto request=opal::clock_sync_request_line(4,123);std::int64_t t0=0,t1=0,t2=0;
     assert(opal::parse_clock_sync_line(request,4,t0,t1,t2)&&t0==123&&t1==0&&t2==0);
     auto reply=opal::clock_sync_reply_line(4,123,456,457);assert(opal::parse_clock_sync_line(reply,4,t0,t1,t2)&&t1==456&&t2==457);
+
+    opal::HostMediaDebugSample host{};
+    host.frame_id=91;host.frame_bytes=48123;host.data_fragments=44;host.fec_fragments=5;
+    host.send_span_us=2800;host.capture_to_packet_us=4100;host.target_kbps=30000;host.active_kbps=28400;
+    host.stale_frames=2;host.idr_requests=3;host.restarts=1;host.chain_valid=true;
+    const auto host_line=opal::host_media_debug_line(9,host);
+    opal::HostMediaDebugSample host_parsed;
+    assert(opal::parse_host_media_debug_line(host_line,9,host_parsed));
+    assert(host_parsed.frame_id==91&&host_parsed.frame_bytes==48123);
+    assert(host_parsed.data_fragments==44&&host_parsed.fec_fragments==5);
+    assert(host_parsed.send_span_us==2800&&host_parsed.capture_to_packet_us==4100);
+    assert(host_parsed.target_kbps==30000&&host_parsed.active_kbps==28400);
+    assert(host_parsed.stale_frames==2&&host_parsed.idr_requests==3&&host_parsed.restarts==1&&host_parsed.chain_valid);
+    assert(!opal::parse_host_media_debug_line(host_line,10,host_parsed));
+    assert(!opal::parse_host_media_debug_line(host_line+" extra",9,host_parsed));
+    auto invalid_bool=host_line;invalid_bool.replace(invalid_bool.size()-1,1,"2");
+    assert(!opal::parse_host_media_debug_line(invalid_bool,9,host_parsed));
+    const auto human=opal::format_host_media_debug(host_parsed);
+    assert(human.find("frame=91")!=std::string::npos);
+    assert(human.find("send=2.8ms")!=std::string::npos);
+    assert(human.find("chain=ok")!=std::string::npos);
+    assert(human.find("key=")==std::string::npos&&human.find("token=")==std::string::npos&&human.find("password=")==std::string::npos);
     return 0;
 }
