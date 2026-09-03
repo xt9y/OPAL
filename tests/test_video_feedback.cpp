@@ -58,5 +58,14 @@ int main(){
     assert(human.find("send=2.8ms")!=std::string::npos);
     assert(human.find("chain=ok")!=std::string::npos);
     assert(human.find("key=")==std::string::npos&&human.find("token=")==std::string::npos&&human.find("password=")==std::string::npos);
+
+    const auto debug_on=opal::debug_media_request_line(9,true);bool debug_enabled=false;
+    assert(debug_on=="DEBUG_MEDIA 9 1");
+    assert(opal::parse_debug_media_request_line(debug_on,9,debug_enabled)&&debug_enabled);
+    const auto debug_off=opal::debug_media_request_line(9,false);
+    assert(opal::parse_debug_media_request_line(debug_off,9,debug_enabled)&&!debug_enabled);
+    assert(!opal::parse_debug_media_request_line(debug_on,8,debug_enabled));
+    assert(!opal::parse_debug_media_request_line(debug_on+" extra",9,debug_enabled));
+    assert(!opal::parse_debug_media_request_line("DEBUG_MEDIA 9 2",9,debug_enabled));
     return 0;
 }
