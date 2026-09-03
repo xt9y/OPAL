@@ -13,7 +13,8 @@ extern "C" {
 #include <libavutil/pixfmt.h>
 }
 
-namespace opal { namespace {
+namespace opal {
+namespace {
 
 GLuint compile_shader(GLenum type,const char *source){
     GLuint shader=glCreateShader(type);
@@ -93,7 +94,18 @@ void request_fullscreen(Display *display,Window window){
     XSendEvent(display,DefaultRootWindow(display),False,SubstructureRedirectMask|SubstructureNotifyMask,&event);
 }
 
-}}
+void fitted_viewport(int window_width,int window_height,int source_width,int source_height){
+    window_width=std::max(1,window_width);window_height=std::max(1,window_height);
+    source_width=std::max(1,source_width);source_height=std::max(1,source_height);
+    const long long lhs=static_cast<long long>(window_width)*source_height;
+    const long long rhs=static_cast<long long>(window_height)*source_width;
+    int width=window_width,height=window_height,x=0,y=0;
+    if(lhs>rhs){width=std::max(1,static_cast<int>(static_cast<long long>(window_height)*source_width/source_height));x=(window_width-width)/2;}
+    else if(lhs<rhs){height=std::max(1,static_cast<int>(static_cast<long long>(window_width)*source_height/source_width));y=(window_height-height)/2;}
+    glViewport(x,y,width,height);
+}
+
+}
 
 struct VideoPresenter::Impl {
     Display *display=nullptr;
@@ -150,6 +162,7 @@ bool VideoPresenter::open(int source_width,int source_height,bool fullscreen){
     impl_->source_width=source_width;impl_->source_height=source_height;
     if(!impl_->init_gl()){close();return false;}
     glDisable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+    glClearColor(0.f,0.f,0.f,1.f);
     return true;
 }
 
@@ -163,7 +176,9 @@ bool VideoPresenter::present(DecodedVideoFrame decoded){
     bool nv12=frame->format==AV_PIX_FMT_NV12;
     if(!yuv420&&!nv12){release();return false;}
     if(!glXMakeCurrent(impl_->display,impl_->window,impl_->context)){release();return false;}
-    XWindowAttributes wa{};XGetWindowAttributes(impl_->display,impl_->window,&wa);glViewport(0,0,std::max(1,wa.width),std::max(1,wa.height));
+    XWindowAttributes wa{};if(!XGetWindowAttributes(impl_->display,impl_->window,&wa)){release();return false;}
+    glViewport(0,0,std::max(1,wa.width),std::max(1,wa.height));glClear(GL_COLOR_BUFFER_BIT);
+    fitted_viewport(wa.width,wa.height,frame->width,frame->height);
     std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv;
     const void *y=contiguous_plane(frame->data[0],frame->linesize[0],frame->width,frame->height,scratch_y);
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,impl_->textures[0]);glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,frame->width,frame->height,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,y);
