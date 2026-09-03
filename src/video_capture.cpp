@@ -150,6 +150,7 @@ void VideoCapture::stop(){
         impl_->format=nullptr;
     }
     if(impl_->avio){
+        av_freep(&impl_->avio->buffer);
         avio_context_free(&impl_->avio);
         impl_->avio=nullptr;
     }
