@@ -25,10 +25,12 @@ struct PeerSessionOptions {
     bool client_side=false;
     UdpSocket socket;
     RendezvousEndpoint peer;
+    std::optional<RendezvousEndpoint> lan_peer;
     std::optional<PeerRelayFallback> relay;
     PeerHandshakeContext handshake;
     std::filesystem::path identity_private_key;
     std::string pairing_password;
+    int lan_handshake_timeout_ms=350;
     int direct_handshake_timeout_ms=2500;
     int relay_handshake_timeout_ms=5000;
     std::function<void(const std::string&)> reliable_input;
