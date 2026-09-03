@@ -66,9 +66,9 @@ static bool receiver_ready_line(const std::string &line,std::uint32_t generation
 static void control_client(TlsConn c){
     if(!c.ssl)return;std::mutex send_mu;auto send_line=[&](const std::string &line,int timeout){std::lock_guard<std::mutex>lock(send_mu);return tls_write_line_timeout(c.ssl,line,timeout);};
     std::string challenge=random_hex(32);if(host_desktop_width>0&&host_desktop_height>0){challenge+=" "+std::to_string(host_desktop_width)+" "+std::to_string(host_desktop_height);auto mac=host_cfg.get("host","mac");if(!mac.empty())challenge+=" "+mac;}
-    if(!send_line("CHALLENGE OPAL2 "+challenge,2000)){close_tls(c);return;}
+    if(!send_line("CHALLENGE OPAL3 "+challenge,2000)){close_tls(c);return;}
     std::string line;if(!tls_read_line_timeout(c.ssl,line,5000)){close_tls(c);return;}std::istringstream ss(line);std::string mode,pub,proof,label;ss>>mode>>pub>>proof;std::getline(ss,label);label=trim(label);bool ok=false;
-    if(mode=="AUTH"&&authorized(pub))ok=verify_hex(pub,challenge,proof);else if(mode=="PAIR"){auto password=pairing_password();auto fp=local_fingerprint(c.ssl);auto transcript="OPAL-PAIR-v2\n"+fp+"\n"+challenge+"\n"+pub;ok=!password.empty()&&secure_equal(proof,hmac_sha256_hex(password,transcript));if(ok){authorize(pub,label.empty()?"client":label);rotate_pairing_password();}}
+    if(mode=="AUTH"&&authorized(pub))ok=verify_hex(pub,challenge,proof);else if(mode=="PAIR"){auto password=pairing_password();auto fp=local_fingerprint(c.ssl);auto transcript="OPAL-PAIR-v3\n"+fp+"\n"+challenge+"\n"+pub;ok=!password.empty()&&secure_equal(proof,hmac_sha256_hex(password,transcript));if(ok){authorize(pub,label.empty()?"client":label);rotate_pairing_password();}}
     if(!ok){send_line("DENY",1000);close_tls(c);return;}append_test_log("OPAL_TEST_AUTH_LOG",mode);
     const auto token=random_hex(24);if(!send_line("OK "+token,2000)){close_tls(c);return;}
 
