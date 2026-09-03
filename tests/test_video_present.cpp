@@ -27,14 +27,16 @@ int main(){
     assert(source.find("_NET_WM_BYPASS_COMPOSITOR")!=std::string::npos);
     assert(source.find("glTexSubImage2D")!=std::string::npos);
     assert(source.find("GL_UNPACK_ROW_LENGTH")!=std::string::npos);
+    assert(source.find("presented_frames")!=std::string::npos);
     assert(source.find("std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv") == std::string::npos);
 
-    opal::VideoPresenter presenter;assert(presenter.open(320,180,false));assert(presenter.x11_window()!=0);auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
+    opal::VideoPresenter presenter;assert(presenter.open(320,180,false));assert(presenter.x11_window()!=0);assert(presenter.presented_frames()==0);auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
     auto borrowed=make_frame(48);AVFrame *borrowed_ptr=borrowed.frame;
     assert(presenter.present_borrowed({borrowed.frame,borrowed.pts_us}));
     assert(borrowed.frame==borrowed_ptr); // presenter must not take decoder-owned frame ownership
+    assert(presenter.presented_frames()==1);
     av_frame_free(&borrowed.frame);
     assert(presenter.present(make_frame(96)));assert(presenter.pending_frame_count()<=1);
-    assert(presenter.present(make_frame(160)));assert(presenter.pending_frame_count()<=1);
+    assert(presenter.present(make_frame(160)));assert(presenter.pending_frame_count()<=1);assert(presenter.presented_frames()==3);
     presenter.close();assert(presenter.x11_window()==0);return 0;
 }
