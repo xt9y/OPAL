@@ -17,6 +17,7 @@ public:
     bool start(DirectVideoPath path,std::function<void(const std::string&)> control_send);
     bool handle_control_line(const std::string& line);
     bool media_started() const;
+    bool failed() const;
     Window presentation_window() const;
     std::uint64_t stale_frames() const;
     std::uint64_t highest_sequence() const;
