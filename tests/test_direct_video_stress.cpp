@@ -53,6 +53,7 @@ int main(){
         bool need_keyframe=false;
 
         for(int frame=0;frame<120;++frame){
+            const bool forced_incomplete=frame>=10&&frame<=13;
             bool keyframe=(frame%15)==0||need_keyframe;
             auto payload=payload_for(generation,frame,keyframe);
             auto packets=opal::fragment_media_unit(opal::VideoMediaType::VideoH264,keyframe?opal::FrameKeyframe:0,
@@ -69,15 +70,15 @@ int main(){
                 const bool data=packet.header.media_type!=opal::VideoMediaType::Fec;
                 bool drop=false;
                 if(force_single&&data&&dropped_data<1){drop=true;++dropped_data;}
-                else if(force_double&&data&&dropped_data<2){drop=true;++dropped_data;}
-                else if(!force_single&&!force_double&&data&&coin(rng)<random_loss)drop=true;
+                else if(forced_incomplete&&data&&dropped_data<2){drop=true;++dropped_data;}
+                else if(!force_single&&!forced_incomplete&&data&&coin(rng)<random_loss)drop=true;
                 if(drop){++stale_drops;continue;}
                 delivery.push_back(packet);
             }
             if(force_single){assert(dropped_data==1);saw_single_fec=true;}
             if(force_double){assert(dropped_data==2);saw_two_loss=true;}
+            if(forced_incomplete)assert(dropped_data==2);
 
-            // Deterministically perturb ordering without changing packet contents.
             for(std::size_t i=1;i<delivery.size();i+=4)std::swap(delivery[i-1],delivery[i]);
 
             bool completed=false;opal::ReassembledFrame assembled;
@@ -89,11 +90,10 @@ int main(){
             }
 
             if(force_single){assert(completed);assert(assembled.data==payload);}
-            if(force_double){assert(!completed);need_keyframe=true;}
+            if(forced_incomplete){assert(!completed);need_keyframe=true;}
             if(completed&&need_keyframe&&assembled.keyframe){assert(assembled.data==payload);need_keyframe=false;saw_recovery=true;}
         }
 
-        // A duplicate valid authenticated packet is rejected by the replay window.
         std::uint64_t duplicate_seq=sequence++;
         auto duplicate_payload=payload_for(generation,200,false);
         auto duplicate_packets=opal::fragment_media_unit(opal::VideoMediaType::VideoH264,0,generation,session_id,500,0,
@@ -104,8 +104,6 @@ int main(){
         opal::ReassembledFrame ignored2;opal::ReassemblyStatus status2=opal::ReassemblyStatus::Incomplete;
         assert(!deliver(keys,replay,reassembler,dup,ignored2,status2));
 
-        // Rekey/reset boundary rejects a still-authentic old-generation packet
-        // even when its sequence has never appeared in the new replay window.
         reassembler.reset(generation+1000,session_id+1000);replay.reset();
         std::uint64_t old_seq=sequence+5000;
         auto old_packets=opal::fragment_media_unit(opal::VideoMediaType::VideoH264,opal::FrameKeyframe,generation,session_id,999,0,
