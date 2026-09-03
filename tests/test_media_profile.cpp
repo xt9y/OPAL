@@ -18,5 +18,9 @@ int main() {
     assert(opal::capture_stale_budget_us(60)>=32000&&opal::capture_stale_budget_us(60)<=34000);
     assert(opal::capture_stale_budget_us(240)==20000);
     assert(opal::capture_stale_budget_us(15)>=133000&&opal::capture_stale_budget_us(15)<=134000);
+    assert(opal::normal_gop_frames(60)==120);
+    assert(opal::normal_gop_frames(120)==240);
+    assert(opal::normal_gop_frames(15)==30);
+    assert(opal::normal_gop_frames(240)==480);
     return 0;
 }
