@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     paths:
+      - tests/test_session.cpp
       - tests/test_direct_video_pipeline.cpp
       - include/opal/video_receiver.hpp
       - src/video_receiver.cpp
@@ -70,7 +71,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev xvfb ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+      - name: Reconnect probe
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
+          for i in $(seq 1 10); do
+            echo "=== reconnect probe $i ==="
+            DISPLAY=:99 make test-session
+          done
       - name: Direct-media reconnect and transport stress
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
           DISPLAY=:99 make all test-net test-session test-direct-video-session test-direct-video-pipeline test-direct-video-stress test-tunnel-recovery
