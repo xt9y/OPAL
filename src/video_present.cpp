@@ -140,11 +140,10 @@ bool VideoPresenter::open(int source_width,int source_height,bool fullscreen){
     unsigned width=fullscreen?static_cast<unsigned>(DisplayWidth(impl_->display,screen)):static_cast<unsigned>(source_width);
     unsigned height=fullscreen?static_cast<unsigned>(DisplayHeight(impl_->display,screen)):static_cast<unsigned>(source_height);
     impl_->window=XCreateWindow(impl_->display,RootWindow(impl_->display,screen),0,0,width,height,0,visual->depth,InputOutput,visual->visual,CWColormap|CWEventMask,&swa);
+    if(impl_->window)impl_->context=glXCreateContext(impl_->display,visual,nullptr,True);
     XFree(visual);
-    if(!impl_->window){close();return false;}
+    if(!impl_->window||!impl_->context){close();return false;}
     XStoreName(impl_->display,impl_->window,"OPAL");
-    impl_->context=glXCreateContext(impl_->display,glXChooseVisual(impl_->display,screen,attrs),nullptr,True);
-    if(!impl_->context){close();return false;}
     XMapRaised(impl_->display,impl_->window);XFlush(impl_->display);
     if(fullscreen)request_fullscreen(impl_->display,impl_->window);
     if(!glXMakeCurrent(impl_->display,impl_->window,impl_->context)){close();return false;}
