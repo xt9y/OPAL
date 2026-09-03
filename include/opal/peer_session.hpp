@@ -3,6 +3,7 @@
 #include <opal/peer_handshake.hpp>
 #include <opal/rendezvous_server.hpp>
 #include <opal/udp_transport.hpp>
+#include <opal/video_packet.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
