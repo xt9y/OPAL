@@ -16,6 +16,7 @@ enum class RendezvousType : std::uint8_t {
     LeaseOk,
     Introduce,
     Offer,
+    Accept,
     Ready,
     RelayRequest,
     RelayReady,
