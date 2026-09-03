@@ -36,6 +36,7 @@ int automatic_bitrate_kbps(int width,int height,int fps){
 }
 
 std::string video_request_line(const std::string &token,int max_width,int max_height,int fps){
+    if(max_width==0&&max_height==0&&fps==60)return "VIDEO "+token;
     return "VIDEO "+token+" "+std::to_string(max_width)+" "+std::to_string(max_height)+" "+std::to_string(fps);
 }
 
