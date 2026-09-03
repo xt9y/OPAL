@@ -4,18 +4,13 @@
 #include <cstdint>
 #include <memory>
 #include <span>
-#include <string_view>
 #include <vector>
-#include <openssl/ssl.h>
 
 namespace opal {
 struct VideoKeys {
     std::array<std::uint8_t,32> send_key{},recv_key{};
     std::array<std::uint8_t,12> send_nonce_base{},recv_nonce_base{};
 };
-
-bool derive_video_keys(SSL*,std::string_view session_token,
-    std::string_view client_pub,std::string_view host_fp,bool client_side,VideoKeys&);
 
 class VideoCipher {
 public:
