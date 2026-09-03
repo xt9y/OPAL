@@ -71,16 +71,18 @@ struct VideoSender::Impl {
         tokens=std::min(2.0*kVideoMaxDatagramBytes,tokens+us*bytes_per_us);
     }
 
-    bool paced_send(std::span<const std::uint8_t> wire,Clock::time_point deadline,bool droppable){
+    bool paced_send(std::span<const std::uint8_t> wire,Clock::time_point deadline){
         if(wire.empty()||wire.size()>kVideoMaxDatagramBytes)return false;
         for(;;){
+            const auto now=Clock::now();if(now>=deadline)return false;
             refill_tokens();if(tokens>=wire.size())break;
             const double bytes_per_us=std::max(0.001,static_cast<double>(target_kbps.load())*1.20/8000.0);
             const auto wait_us=static_cast<long long>(std::ceil((wire.size()-tokens)/bytes_per_us));
-            if(droppable&&Clock::now()+std::chrono::microseconds(wait_us)>deadline)return false;
+            if(now+std::chrono::microseconds(wait_us)>deadline)return false;
             std::this_thread::sleep_for(std::chrono::microseconds(std::clamp<long long>(wait_us,50,1000)));
             if(!run.load())return false;
         }
+        if(Clock::now()>=deadline)return false;
         tokens-=wire.size();return send_datagram(path.socket.fd,path.peer,path.peer_len,wire);
     }
 
@@ -108,7 +110,7 @@ struct VideoSender::Impl {
             any=true;
             if(inject_drop&&header.media_type!=VideoMediaType::Fec&&deliberately_dropped<test_drop_fragments){++deliberately_dropped;continue;}
             std::size_t wire_size=0;
-            if(!encrypt_packet(header,payload,wire_size)||!paced_send(std::span<const std::uint8_t>(wire_buffer.data(),wire_size),deadline,ordinary||audio_frame)){
+            if(!encrypt_packet(header,payload,wire_size)||!paced_send(std::span<const std::uint8_t>(wire_buffer.data(),wire_size),deadline)){
                 ++failures;
                 if(ordinary||audio_frame)break;
             }
@@ -135,9 +137,11 @@ struct VideoSender::Impl {
 
     bool maybe_restart(){
         const auto now=Clock::now();const int target=target_kbps.load(),active=std::max(1,active_kbps.load());
-        const bool bitrate_change=std::abs(target-active)*100>=active*15&&now-last_restart>=std::chrono::seconds(2);
+        const bool material_change=std::abs(target-active)*100>=active*15;
+        const bool bitrate_down=material_change&&target<active&&now-last_restart>=std::chrono::milliseconds(250);
+        const bool bitrate_up=material_change&&target>active&&now-last_restart>=std::chrono::seconds(2);
         const bool idr_change=idr_requested.load()&&now-last_restart>=std::chrono::milliseconds(250);
-        if(!bitrate_change&&!idr_change)return true;
+        if(!bitrate_down&&!bitrate_up&&!idr_change)return true;
         return restart_capture();
     }
 
@@ -151,9 +155,9 @@ struct VideoSender::Impl {
 
     void loop(){
         send_configs();
+        EncodedMediaUnit unit;
         while(run.load()){
             if(!maybe_restart()){run.store(false);break;}
-            EncodedMediaUnit unit;
             if(!capture.next(unit,100)){
                 if(capture.ended()&&!restart_capture()){run.store(false);break;}
                 continue;
