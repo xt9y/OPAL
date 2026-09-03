@@ -43,5 +43,25 @@ int main(){
     assert(data_packets==(frame.size()+opal::kVideoDataFragmentBytes-1)/opal::kVideoDataFragmentBytes);
     assert(fec_packets==(data_packets+9)/10);
     assert(sequence==1+fragments.size());
+
+    // Sender-facing fragmentation must walk spans over the encoded access unit
+    // and one reusable FEC buffer instead of allocating a payload vector for
+    // every ~1.1 KiB datagram.
+    std::uint64_t cursor_sequence=5000;
+    opal::VideoFragmentCursor cursor(opal::VideoMediaType::VideoH264,opal::FrameKeyframe,
+        3,99,11,888000,frame,cursor_sequence,true);
+    assert(cursor.valid());
+    std::size_t cursor_data=0,cursor_fec=0;opal::VideoPacketHeader cursor_header;std::span<const std::uint8_t> cursor_payload;
+    while(cursor.next(cursor_header,cursor_payload)){
+        assert(opal::kVideoHeaderBytes+cursor_payload.size()+opal::kVideoAeadTagBytes<=opal::kVideoMaxDatagramBytes);
+        if(cursor_header.media_type==opal::VideoMediaType::Fec){
+            ++cursor_fec;assert(cursor_payload.size()>=opal::kVideoFecMetadataBytes);
+        }else{
+            ++cursor_data;const auto offset=static_cast<std::size_t>(cursor_header.fragment_index)*opal::kVideoDataFragmentBytes;
+            assert(cursor_payload.data()==frame.data()+offset);
+        }
+    }
+    assert(cursor_data==data_packets&&cursor_fec==fec_packets);
+    assert(cursor_sequence==5000+cursor_data+cursor_fec);
     return 0;
 }
