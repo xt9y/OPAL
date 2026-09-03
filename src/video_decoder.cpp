@@ -8,7 +8,9 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/mem.h>
+#include <libavutil/pixfmt.h>
 }
 
 namespace opal {
@@ -18,52 +20,110 @@ struct VideoDecoder::Impl {
     AVPacket *packet=nullptr;
     AVFrame *scratch=nullptr;
     AVFrame *latest=nullptr;
+    AVFrame *transfer=nullptr;
     std::vector<std::uint8_t> packet_bytes;
     std::string backend="unconfigured";
+    AVPixelFormat hw_pix_fmt=AV_PIX_FMT_NONE;
 
     bool ensure_io(){
         if(!packet)packet=av_packet_alloc();
         if(!scratch)scratch=av_frame_alloc();
         if(!latest)latest=av_frame_alloc();
-        return packet&&scratch&&latest;
+        if(!transfer)transfer=av_frame_alloc();
+        return packet&&scratch&&latest&&transfer;
     }
 
     void clear_latest(){if(latest)av_frame_unref(latest);}
+
+    static AVPixelFormat choose_hw_format(AVCodecContext *context,const AVPixelFormat *formats){
+        auto *self=static_cast<Impl*>(context?context->opaque:nullptr);
+        if(!self||!formats)return AV_PIX_FMT_NONE;
+        for(const AVPixelFormat *p=formats;*p!=AV_PIX_FMT_NONE;++p)if(*p==self->hw_pix_fmt)return *p;
+        return AV_PIX_FMT_NONE;
+    }
+
+    bool copy_extradata(std::span<const std::uint8_t> extradata){
+        if(!ctx||extradata.empty())return ctx!=nullptr;
+        ctx->extradata=static_cast<std::uint8_t*>(av_mallocz(extradata.size()+AV_INPUT_BUFFER_PADDING_SIZE));
+        if(!ctx->extradata)return false;
+        std::memcpy(ctx->extradata,extradata.data(),extradata.size());
+        ctx->extradata_size=static_cast<int>(extradata.size());
+        return true;
+    }
+
+    void configure_common(){
+        ctx->flags|=AV_CODEC_FLAG_LOW_DELAY;
+        ctx->flags2|=AV_CODEC_FLAG2_FAST;
+        ctx->pkt_timebase=AVRational{1,1000000};
+        ctx->time_base=AVRational{1,1000000};
+    }
+
+    void reset_context(){
+        if(ctx)avcodec_free_context(&ctx);
+        hw_pix_fmt=AV_PIX_FMT_NONE;
+    }
+
+    bool open_software(const AVCodec *codec,std::span<const std::uint8_t> extradata){
+        reset_context();ctx=avcodec_alloc_context3(codec);if(!ctx)return false;
+        configure_common();
+        // Frame threading intentionally buffers future pictures. Slice threading can
+        // use multiple cores inside one picture without adding a frame reorder queue.
+        ctx->thread_count=0;
+        ctx->thread_type=FF_THREAD_SLICE;
+        if(!copy_extradata(extradata)||avcodec_open2(ctx,codec,nullptr)<0){reset_context();return false;}
+        backend=(ctx->active_thread_type&FF_THREAD_SLICE)?"software-slice":"software-lowdelay";
+        return true;
+    }
+
+    bool open_hardware(const AVCodec *codec,const AVCodecHWConfig *config,
+                       std::span<const std::uint8_t> extradata){
+        if(!codec||!config||!(config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)||
+           config->device_type==AV_HWDEVICE_TYPE_NONE||config->pix_fmt==AV_PIX_FMT_NONE)return false;
+        AVBufferRef *device=nullptr;
+        if(av_hwdevice_ctx_create(&device,config->device_type,nullptr,nullptr,0)<0||!device){
+            av_buffer_unref(&device);return false;
+        }
+        reset_context();ctx=avcodec_alloc_context3(codec);if(!ctx){av_buffer_unref(&device);return false;}
+        configure_common();
+        hw_pix_fmt=config->pix_fmt;
+        ctx->opaque=this;
+        ctx->get_format=&Impl::choose_hw_format;
+        ctx->thread_count=1;
+        ctx->thread_type=0;
+        ctx->hw_device_ctx=av_buffer_ref(device);
+        av_buffer_unref(&device);
+        if(!ctx->hw_device_ctx||!copy_extradata(extradata)||avcodec_open2(ctx,codec,nullptr)<0){reset_context();return false;}
+        const char *name=av_hwdevice_get_type_name(config->device_type);
+        backend=std::string("hardware-")+(name?name:"unknown");
+        return true;
+    }
 };
 
 VideoDecoder::VideoDecoder():impl_(new Impl){}
 
 bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
     if(!impl_)return false;
-    if(impl_->ctx)avcodec_free_context(&impl_->ctx);
-    impl_->clear_latest();impl_->backend="unconfigured";
-    const char*requested=std::getenv("OPAL_DECODER");
-    if(requested&&*requested&&std::string(requested)!="software"&&std::string(requested)!="auto")return false;
+    impl_->reset_context();impl_->clear_latest();impl_->backend="unconfigured";
+    if(impl_->scratch)av_frame_unref(impl_->scratch);
+    if(impl_->transfer)av_frame_unref(impl_->transfer);
+    const std::string requested=[](){const char *v=std::getenv("OPAL_DECODER");return v&&*v?std::string(v):std::string("auto");}();
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);
     if(!codec||!impl_->ensure_io())return false;
-    impl_->ctx=avcodec_alloc_context3(codec);
-    if(!impl_->ctx)return false;
-    impl_->ctx->flags|=AV_CODEC_FLAG_LOW_DELAY;
-    impl_->ctx->flags2|=AV_CODEC_FLAG2_FAST;
-    // Frame threading adds decode latency. Slice threading can parallelize work
-    // inside one picture without intentionally buffering future pictures.
-    impl_->ctx->thread_count=0;
-    impl_->ctx->thread_type=FF_THREAD_SLICE;
-    impl_->ctx->pkt_timebase=AVRational{1,1000000};
-    impl_->ctx->time_base=AVRational{1,1000000};
-    if(!extradata.empty()){
-        impl_->ctx->extradata=static_cast<std::uint8_t*>(
-            av_mallocz(extradata.size()+AV_INPUT_BUFFER_PADDING_SIZE));
-        if(!impl_->ctx->extradata){avcodec_free_context(&impl_->ctx);return false;}
-        std::memcpy(impl_->ctx->extradata,extradata.data(),extradata.size());
-        impl_->ctx->extradata_size=static_cast<int>(extradata.size());
+    if(requested=="software")return impl_->open_software(codec,extradata);
+
+    bool request_known=requested=="auto";
+    for(int i=0;;++i){
+        const AVCodecHWConfig *config=avcodec_get_hw_config(codec,i);
+        if(!config)break;
+        if(!(config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))continue;
+        const char *name=av_hwdevice_get_type_name(config->device_type);
+        if(!name)continue;
+        if(requested!=std::string("auto")&&requested!=name)continue;
+        request_known=true;
+        if(impl_->open_hardware(codec,config,extradata))return true;
     }
-    if(avcodec_open2(impl_->ctx,codec,nullptr)<0){
-        avcodec_free_context(&impl_->ctx);
-        return false;
-    }
-    impl_->backend=(impl_->ctx->active_thread_type&FF_THREAD_SLICE)?"software-slice":"software-lowdelay";
-    return true;
+    if(requested!="auto")return false;
+    return request_known&&impl_->open_software(codec,extradata);
 }
 
 bool VideoDecoder::decode_latest(std::span<const std::uint8_t> unit,std::int64_t pts_us,
@@ -94,8 +154,18 @@ bool VideoDecoder::decode_latest(std::span<const std::uint8_t> unit,std::int64_t
         if((impl_->scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||impl_->scratch->decode_error_flags!=0){
             av_frame_unref(impl_->scratch);impl_->clear_latest();return false;
         }
+        AVFrame *ready=impl_->scratch;
+        if(impl_->hw_pix_fmt!=AV_PIX_FMT_NONE&&impl_->scratch->format==impl_->hw_pix_fmt){
+            av_frame_unref(impl_->transfer);
+            if(av_hwframe_transfer_data(impl_->transfer,impl_->scratch,0)<0||
+               av_frame_copy_props(impl_->transfer,impl_->scratch)<0){
+                av_frame_unref(impl_->scratch);impl_->clear_latest();return false;
+            }
+            ready=impl_->transfer;
+        }
         av_frame_unref(impl_->latest);
-        av_frame_move_ref(impl_->latest,impl_->scratch);
+        if(ready==impl_->scratch)av_frame_move_ref(impl_->latest,impl_->scratch);
+        else{av_frame_move_ref(impl_->latest,impl_->transfer);av_frame_unref(impl_->scratch);}
         ++decoded;
     }
     if(decoded==0)return true;
@@ -123,15 +193,17 @@ void VideoDecoder::flush(){
     if(impl_->ctx)avcodec_flush_buffers(impl_->ctx);
     impl_->clear_latest();
     if(impl_->scratch)av_frame_unref(impl_->scratch);
+    if(impl_->transfer)av_frame_unref(impl_->transfer);
     if(impl_->packet)av_packet_unref(impl_->packet);
 }
 
 VideoDecoder::~VideoDecoder(){
     if(impl_){
-        if(impl_->ctx)avcodec_free_context(&impl_->ctx);
+        impl_->reset_context();
         if(impl_->packet)av_packet_free(&impl_->packet);
         if(impl_->scratch)av_frame_free(&impl_->scratch);
         if(impl_->latest)av_frame_free(&impl_->latest);
+        if(impl_->transfer)av_frame_free(&impl_->transfer);
         delete impl_;impl_=nullptr;
     }
 }
