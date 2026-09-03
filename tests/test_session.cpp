@@ -182,7 +182,11 @@ int main(){
     assert(!player_args.empty());
     assert(player_args.find("driver=x11")!=std::string::npos);
     assert(player_args.find("driver=wayland")==std::string::npos);
-    assert(player_args.find("-fflags nobuffer")==std::string::npos);
+    assert(player_args.find("-fflags nobuffer")!=std::string::npos);
+    assert(player_args.find("-avioflags direct")!=std::string::npos);
+    assert(player_args.find("-probesize 32")!=std::string::npos);
+    assert(player_args.find("-analyzeduration 0")!=std::string::npos);
+    assert(player_args.find("-sync video")!=std::string::npos);
     setenv("PATH",old_path.c_str(),1);
     if(had_display)setenv("DISPLAY",old_display.c_str(),1);else unsetenv("DISPLAY");
     if(had_wayland)setenv("WAYLAND_DISPLAY",old_wayland.c_str(),1);else unsetenv("WAYLAND_DISPLAY");
