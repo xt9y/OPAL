@@ -13,4 +13,5 @@ StreamOptions default_stream_options();
 bool stream_mode_limit(const std::string &mode,int &max_width,int &max_height);
 int automatic_bitrate_kbps(int width,int height,int fps);
 std::uint64_t capture_stale_budget_us(int fps);
+int normal_gop_frames(int fps);
 }
