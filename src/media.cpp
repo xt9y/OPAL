@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <fcntl.h>
 #include <poll.h>
-#include <sstream>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -17,24 +16,6 @@ static void cloexec(int fd){int f=fcntl(fd,F_GETFD,0);if(f>=0)fcntl(fd,F_SETFD,f
 static void group_child(){setpgid(0,0);}
 static void group_parent(pid_t pid){if(pid>0)setpgid(pid,pid);}
 static void stop_group(pid_t pid){if(pid<=0)return;int status=0;pid_t rc=waitpid(pid,&status,WNOHANG);kill(-pid,SIGTERM);auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);while(rc==0&&std::chrono::steady_clock::now()<deadline){usleep(25000);rc=waitpid(pid,&status,WNOHANG);}kill(-pid,SIGKILL);if(rc==0)while(waitpid(pid,&status,0)<0&&errno==EINTR){};}
-
-std::string video_request_line(const std::string &token,int max_width,int max_height,int fps){
-    if(max_width==0&&max_height==0&&fps==60)return "VIDEO "+token;
-    return "VIDEO "+token+" "+std::to_string(max_width)+" "+std::to_string(max_height)+" "+std::to_string(fps);
-}
-
-bool parse_video_request_line(const std::string &line,std::string &token,int &max_width,int &max_height,int &fps){
-    std::istringstream ss(line);std::string word,extra;
-    if(!(ss>>word>>token)||word!="VIDEO"||token.empty())return false;
-    max_width=0;max_height=0;fps=60;
-    if(ss>>max_width){
-        if(!(ss>>max_height>>fps))return false;
-        if(ss>>extra)return false;
-    }else if(!ss.eof())return false;
-    bool native=max_width==0&&max_height==0;
-    bool limited=max_width>0&&max_height>0&&max_width<=7680&&max_height<=4320;
-    return (native||limited)&&fps>=15&&fps<=240;
-}
 
 std::string capture_command(bool gsr,int fps,int bitrate,bool audio,const std::string &portal_token_file,int max_width,int max_height){
     fps=std::clamp(fps,15,240);bitrate=std::clamp(bitrate,1000,100000);
@@ -62,7 +43,6 @@ int read_capture(CaptureProcess &capture,void *buffer,size_t size,int timeout_ms
 void stop_capture(CaptureProcess &capture){if(capture.fd>=0){close(capture.fd);capture.fd=-1;}stop_group(capture.pid);capture.pid=-1;}
 
 SinkProcess start_sink(const std::string &command){int fds[2];if(pipe(fds)!=0)return{};cloexec(fds[0]);cloexec(fds[1]);pid_t pid=fork();if(pid<0){close(fds[0]);close(fds[1]);return{};}if(pid==0){group_child();dup2(fds[0],STDIN_FILENO);close(fds[0]);close(fds[1]);execl("/bin/sh","sh","-c",command.c_str(),static_cast<char*>(nullptr));_exit(127);}group_parent(pid);close(fds[0]);return{pid,fds[1]};}
-int video_player_write_timeout_ms(){return 2000;}
 bool write_sink_timeout(SinkProcess &sink,const void *data,size_t size,int timeout_ms){if(sink.fd<0)return false;auto*p=static_cast<const unsigned char*>(data);auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));while(size){auto now=std::chrono::steady_clock::now();if(now>=deadline)return false;auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count();pollfd f{sink.fd,POLLOUT,0};int rc=poll(&f,1,static_cast<int>(std::max<long long>(1,ms)));if(rc<0&&errno==EINTR)continue;if(rc<=0||f.revents&(POLLERR|POLLHUP|POLLNVAL))return false;ssize_t n=write(sink.fd,p,size);if(n<0&&errno==EINTR)continue;if(n<=0)return false;p+=n;size-=static_cast<size_t>(n);}return true;}
 void stop_sink(SinkProcess &sink){if(sink.fd>=0){close(sink.fd);sink.fd=-1;}stop_group(sink.pid);sink.pid=-1;}
 }
