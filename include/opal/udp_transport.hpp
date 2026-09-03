@@ -7,6 +7,9 @@
 #include <sys/socket.h>
 
 namespace opal {
+constexpr int kUdpQueueBufferBytes=64*1024;
+constexpr int kUdpInteractiveTrafficClass=0xb8; // DSCP EF, ECN bits clear
+
 enum class CandidateType { Local, ServerReflexive };
 
 struct StunEndpoint {
