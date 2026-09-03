@@ -1,5 +1,11 @@
 name: CI
 on:
+  push:
+    branches: [main]
+    paths:
+      - tests/test_direct_video_pipeline.cpp
+      - include/opal/video_receiver.hpp
+      - src/video_receiver.cpp
   workflow_dispatch:
     inputs:
       target:
@@ -16,7 +22,7 @@ on:
 
 jobs:
   linux:
-    if: ${{ inputs.target == 'full' || inputs.target == 'linux' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'linux') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +34,7 @@ jobs:
           DISPLAY=:99 make test
 
   sanitize:
-    if: ${{ inputs.target == 'full' || inputs.target == 'sanitize' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'sanitize') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +49,7 @@ jobs:
           DISPLAY=:99 make clean test-direct-media-sanitize CXX=clang++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
 
   thread-sanitize:
-    if: ${{ inputs.target == 'full' || inputs.target == 'thread-sanitize' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'thread-sanitize') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +64,7 @@ jobs:
           CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-omit-frame-pointer'
 
   stress:
-    if: ${{ inputs.target == 'full' || inputs.target == 'stress' }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'stress')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
