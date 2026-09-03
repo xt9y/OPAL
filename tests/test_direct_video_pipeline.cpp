@@ -41,7 +41,7 @@ int line_count(const std::filesystem::path &path){std::ifstream in(path);int cou
 void run_capture_eof_recovery(std::uint32_t generation){
     const auto marker=std::filesystem::temp_directory_path()/("opal-capture-restart-"+std::to_string(getpid())+".log");
     std::filesystem::remove(marker);
-    const std::string command="sh -c 'if [ -s \""+marker.string()+"\" ]; then sleep 2; fi; echo start >> \""+marker.string()+"\"; exec ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 8 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 4 -keyint_min 4 -sc_threshold 0 -an -f flv pipe:1'";
+    const std::string command="sh -c 'if [ -s \""+marker.string()+"\" ]; then sleep 2; fi; echo start >> \""+marker.string()+"\"; exec ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 4 -keyint_min 4 -sc_threshold 0 -an -f flv pipe:1'";
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);
     auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();assert(sender_socket.fd>=0&&receiver_socket.fd>=0);
     auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);
