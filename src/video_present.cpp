@@ -74,15 +74,33 @@ void main(){
     return program;
 }
 
-void pack_plane(const std::uint8_t *src,int stride,int width,int height,std::vector<std::uint8_t>&scratch){
-    scratch.resize(static_cast<std::size_t>(width)*static_cast<std::size_t>(height));
-    for(int y=0;y<height;++y)std::memcpy(scratch.data()+static_cast<std::size_t>(y)*width,src+static_cast<std::ptrdiff_t>(y)*stride,width);
+const void *upload_source(const std::uint8_t *src,int stride,int width,int height,
+                          int bytes_per_pixel,std::vector<std::uint8_t> &scratch,
+                          int &row_length){
+    row_length=0;
+    if(!src||width<=0||height<=0||bytes_per_pixel<=0)return nullptr;
+    const int row_bytes=width*bytes_per_pixel;
+    if(stride>0&&stride>=row_bytes&&stride%bytes_per_pixel==0){
+        row_length=stride/bytes_per_pixel;
+        return src;
+    }
+    scratch.resize(static_cast<std::size_t>(row_bytes)*static_cast<std::size_t>(height));
+    for(int y=0;y<height;++y)
+        std::memcpy(scratch.data()+static_cast<std::size_t>(y)*row_bytes,
+                    src+static_cast<std::ptrdiff_t>(y)*stride,row_bytes);
+    return scratch.data();
 }
 
-const void *contiguous_plane(const std::uint8_t *src,int stride,int width,int height,std::vector<std::uint8_t>&scratch){
-    if(stride==width)return src;
-    pack_plane(src,stride,width,height,scratch);
-    return scratch.data();
+void upload_plane(GLenum texture_unit,GLuint texture,GLenum format,int width,int height,
+                  const std::uint8_t *src,int stride,int bytes_per_pixel,
+                  std::vector<std::uint8_t> &scratch){
+    int row_length=0;
+    const void *pixels=upload_source(src,stride,width,height,bytes_per_pixel,scratch,row_length);
+    if(!pixels)return;
+    glActiveTexture(texture_unit);glBindTexture(GL_TEXTURE_2D,texture);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,row_length);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,width,height,format,GL_UNSIGNED_BYTE,pixels);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
 }
 
 void request_fullscreen(Display *display,Window window){
@@ -132,9 +150,12 @@ struct VideoPresenter::Impl {
     Colormap colormap=0;
     GLXContext context=nullptr;
     GLuint program=0;
+    GLint nv12_uniform=-1;
     std::array<GLuint,4> textures{};
     int source_width=0,source_height=0;
     int texture_width=0,texture_height=0;
+    int window_width=1,window_height=1;
+    std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv;
 
     bool init_gl(){
         program=make_program();if(!program)return false;
@@ -151,8 +172,9 @@ struct VideoPresenter::Impl {
         glUniform1i(glGetUniformLocation(program,"tex_u"),1);
         glUniform1i(glGetUniformLocation(program,"tex_v"),2);
         glUniform1i(glGetUniformLocation(program,"tex_uv"),3);
+        nv12_uniform=glGetUniformLocation(program,"nv12");
         glUseProgram(0);
-        return true;
+        return nv12_uniform>=0;
     }
 
     void ensure_texture_storage(int width,int height){
@@ -167,6 +189,17 @@ struct VideoPresenter::Impl {
         glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,cw,ch,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,nullptr);
         glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,textures[3]);
         glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE_ALPHA,cw,ch,0,GL_LUMINANCE_ALPHA,GL_UNSIGNED_BYTE,nullptr);
+    }
+
+    void consume_window_events(){
+        if(!display)return;
+        while(XPending(display)>0){
+            XEvent event{};XNextEvent(display,&event);
+            if(event.type==ConfigureNotify&&event.xconfigure.window==window){
+                window_width=std::max(1,event.xconfigure.width);
+                window_height=std::max(1,event.xconfigure.height);
+            }
+        }
     }
 };
 
@@ -185,6 +218,7 @@ bool VideoPresenter::open(int source_width,int source_height,bool fullscreen){
     XSetWindowAttributes swa{};swa.colormap=impl_->colormap;swa.event_mask=StructureNotifyMask|ExposureMask|KeyPressMask|KeyReleaseMask|PointerMotionMask|ButtonPressMask|ButtonReleaseMask;
     unsigned width=fullscreen?static_cast<unsigned>(DisplayWidth(impl_->display,screen)):static_cast<unsigned>(source_width);
     unsigned height=fullscreen?static_cast<unsigned>(DisplayHeight(impl_->display,screen)):static_cast<unsigned>(source_height);
+    impl_->window_width=static_cast<int>(width);impl_->window_height=static_cast<int>(height);
     impl_->window=XCreateWindow(impl_->display,RootWindow(impl_->display,screen),0,0,width,height,0,visual->depth,InputOutput,visual->visual,CWColormap|CWEventMask,&swa);
     if(impl_->window)impl_->context=glXCreateContext(impl_->display,visual,nullptr,True);
     XFree(visual);
@@ -208,33 +242,28 @@ bool VideoPresenter::present(DecodedVideoFrame decoded){
     auto release=[&]{av_frame_free(&frame);};
     if(!impl_||!impl_->display||!impl_->window||!impl_->context){release();return false;}
     if(frame->width<=0||frame->height<=0){release();return false;}
-    bool yuv420=frame->format==AV_PIX_FMT_YUV420P||frame->format==AV_PIX_FMT_YUVJ420P;
-    bool nv12=frame->format==AV_PIX_FMT_NV12;
+    const bool yuv420=frame->format==AV_PIX_FMT_YUV420P||frame->format==AV_PIX_FMT_YUVJ420P;
+    const bool nv12=frame->format==AV_PIX_FMT_NV12;
     if(!yuv420&&!nv12){release();return false;}
     if(!glXMakeCurrent(impl_->display,impl_->window,impl_->context)){release();return false;}
-    XWindowAttributes wa{};if(!XGetWindowAttributes(impl_->display,impl_->window,&wa)){release();return false;}
-    glViewport(0,0,std::max(1,wa.width),std::max(1,wa.height));glClear(GL_COLOR_BUFFER_BIT);
-    fitted_viewport(wa.width,wa.height,frame->width,frame->height);
+    impl_->consume_window_events();
+    glViewport(0,0,impl_->window_width,impl_->window_height);glClear(GL_COLOR_BUFFER_BIT);
+    fitted_viewport(impl_->window_width,impl_->window_height,frame->width,frame->height);
     impl_->ensure_texture_storage(frame->width,frame->height);
-    std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv;
-    const void *y=contiguous_plane(frame->data[0],frame->linesize[0],frame->width,frame->height,scratch_y);
-    glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,impl_->textures[0]);
-    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,frame->width,frame->height,GL_LUMINANCE,GL_UNSIGNED_BYTE,y);
+    upload_plane(GL_TEXTURE0,impl_->textures[0],GL_LUMINANCE,frame->width,frame->height,
+                 frame->data[0],frame->linesize[0],1,impl_->scratch_y);
     if(yuv420){
-        int cw=(frame->width+1)/2,ch=(frame->height+1)/2;
-        const void *u=contiguous_plane(frame->data[1],frame->linesize[1],cw,ch,scratch_u);
-        const void *v=contiguous_plane(frame->data[2],frame->linesize[2],cw,ch,scratch_v);
-        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,impl_->textures[1]);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,cw,ch,GL_LUMINANCE,GL_UNSIGNED_BYTE,u);
-        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,impl_->textures[2]);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,cw,ch,GL_LUMINANCE,GL_UNSIGNED_BYTE,v);
+        const int cw=(frame->width+1)/2,ch=(frame->height+1)/2;
+        upload_plane(GL_TEXTURE1,impl_->textures[1],GL_LUMINANCE,cw,ch,
+                     frame->data[1],frame->linesize[1],1,impl_->scratch_u);
+        upload_plane(GL_TEXTURE2,impl_->textures[2],GL_LUMINANCE,cw,ch,
+                     frame->data[2],frame->linesize[2],1,impl_->scratch_v);
     }else{
-        int cw=(frame->width+1)/2,ch=(frame->height+1)/2,row_bytes=cw*2;
-        const void *uv=contiguous_plane(frame->data[1],frame->linesize[1],row_bytes,ch,scratch_uv);
-        glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,impl_->textures[3]);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,cw,ch,GL_LUMINANCE_ALPHA,GL_UNSIGNED_BYTE,uv);
+        const int cw=(frame->width+1)/2,ch=(frame->height+1)/2;
+        upload_plane(GL_TEXTURE3,impl_->textures[3],GL_LUMINANCE_ALPHA,cw,ch,
+                     frame->data[1],frame->linesize[1],2,impl_->scratch_uv);
     }
-    glUseProgram(impl_->program);glUniform1i(glGetUniformLocation(impl_->program,"nv12"),nv12?1:0);
+    glUseProgram(impl_->program);glUniform1i(impl_->nv12_uniform,nv12?1:0);
     glBegin(GL_TRIANGLE_STRIP);
     glTexCoord2f(0.f,1.f);glVertex2f(-1.f,-1.f);
     glTexCoord2f(1.f,1.f);glVertex2f(1.f,-1.f);
