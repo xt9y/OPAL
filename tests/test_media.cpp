@@ -37,7 +37,6 @@ int main() {
         opal::stop_capture(capture);
     }
     {
-        // Generic bounded process input remains for the privileged input helper.
         auto sink=opal::start_sink("cat >/dev/null");
         assert(sink.pid>0&&sink.fd>=0);
         std::string burst(32*1024,'I');
@@ -70,7 +69,7 @@ int main() {
         assert(first.find("-s 1920x1080")!=std::string::npos);
         assert(first.find("-keyint 0.25")!=std::string::npos);
         assert(first.find("-tune performance")!=std::string::npos);
-        assert(first.find("-c flv")!=std::string::npos); // internal capture container only
+        assert(first.find("-c flv")!=std::string::npos);
         {std::ofstream f(token);f<<"restore-token";}
         auto restored=opal::capture_command(true,60,30000,true,token,0,0);
         assert(restored.find("-restore-portal-session yes")!=std::string::npos);
@@ -86,7 +85,7 @@ int main() {
         assert(fallback.find("-g 15")!=std::string::npos);
         assert(fallback.find("-bufsize 1000k")!=std::string::npos);
         assert(fallback.find("-bufsize 30000k")==std::string::npos);
-        assert(fallback.find("-f flv pipe:1")!=std::string::npos); // demuxed before UDP
+        assert(fallback.find("-f flv pipe:1")!=std::string::npos);
     }
     {
         auto session=read_file("src/session.cpp");
@@ -99,7 +98,11 @@ int main() {
         auto sender=read_file("src/video_sender.cpp");
         assert(sender.find("automatic_bitrate_kbps")!=std::string::npos);
         assert(sender.find("type==VideoMediaType::VideoH264")!=std::string::npos);
-        assert(sender.find("fragment_media_unit")!=std::string::npos);
+        assert(sender.find("VideoFragmentCursor")!=std::string::npos);
+        assert(sender.find("fragment_media_unit") == std::string::npos);
+        assert(sender.find("target<active")!=std::string::npos);
+        assert(sender.find("now-last_restart>=std::chrono::milliseconds(250)")!=std::string::npos);
+        assert(sender.find("Clock::now()>=deadline")!=std::string::npos);
     }
     std::cout<<"media tests passed\n";
 }
