@@ -1,5 +1,6 @@
 #include <opal/setup.hpp>
 #include <opal/config.hpp>
+#include <opal/media.hpp>
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -12,6 +13,7 @@ int interactive_select();
 int interactive_remove();
 int init_calls=0,host_setup_calls=0,host_run_calls=0,host_service_calls=0,client_calls=0,wake_calls=0,add_calls=0,tunnel_setup_calls=0,tunnel_start_calls=0;
 std::string client_target,added_address,wake_target;
+StreamOptions client_stream;
 
 int init(){++init_calls;ensure_layout(Paths::load());return 0;}
 int doctor(){return 0;}
@@ -21,7 +23,8 @@ int host_service(bool){++host_service_calls;return 0;}
 int bridge_setup(const char*){return 0;}
 int hosts_list(){return 0;}
 int hosts_add(const std::string&name,const std::string&address,const std::string&mac){++add_calls;added_address=address;Ini h;h.load(Paths::load().hosts);h.set(name,"address",address);if(!mac.empty())h.set(name,"mac",mac);h.save(Paths::load().hosts);return 0;}
-int client_connect(const std::string&target,const std::string&){++client_calls;client_target=target;return 0;}
+int client_connect(const std::string&target,const std::string&password,const StreamOptions&stream){(void)password;++client_calls;client_target=target;client_stream=stream;return 0;}
+int client_connect(const std::string&target,const std::string&password){return client_connect(target,password,{});}
 int wake_named(const std::string&name){++wake_calls;wake_target=name;return 0;}
 int tunnel_host_setup(std::string &code){++tunnel_setup_calls;code="opal:control-token,video-token";return 0;}
 int tunnel_host_start(){++tunnel_start_calls;return 0;}
@@ -30,7 +33,7 @@ bool tunnel_connection_code(const std::string&code,std::string*control,std::stri
 
 static void reset_calls(){
     opal::init_calls=opal::host_setup_calls=opal::host_run_calls=opal::host_service_calls=opal::client_calls=opal::wake_calls=opal::add_calls=opal::tunnel_setup_calls=opal::tunnel_start_calls=0;
-    opal::client_target.clear();opal::added_address.clear();opal::wake_target.clear();
+    opal::client_target.clear();opal::added_address.clear();opal::wake_target.clear();opal::client_stream={};
 }
 
 static std::filesystem::path fresh(const char*name){
@@ -51,6 +54,7 @@ static int run_with(Fn fn,const std::string&input,std::string*out=nullptr,std::s
 }
 
 static int run_default(const std::string&input,std::string*out=nullptr,std::string*err=nullptr){return run_with([]{return opal::interactive_run();},input,out,err);}
+static int run_default_stream(const opal::StreamOptions&stream,const std::string&input){return run_with([&]{return opal::interactive_run(stream);},input);}
 
 int main(){
     {
@@ -80,6 +84,12 @@ int main(){
     {
         auto p=fresh("opal-auto-client-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.set("desktop","mac","00:11:22:33:44:55");h.save(p/"hosts.ini");
         assert(run_default("")==0);assert(opal::wake_calls==1);assert(opal::wake_target=="desktop");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
+    }
+    {
+        auto p=fresh("opal-stream-override-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.save(p/"hosts.ini");
+        opal::StreamOptions stream{2560,1440,120};
+        assert(run_default_stream(stream,"")==0);assert(opal::client_calls==1);assert(opal::client_stream.max_width==2560);assert(opal::client_stream.max_height==1440);assert(opal::client_stream.fps==120);
+        opal::Ini saved;assert(saved.load(p/"config.ini"));assert(saved.get("opal","stream_width").empty());assert(saved.get("opal","stream_height").empty());assert(saved.get("opal","stream_fps").empty());
     }
     {
         auto p=fresh("opal-select-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","alpha");c.save(p/"config.ini");opal::Ini h;h.set("alpha","address","opal:control-token,video-token");h.set("beta","address","opal:control-token,video-token");h.save(p/"hosts.ini");
