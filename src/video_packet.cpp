@@ -12,6 +12,8 @@ std::uint64_t get64(const std::uint8_t *p){std::uint64_t v=0;for(int i=0;i<8;++i
 bool valid_type(VideoMediaType type){const auto v=static_cast<unsigned>(type);return v>=1&&v<=5;}
 }
 
+bool use_fec_for_media(VideoMediaType type){return type==VideoMediaType::VideoH264;}
+
 std::array<std::uint8_t,kVideoHeaderBytes> serialize_video_header(const VideoPacketHeader &h){
     std::array<std::uint8_t,kVideoHeaderBytes> out{};
     put32(out.data(),h.magic);out[4]=h.version;out[5]=static_cast<std::uint8_t>(h.media_type);
