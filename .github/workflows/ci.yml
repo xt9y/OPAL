@@ -1,9 +1,5 @@
 name: CI
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/ci.yml
   workflow_dispatch:
     inputs:
       target:
@@ -20,7 +16,7 @@ on:
 
 jobs:
   linux:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'linux')) }}
+    if: ${{ inputs.target == 'full' || inputs.target == 'linux' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +28,7 @@ jobs:
           DISPLAY=:99 make test
 
   sanitize:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'sanitize')) }}
+    if: ${{ inputs.target == 'full' || inputs.target == 'sanitize' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +43,7 @@ jobs:
           DISPLAY=:99 make clean test-direct-media-sanitize CXX=clang++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
 
   thread-sanitize:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'thread-sanitize')) }}
+    if: ${{ inputs.target == 'full' || inputs.target == 'thread-sanitize' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +57,7 @@ jobs:
           DISPLAY=:99 make clean test-session test-direct-video-session test-direct-video-pipeline test-direct-video-stress CXX=g++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-omit-frame-pointer'
 
   stress:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'full' || inputs.target == 'stress')) }}
+    if: ${{ inputs.target == 'full' || inputs.target == 'stress' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
