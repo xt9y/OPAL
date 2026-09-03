@@ -1,16 +1,20 @@
 # OPAL
 
-[![CI](https://github.com/xt9y/OPAL/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xt9y/OPAL/actions/workflows/ci.yml?query=branch%3Amain)
+[![CI](https://github.com/xt9y/OPAL/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xt9y/OPAL/actions/workflows/ci.yml)
 
-Native Linux remote desktop.
+Native Linux remote desktop focused on minimum interactive latency.
 
-- Native-resolution fullscreen desktop mirroring and remote control.
-- 60 FPS H.264/AAC capture target with automatic video-session recovery.
+- Plain `opal` streams at a 1920x1080 ceiling and 60 FPS by default; lower-resolution hosts are never upscaled.
+- Temporary `--mode` / `--fps` overrides support native, 1440p, 4K and 15-240 FPS operation.
+- GPU Screen Recorder H.264/AAC capture is preferred; FFmpeg is the fallback capture backend.
+- Video/audio media uses **direct encrypted UDP only**. There is no zrok-video or TCP-video fallback.
+- zrok2 carries only the authenticated TLS 1.3 control/input connection.
+- Media keys are derived from the authenticated TLS control generation and datagrams use ChaCha20-Poly1305.
+- Frame-aware UDP packetization, bounded XOR FEC, stale-frame dropping and short IDR recovery keep the client near the live edge instead of buffering old video.
+- Native libavcodec H.264 decode and an OPAL-owned X11/GLX presenter replace FFplay.
+- Audio has a bounded <=40 ms queue and never gates video presentation.
 - XInput2 keyboard/pointer capture with an X11 compatibility fallback.
 - Linux uinput injection with full `KEY_MAX` support and stuck-input cleanup.
-- TLS 1.3 transport with Ed25519 device authentication and certificate-bound first pairing.
-- GPU Screen Recorder preferred, FFmpeg fallback.
-- zrok2 private tunnels are the single normal network transport.
 - Persistent systemd user host service that waits for clients in the background.
 - Configuration under `~/.opal/`.
 
@@ -19,16 +23,20 @@ Native Linux remote desktop.
 Fedora / Fedora Asahi Remix with RPM Fusion FFmpeg:
 
 ```bash
-sudo dnf install -y gcc-c++ make openssl-devel libX11-devel libXi-devel ffmpeg ffmpeg-devel
+sudo dnf install -y \
+  gcc-c++ make openssl-devel libX11-devel libXi-devel libglvnd-devel \
+  pulseaudio-libs-devel ffmpeg ffmpeg-devel
 ```
 
 Debian / Ubuntu:
 
 ```bash
-sudo apt-get install -y g++ make libssl-dev libx11-dev libxi-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev
+sudo apt-get install -y \
+  g++ make libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev \
+  ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
 ```
 
-GPU Screen Recorder is recommended for Wayland capture. OPAL enables H.264 CPU fallback when a usable hardware encoder is unavailable.
+GPU Screen Recorder is recommended for the lowest-latency Wayland/X11 capture path. OPAL enables its H.264 CPU fallback when a usable hardware encoder is unavailable.
 
 ## Install
 
@@ -40,7 +48,7 @@ sudo make install
 systemctl --user daemon-reload
 ```
 
-Install `zrok2` on both Linux computers with the universal installer. The temporary directory is private and is removed on exit, so another local user cannot substitute a predictable `/tmp` payload before the privileged install step:
+Install `zrok2` on both Linux computers with the universal installer. zrok is used for control only:
 
 ```bash
 set -euo pipefail
@@ -65,13 +73,21 @@ sudo install -m 0755 "$tmpdir/zrok2" /usr/local/bin/zrok2
 zrok2 version
 ```
 
-Then just run:
+Then run:
 
 ```bash
 opal
 ```
 
-The first run opens OPAL setup. A host setup creates two persistent private zrok2 shares and enables `opal-host.service`. The daemon binds only to loopback; zrok2 is the Internet-facing transport.
+The first run opens OPAL setup. Host setup creates one persistent private zrok2 **control** share and enables `opal-host.service`. The host control listener remains loopback-only behind zrok. Media does not pass through zrok.
+
+The host prints a connection code in this form:
+
+```text
+opal:CONTROL_TOKEN
+```
+
+Old `opal:CONTROL_TOKEN,VIDEO_TOKEN` codes remain readable only so OPAL can migrate/clean legacy resources. The legacy token is never used to carry media.
 
 Check the host service with:
 
@@ -79,22 +95,41 @@ Check the host service with:
 systemctl --user status opal-host.service
 ```
 
-The first Wayland capture can display the desktop portal screen-selection prompt. OPAL stores the GPU Screen Recorder portal-session token under `~/.opal/` and attempts to reuse it for later/recovered video sessions. If the compositor rejects the saved portal session, OPAL discards that token and allows a fresh screen selection.
+The first Wayland capture can display the desktop portal screen-selection prompt. OPAL stores the GPU Screen Recorder portal-session token under `~/.opal/` and attempts to reuse it for later/recovered capture generations.
 
-The first host setup prints an OPAL connection code and a high-entropy pairing password. Enter the connection code on the client. After a successful pairing, OPAL rotates the host pairing password and later connections use the saved Ed25519 identity plus the pinned host certificate fingerprint.
+The first client pairing uses the host pairing password. After successful pairing, OPAL rotates that password and later connections use the saved Ed25519 client identity plus the pinned host certificate fingerprint.
 
-If zrok2 is installed but not enabled, OPAL asks for your zrok enable token and runs `zrok2 enable` for you.
+If zrok2 is installed but not enabled, OPAL asks for the zrok enable token and runs `zrok2 enable`.
 
-On a client, plain `opal` uses the selected saved host. If that host has a saved MAC address, OPAL sends Wake-on-LAN automatically before connecting.
+## Direct video requirement
 
-During a connection, OPAL keeps the authenticated control session separate from the replaceable video/player session. If capture, transport, or FFplay stalls, normal output reports:
+After the TLS control session authenticates, both peers gather local/STUN UDP candidates and attempt authenticated UDP hole punching. Direct video setup has a five-second deadline.
 
-```text
-Video stalled; reconnecting...
-Video restored.
+If the two networks cannot establish peer-to-peer UDP—for example some symmetric-NAT/CGNAT combinations—OPAL intentionally fails video with a direct-path error. It does **not** switch to relayed zrok video or ordered TCP video, because those fallbacks would reintroduce the latency architecture OPAL is designed to avoid.
+
+Each recovered control generation negotiates a fresh UDP path and fresh TLS-exported media keys before media resumes.
+
+## Stream profiles
+
+Plain:
+
+```bash
+opal
 ```
 
-and OPAL reconnects video without re-pairing or stopping the host.
+means a 1920x1080 ceiling at 60 FPS.
+
+Per-run overrides are not persisted:
+
+```bash
+opal --mode max
+opal --mode 1440p
+opal --mode 4k
+opal --fps 120
+opal --mode 1440p --fps 120
+```
+
+OPAL keeps at most bounded in-progress compressed state, does not maintain a conventional playback queue, and discards stale/incomplete ordinary video instead of drifting behind real time. IDR cadence is approximately 250 ms and packet loss can be repaired by bounded XOR FEC when exactly one fragment in a group is missing.
 
 Release remote keyboard/mouse control with:
 
@@ -102,13 +137,13 @@ Release remote keyboard/mouse control with:
 Ctrl+Alt+Shift+Q
 ```
 
-For raw zrok2/GPU Screen Recorder/FFplay diagnostics:
+For direct-media diagnostics and latency telemetry:
 
 ```bash
 OPAL_DEBUG=1 opal
 ```
 
-Normal `opal` output intentionally suppresses those subprocess diagnostics.
+Debug output reports media loss/bitrate and stage timing without changing the no-playback-clock presentation policy.
 
 ## Commands
 
@@ -118,7 +153,7 @@ opal select      Select a saved host
 opal new         Run setup / add another host
 opal remove      Remove a saved host
 opal restart     Restart OPAL services
-opal clean       Remove OPAL state and OPAL zrok resources
+opal clean       Remove OPAL state and OPAL zrok control resources
 opal doctor      Check local requirements
 opal version     Show the version
 opal help        Show command help
@@ -132,20 +167,19 @@ To completely reset OPAL and the zrok resources associated with it on the curren
 opal clean
 ```
 
-This stops and disables the local OPAL host/bridge services, terminates local zrok2 private share/access tunnel processes, enumerates and deletes zrok access frontends associated with OPAL's saved control/video tokens, deletes the persistent zrok shares created by this computer's OPAL host setup, and removes `~/.opal` including saved hosts, pairings, identities, connection codes, portal-session state, and OPAL configuration.
+This stops local OPAL services, terminates OPAL-owned zrok private control processes, deletes the persistent control share, removes known legacy OPAL video shares when present, and removes `~/.opal` after remote cleanup is confirmed.
 
-Client access tunnels are launched with zrok2 local-only access mode so new connections do not register persistent access frontends with the zrok agent.
+`opal clean` intentionally does **not** run `zrok2 disable` and does not remove `~/.zrok2`, so the global zrok environment/login stays enabled. If remote cleanup cannot be confirmed, OPAL preserves its local state so cleanup can be retried with the saved resource identifiers.
 
-`opal clean` intentionally does **not** run `zrok2 disable` and does not remove `~/.zrok2`, so the zrok2 environment/login stays enabled. If zrok resource cleanup fails, OPAL preserves `~/.opal` so the cleanup can be retried instead of losing the saved tokens needed to identify those resources.
-
-Docs (Thanks to AI): https://xt9y.de/opal.html
+Docs: https://xt9y.de/opal.html
 
 ## Notes
 
-- OPAL is currently Linux-first and pre-1.0.
-- GPU Screen Recorder is recommended for the fastest Wayland/X11 capture path.
-- zrok2 is required for normal networking.
-- The normal daemon is loopback-only behind private zrok shares.
+- OPAL is Linux-first and pre-1.0.
+- The native presenter currently targets X11/XWayland/GLX on the client.
+- GPU Screen Recorder is recommended for the fastest capture path.
+- zrok2 is required for normal control networking, not for video transport.
+- Direct UDP reachability is mandatory for media by design.
 
 ## License
 
