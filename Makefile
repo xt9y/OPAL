@@ -14,6 +14,7 @@ PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
 PROFILE_SRCS := src/media_profile.cpp
 VIDEO_CAPTURE_SRCS := src/video_capture.cpp
+UDP_TRANSPORT_SRCS := src/udp_transport.cpp
 CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
@@ -47,6 +48,10 @@ test-media: | $(BUILD)
 test-video-capture: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_capture.cpp $(VIDEO_CAPTURE_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp $(AVLIBS) -o $(BUILD)/test-video-capture
 	$(BUILD)/test-video-capture
+
+test-udp-transport: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_udp_transport.cpp $(UDP_TRANSPORT_SRCS) -lpthread -o $(BUILD)/test-udp-transport
+	$(BUILD)/test-udp-transport
 
 test-input: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp $(INPUT_SRCS) -o $(BUILD)/test-input
@@ -86,7 +91,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-core test-media-profile test-media test-video-capture test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
+test: all test-core test-media-profile test-media test-video-capture test-udp-transport test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -127,4 +132,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-media-profile test-media test-video-capture test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
+.PHONY: all test test-core test-media-profile test-media test-video-capture test-udp-transport test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
