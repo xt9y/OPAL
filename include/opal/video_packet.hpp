@@ -35,6 +35,25 @@ struct VideoPlainPacket {
     std::vector<std::uint8_t> payload;
 };
 
+class VideoFragmentCursor {
+public:
+    VideoFragmentCursor(VideoMediaType,std::uint16_t flags,std::uint32_t generation,
+        std::uint64_t session_id,std::uint64_t frame_id,std::uint64_t capture_timestamp_us,
+        std::span<const std::uint8_t> data,std::uint64_t &next_packet_sequence,bool fec=true);
+    bool valid() const;
+    bool next(VideoPacketHeader&,std::span<const std::uint8_t>&);
+private:
+    VideoMediaType type_=VideoMediaType::VideoH264;
+    std::uint16_t flags_=0;
+    std::uint32_t generation_=0;
+    std::uint64_t session_id_=0,frame_id_=0,timestamp_=0;
+    std::span<const std::uint8_t> data_{};
+    std::uint64_t *sequence_=nullptr;
+    std::size_t count_=0,next_index_=0,fec_group_start_=0;
+    bool fec_=false,emit_fec_=false,valid_=false;
+    std::array<std::uint8_t,kVideoPlaintextBytes> parity_{};
+};
+
 bool use_fec_for_media(VideoMediaType);
 std::array<std::uint8_t,kVideoHeaderBytes> serialize_video_header(const VideoPacketHeader&);
 bool parse_video_header(std::span<const std::uint8_t>,VideoPacketHeader&);
