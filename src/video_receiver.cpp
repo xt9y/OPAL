@@ -25,7 +25,7 @@ std::uint64_t monotonic_us(){return static_cast<std::uint64_t>(std::chrono::dura
 bool debug_enabled(){const char *v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 std::uint32_t read32(std::span<const std::uint8_t> b){return b.size()<4?0:(static_cast<std::uint32_t>(b[0])<<24)|(static_cast<std::uint32_t>(b[1])<<16)|(static_cast<std::uint32_t>(b[2])<<8)|b[3];}
 double ewma(double old,double sample){return old==0.0?sample:old*0.8+sample*0.2;}
-}}
+}
 
 struct VideoReceiver::Impl{
     struct Arrival{std::uint64_t id=0,us=0;};
