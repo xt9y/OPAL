@@ -94,6 +94,25 @@ void request_fullscreen(Display *display,Window window){
     XSendEvent(display,DefaultRootWindow(display),False,SubstructureRedirectMask|SubstructureNotifyMask,&event);
 }
 
+void request_compositor_bypass(Display *display,Window window){
+    Atom bypass=XInternAtom(display,"_NET_WM_BYPASS_COMPOSITOR",False);
+    if(bypass==None)return;
+    unsigned long enabled=1;
+    XChangeProperty(display,window,bypass,XA_CARDINAL,32,PropModeReplace,
+                    reinterpret_cast<unsigned char*>(&enabled),1);
+}
+
+void disable_swap_interval(Display *display,GLXDrawable drawable){
+    using SwapIntervalExt=void(*)(Display*,GLXDrawable,int);
+    using SwapIntervalMesa=int(*)(unsigned int);
+    auto ext=reinterpret_cast<SwapIntervalExt>(glXGetProcAddressARB(
+        reinterpret_cast<const GLubyte*>("glXSwapIntervalEXT")));
+    if(ext){ext(display,drawable,0);return;}
+    auto mesa=reinterpret_cast<SwapIntervalMesa>(glXGetProcAddressARB(
+        reinterpret_cast<const GLubyte*>("glXSwapIntervalMESA")));
+    if(mesa)mesa(0);
+}
+
 void fitted_viewport(int window_width,int window_height,int source_width,int source_height){
     window_width=std::max(1,window_width);window_height=std::max(1,window_height);
     source_width=std::max(1,source_width);source_height=std::max(1,source_height);
@@ -115,6 +134,7 @@ struct VideoPresenter::Impl {
     GLuint program=0;
     std::array<GLuint,4> textures{};
     int source_width=0,source_height=0;
+    int texture_width=0,texture_height=0;
 
     bool init_gl(){
         program=make_program();if(!program)return false;
@@ -133,6 +153,20 @@ struct VideoPresenter::Impl {
         glUniform1i(glGetUniformLocation(program,"tex_uv"),3);
         glUseProgram(0);
         return true;
+    }
+
+    void ensure_texture_storage(int width,int height){
+        if(width==texture_width&&height==texture_height)return;
+        texture_width=width;texture_height=height;
+        const int cw=(width+1)/2,ch=(height+1)/2;
+        glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,textures[0]);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,width,height,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,nullptr);
+        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,textures[1]);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,cw,ch,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,nullptr);
+        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,textures[2]);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,cw,ch,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,nullptr);
+        glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,textures[3]);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE_ALPHA,cw,ch,0,GL_LUMINANCE_ALPHA,GL_UNSIGNED_BYTE,nullptr);
     }
 };
 
@@ -156,9 +190,11 @@ bool VideoPresenter::open(int source_width,int source_height,bool fullscreen){
     XFree(visual);
     if(!impl_->window||!impl_->context){close();return false;}
     XStoreName(impl_->display,impl_->window,"OPAL");
+    request_compositor_bypass(impl_->display,impl_->window);
     XMapRaised(impl_->display,impl_->window);XFlush(impl_->display);
     if(fullscreen)request_fullscreen(impl_->display,impl_->window);
     if(!glXMakeCurrent(impl_->display,impl_->window,impl_->context)){close();return false;}
+    disable_swap_interval(impl_->display,impl_->window);
     impl_->source_width=source_width;impl_->source_height=source_height;
     if(!impl_->init_gl()){close();return false;}
     glDisable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glPixelStorei(GL_UNPACK_ALIGNMENT,1);
@@ -179,19 +215,24 @@ bool VideoPresenter::present(DecodedVideoFrame decoded){
     XWindowAttributes wa{};if(!XGetWindowAttributes(impl_->display,impl_->window,&wa)){release();return false;}
     glViewport(0,0,std::max(1,wa.width),std::max(1,wa.height));glClear(GL_COLOR_BUFFER_BIT);
     fitted_viewport(wa.width,wa.height,frame->width,frame->height);
+    impl_->ensure_texture_storage(frame->width,frame->height);
     std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv;
     const void *y=contiguous_plane(frame->data[0],frame->linesize[0],frame->width,frame->height,scratch_y);
-    glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,impl_->textures[0]);glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,frame->width,frame->height,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,y);
+    glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,impl_->textures[0]);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,frame->width,frame->height,GL_LUMINANCE,GL_UNSIGNED_BYTE,y);
     if(yuv420){
         int cw=(frame->width+1)/2,ch=(frame->height+1)/2;
         const void *u=contiguous_plane(frame->data[1],frame->linesize[1],cw,ch,scratch_u);
         const void *v=contiguous_plane(frame->data[2],frame->linesize[2],cw,ch,scratch_v);
-        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,impl_->textures[1]);glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,cw,ch,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,u);
-        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,impl_->textures[2]);glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE,cw,ch,0,GL_LUMINANCE,GL_UNSIGNED_BYTE,v);
+        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,impl_->textures[1]);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,cw,ch,GL_LUMINANCE,GL_UNSIGNED_BYTE,u);
+        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,impl_->textures[2]);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,cw,ch,GL_LUMINANCE,GL_UNSIGNED_BYTE,v);
     }else{
         int cw=(frame->width+1)/2,ch=(frame->height+1)/2,row_bytes=cw*2;
         const void *uv=contiguous_plane(frame->data[1],frame->linesize[1],row_bytes,ch,scratch_uv);
-        glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,impl_->textures[3]);glTexImage2D(GL_TEXTURE_2D,0,GL_LUMINANCE_ALPHA,cw,ch,0,GL_LUMINANCE_ALPHA,GL_UNSIGNED_BYTE,uv);
+        glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,impl_->textures[3]);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,cw,ch,GL_LUMINANCE_ALPHA,GL_UNSIGNED_BYTE,uv);
     }
     glUseProgram(impl_->program);glUniform1i(glGetUniformLocation(impl_->program,"nv12"),nv12?1:0);
     glBegin(GL_TRIANGLE_STRIP);
