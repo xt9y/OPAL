@@ -66,5 +66,5 @@ int main(){
     assert(sender_source.find("keepalive_thread")!=std::string::npos);
     assert(sender_source.find("std::mutex feedback_mu,send_mu")!=std::string::npos);
 
-    setenv("OPAL_VIDEO_WINDOWED","1",1);setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 180 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);run_case(1,false,9);run_case(2,true,10);run_capture_eof_recovery(11);run_idle_keepalive(12);run_media_stall_detection(13);unsetenv("OPAL_TEST_DROP_FRAGMENTS");unsetenv("OPAL_CAPTURE_CMD");unsetenv("OPAL_VIDEO_WINDOWED");return 0;
+    setenv("OPAL_VIDEO_WINDOWED","1",1);setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);run_case(1,false,9);run_case(2,true,10);run_capture_eof_recovery(11);run_idle_keepalive(12);run_media_stall_detection(13);unsetenv("OPAL_TEST_DROP_FRAGMENTS");unsetenv("OPAL_CAPTURE_CMD");unsetenv("OPAL_VIDEO_WINDOWED");return 0;
 }
