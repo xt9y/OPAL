@@ -14,6 +14,7 @@ public:
     VideoPresenter(const VideoPresenter&)=delete;
     VideoPresenter& operator=(const VideoPresenter&)=delete;
     bool open(int source_width,int source_height,bool fullscreen=true);
+    bool present_borrowed(DecodedVideoView frame);
     bool present(DecodedVideoFrame frame);
     Window x11_window() const;
     std::pair<int,int> drawable_size() const;
