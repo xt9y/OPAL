@@ -20,19 +20,19 @@ struct VideoCapture::Impl {
     int audio_stream=-1;
     int read_timeout_ms=5000;
     std::vector<MediaConfig> configs;
+
+    static int read(void *opaque,std::uint8_t *buffer,int size){
+        auto *impl=static_cast<Impl*>(opaque);
+        if(!impl||size<=0)return AVERROR(EINVAL);
+        int n=read_capture(impl->capture,buffer,static_cast<size_t>(size),impl->read_timeout_ms);
+        if(n>0)return n;
+        if(n==0)return AVERROR_EOF;
+        if(n==-2)return AVERROR(EAGAIN);
+        return AVERROR(EIO);
+    }
 };
 
 namespace {
-int capture_read(void *opaque,std::uint8_t *buffer,int size){
-    auto *impl=static_cast<VideoCapture::Impl*>(opaque);
-    if(!impl||size<=0)return AVERROR(EINVAL);
-    int n=read_capture(impl->capture,buffer,static_cast<size_t>(size),impl->read_timeout_ms);
-    if(n>0)return n;
-    if(n==0)return AVERROR_EOF;
-    if(n==-2)return AVERROR(EAGAIN);
-    return AVERROR(EIO);
-}
-
 std::vector<std::uint8_t> copy_extra(const AVCodecParameters *par){
     if(!par||!par->extradata||par->extradata_size<=0)return {};
     return {par->extradata,par->extradata+par->extradata_size};
@@ -59,7 +59,7 @@ bool VideoCapture::start(const StreamOptions &stream,int bitrate_kbps,bool audio
 
     auto *buffer=static_cast<unsigned char*>(av_malloc(64*1024));
     if(!buffer){stop();return false;}
-    impl_->avio=avio_alloc_context(buffer,64*1024,0,impl_.get(),capture_read,nullptr,nullptr);
+    impl_->avio=avio_alloc_context(buffer,64*1024,0,impl_.get(),Impl::read,nullptr,nullptr);
     if(!impl_->avio){av_free(buffer);stop();return false;}
 
     impl_->format=avformat_alloc_context();
