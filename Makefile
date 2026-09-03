@@ -53,7 +53,7 @@ $(INPUT): src/input_helper.cpp | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
 
 test-core: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_core.cpp $(CORE_SRCS) -lcrypto -o $(BUILD)/test-core
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_core.cpp $(CORE_SRCS) $(PROFILE_SRCS) -lcrypto -o $(BUILD)/test-core
 	$(BUILD)/test-core
 
 test-media-profile: | $(BUILD)
