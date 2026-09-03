@@ -24,6 +24,12 @@ struct RendezvousIntroduction {
     RendezvousEndpoint peer_observed;
 };
 
+struct RelayAllocation {
+    RendezvousEndpoint endpoint;
+    std::string allocation_id;
+    std::uint32_t ttl_seconds=0;
+};
+
 RendezvousConfig default_rendezvous_config();
 
 class RendezvousClient {
@@ -40,6 +46,9 @@ public:
                       std::string &error);
     bool introduce(const std::string &rendezvous_id,const std::string &client_public_key,
                    RendezvousIntroduction &intro,std::string &error);
+    bool request_relay(const std::string &session_id,const std::string &public_key,
+                       const std::filesystem::path &private_key,RelayAllocation &allocation,
+                       std::string &error);
     UdpSocket take_socket();
     std::uint16_t local_port() const;
     bool valid() const;
