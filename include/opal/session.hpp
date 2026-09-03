@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <opal/media.hpp>
 
 namespace opal {
 struct SessionOptions {
@@ -19,6 +20,7 @@ struct SessionOptions {
     std::string pairing_password;
     std::function<std::string()> pairing_password_provider;
     std::string label;
+    StreamOptions stream;
 };
 
 class SessionSupervisor {
