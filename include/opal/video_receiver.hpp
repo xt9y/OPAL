@@ -9,6 +9,13 @@
 
 namespace opal {
 
+enum class VideoReceiverFailure : std::uint8_t {
+    NoFailure=0,
+    PresenterOpen,
+    Present,
+    MediaStall
+};
+
 class VideoReceiver {
 public:
     VideoReceiver();
@@ -18,6 +25,7 @@ public:
     bool handle_control_line(const std::string& line);
     bool media_started() const;
     bool failed() const;
+    VideoReceiverFailure failure_reason() const;
     Window presentation_window() const;
     std::uint64_t stale_frames() const;
     std::uint64_t highest_sequence() const;
