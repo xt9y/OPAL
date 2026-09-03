@@ -19,7 +19,7 @@ enum class SessionPacketType : std::uint8_t {
     ControlAck=5,
     Pointer=6,
     Keepalive=7,
-    RelayProbe=8
+    PathProbe=8
 };
 
 struct SessionPacketHeader {
