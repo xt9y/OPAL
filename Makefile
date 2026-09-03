@@ -20,7 +20,7 @@ NET_SRCS := src/net.cpp src/config.cpp src/crypto.cpp
 INPUT_SRCS := src/input.cpp
 TUNNEL_SUPERVISOR_SRCS := src/tunnel_supervisor.cpp
 SESSION_SRCS := src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/media.cpp $(PROFILE_SRCS) src/config.cpp src/crypto.cpp
-APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(VIDEO_CAPTURE_SRCS) $(INPUT_SRCS)
+APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/net.cpp src/tunnel.cpp src/tunnel_access.cpp src/zrok_cleanup.cpp $(TUNNEL_SUPERVISOR_SRCS) src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(VIDEO_CAPTURE_SRCS) $(UDP_TRANSPORT_SRCS) $(INPUT_SRCS)
 
 all: $(PRODUCT) $(INPUT)
 
