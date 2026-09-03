@@ -14,6 +14,7 @@ struct DirectVideoPath {
     socklen_t peer_len=0;
     VideoKeys keys;
     std::uint64_t session_id=0;
+    std::uint32_t generation=0;
     DirectVideoPath()=default;
     ~DirectVideoPath();
     DirectVideoPath(const DirectVideoPath&)=delete;
