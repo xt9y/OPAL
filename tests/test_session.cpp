@@ -81,12 +81,12 @@ int main(){
             const int expected_generation=accepted_generation;
             std::string nonce="nonce-"+std::to_string(expected_generation);
             std::string challenge=nonce+" 1920 1080 00:11:22:33:44:55";
-            assert(opal::tls_write_line(c.ssl,"CHALLENGE OPAL2 "+challenge));
+            assert(opal::tls_write_line(c.ssl,"CHALLENGE OPAL3 "+challenge));
             std::string line;assert(opal::tls_read_line_timeout(c.ssl,line,3000));
             std::istringstream auth(line);std::string mode,pubkey,proof;auth>>mode>>pubkey>>proof;assert(pubkey==public_hex);
             if(expected_generation==1){
                 assert(mode=="PAIR");
-                auto transcript="OPAL-PAIR-v2\n"+server_fp+"\n"+challenge+"\n"+pubkey;
+                auto transcript="OPAL-PAIR-v3\n"+server_fp+"\n"+challenge+"\n"+pubkey;
                 assert(proof==opal::hmac_sha256_hex("test-password",transcript));++pair_count;
             }else{
                 assert(mode=="AUTH");assert(opal::verify_hex(pubkey,challenge,proof));++auth_count;
