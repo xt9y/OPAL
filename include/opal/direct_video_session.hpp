@@ -1,6 +1,5 @@
 #pragma once
-#include <opal/udp_transport.hpp>
-#include <opal/video_crypto.hpp>
+#include <opal/video_path.hpp>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -8,20 +7,6 @@
 #include <openssl/ssl.h>
 
 namespace opal {
-struct DirectVideoPath {
-    UdpSocket socket;
-    sockaddr_storage peer{};
-    socklen_t peer_len=0;
-    VideoKeys keys;
-    std::uint64_t session_id=0;
-    std::uint32_t generation=0;
-    DirectVideoPath()=default;
-    ~DirectVideoPath();
-    DirectVideoPath(const DirectVideoPath&)=delete;
-    DirectVideoPath& operator=(const DirectVideoPath&)=delete;
-    DirectVideoPath(DirectVideoPath&&) noexcept;
-    DirectVideoPath& operator=(DirectVideoPath&&) noexcept;
-};
 
 using ControlSend=std::function<bool(const std::string&,int)>;
 using ControlRead=std::function<bool(std::string&,int)>;
