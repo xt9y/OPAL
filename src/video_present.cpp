@@ -109,7 +109,7 @@ void request_fullscreen(Display *display,Window window){
     if(state==None||fullscreen==None)return;
     XEvent event{};event.type=ClientMessage;event.xclient.window=window;event.xclient.message_type=state;event.xclient.format=32;
     event.xclient.data.l[0]=1;event.xclient.data.l[1]=static_cast<long>(fullscreen);
-    XSendEvent(display,DefaultRootWindow(display),False,SubstructureRedirectMask|SubstructureNotifyMask,&event);
+    XSendEvent(display,DefaultRootWindowWindow(display),False,SubstructureRedirectMask|SubstructureNotifyMask,&event);
 }
 
 void request_compositor_bypass(Display *display,Window window){
@@ -236,16 +236,14 @@ bool VideoPresenter::open(int source_width,int source_height,bool fullscreen){
     return true;
 }
 
-bool VideoPresenter::present(DecodedVideoFrame decoded){
-    AVFrame *frame=decoded.frame;
-    if(!frame)return false;
-    auto release=[&]{av_frame_free(&frame);};
-    if(!impl_||!impl_->display||!impl_->window||!impl_->context){release();return false;}
-    if(frame->width<=0||frame->height<=0){release();return false;}
+bool VideoPresenter::present_borrowed(DecodedVideoView decoded){
+    const AVFrame *frame=decoded.frame;
+    if(!frame||!impl_||!impl_->display||!impl_->window||!impl_->context)return false;
+    if(frame->width<=0||frame->height<=0)return false;
     const bool yuv420=frame->format==AV_PIX_FMT_YUV420P||frame->format==AV_PIX_FMT_YUVJ420P;
     const bool nv12=frame->format==AV_PIX_FMT_NV12;
-    if(!yuv420&&!nv12){release();return false;}
-    if(!glXMakeCurrent(impl_->display,impl_->window,impl_->context)){release();return false;}
+    if(!yuv420&&!nv12)return false;
+    if(!glXMakeCurrent(impl_->display,impl_->window,impl_->context))return false;
     impl_->consume_window_events();
     glViewport(0,0,impl_->window_width,impl_->window_height);glClear(GL_COLOR_BUFFER_BIT);
     fitted_viewport(impl_->window_width,impl_->window_height,frame->width,frame->height);
@@ -271,7 +269,14 @@ bool VideoPresenter::present(DecodedVideoFrame decoded){
     glTexCoord2f(1.f,0.f);glVertex2f(1.f,1.f);
     glEnd();
     glUseProgram(0);glXSwapBuffers(impl_->display,impl_->window);glFlush();
-    release();return true;
+    return true;
+}
+
+bool VideoPresenter::present(DecodedVideoFrame decoded){
+    AVFrame *frame=decoded.frame;if(!frame)return false;
+    const bool ok=present_borrowed({frame,decoded.pts_us});
+    av_frame_free(&frame);
+    return ok;
 }
 
 Window VideoPresenter::x11_window() const{return impl_?impl_->window:0;}
