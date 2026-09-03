@@ -39,7 +39,46 @@ struct VideoReceiver::Impl{
     void note_sequence(std::uint64_t seq){if(interval_first==0){interval_first=seq;interval_highest=seq;interval_received=1;}else{interval_highest=std::max(interval_highest,seq);++interval_received;}auto prev=highest.load();while(seq>prev&&!highest.compare_exchange_weak(prev,seq)){} }
     void control_tick(){const auto now=Clock::now();if(last_feedback.time_since_epoch().count()==0||now-last_feedback>=std::chrono::milliseconds(100)){VideoFeedbackSample s;s.highest_sequence=highest.load();s.received=interval_received;if(interval_first&&interval_highest>=interval_first){const auto expected=interval_highest-interval_first+1;s.lost=static_cast<std::uint32_t>(std::min<std::uint64_t>(0xffffffffULL,expected>interval_received?expected-interval_received:0));}s.rtt_us=current_rtt_us.load();s.decode_age_us=last_decode_age_us.load();if(control_send)control_send(video_feedback_line(path.generation,s));const auto total=static_cast<std::uint64_t>(s.received)+s.lost;telemetry.loss_percent=total?100.0*s.lost/static_cast<double>(total):0.0;interval_first=interval_highest=0;interval_received=0;last_feedback=now;}if(last_clock.time_since_epoch().count()==0||now-last_clock>=std::chrono::seconds(1)){if(control_send)control_send(clock_sync_request_line(path.generation,static_cast<std::int64_t>(monotonic_us())));last_clock=now;}if(debug_enabled()&&(last_debug.time_since_epoch().count()==0||now-last_debug>=std::chrono::seconds(1))){telemetry.stale_frames=stale.load();std::cerr<<format_latency_telemetry(telemetry)<<" audio="<<audio_output.queued_ms()<<"ms\n";last_debug=now;}}
     bool handle_control(const std::string&line){std::int64_t t0=0,t1=0,t2=0;if(!parse_clock_sync_line(line,path.generation,t0,t1,t2)||t1==0||t2==0)return false;auto e=estimate_clock_offset(t0,t1,t2,static_cast<std::int64_t>(monotonic_us()));if(!e.valid)return true;clock_offset_us.store(e.offset_us);current_rtt_us.store(e.rtt_us);return true;}
-    void loop(){reassembler.reset(path.generation,path.session_id);replay.reset();std::array<std::uint8_t,kVideoMaxDatagramBytes+1>wire{};while(run.load()){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int received=recv_datagram(path.socket.fd,wire,source,source_len,20);if(received>0&&received<=static_cast<int>(kVideoMaxDatagramBytes)){const auto arrival=monotonic_us(),bytes=std::span<const std::uint8_t>(wire.data(),static_cast<std::size_t>(received));VideoPacketHeader header;if(parse_video_header(bytes,header)&&header.generation==path.generation&&header.session_id==path.session_id&&header.media_type!=VideoMediaType::Probe&&header.media_type!=VideoMediaType::ProbeAck&&bytes.size()==kVideoHeaderBytes+static_cast<std::size_t>(header.payload_length)+kVideoAeadTagBytes){std::size_t plaintext_size=0;if(cipher&&cipher->open(header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext_buffer,plaintext_size)&&plaintext_size==header.payload_length&&replay.accept(header.packet_sequence)){last_media_packet=Clock::now();note_sequence(header.packet_sequence);if(header.media_type!=VideoMediaType::Keepalive){note_arrival(header.frame_id,arrival);const auto plaintext=std::span<const std::uint8_t>(plaintext_buffer.data(),plaintext_size);const auto status=reassembler.accept(header,plaintext,assembled);if(status==ReassemblyStatus::NeedIdr)request_idr();else if(status==ReassemblyStatus::Complete){const auto first=take_arrival(assembled.frame_id,arrival);handle_complete(assembled,static_cast<double>(arrival-first)/1000.0,first);}}}}}if(media.load()&&last_media_packet.time_since_epoch().count()!=0&&Clock::now()-last_media_packet>=std::chrono::seconds(1)){failed.store(true);run.store(false);break;}control_tick();}audio_output.close();presenter.close();window.store(0);decoder.flush();}
+    void loop(){
+        reassembler.reset(path.generation,path.session_id);
+        replay.reset();
+        std::array<std::uint8_t,kVideoMaxDatagramBytes+1> wire{};
+        while(run.load()){
+            sockaddr_storage source{};
+            socklen_t source_len=sizeof(source);
+            const int received=recv_datagram(path.socket.fd,wire,source,source_len,20);
+            if(received>0&&received<=static_cast<int>(kVideoMaxDatagramBytes)){
+                const std::uint64_t arrival=monotonic_us();
+                const std::span<const std::uint8_t> bytes(wire.data(),static_cast<std::size_t>(received));
+                VideoPacketHeader header;
+                if(parse_video_header(bytes,header)&&header.generation==path.generation&&header.session_id==path.session_id&&
+                   header.media_type!=VideoMediaType::Probe&&header.media_type!=VideoMediaType::ProbeAck&&
+                   bytes.size()==kVideoHeaderBytes+static_cast<std::size_t>(header.payload_length)+kVideoAeadTagBytes){
+                    std::size_t plaintext_size=0;
+                    if(cipher&&cipher->open(header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext_buffer,plaintext_size)&&
+                       plaintext_size==header.payload_length&&replay.accept(header.packet_sequence)){
+                        last_media_packet=Clock::now();
+                        note_sequence(header.packet_sequence);
+                        if(header.media_type!=VideoMediaType::Keepalive){
+                            note_arrival(header.frame_id,arrival);
+                            const std::span<const std::uint8_t> plaintext(plaintext_buffer.data(),plaintext_size);
+                            const auto status=reassembler.accept(header,plaintext,assembled);
+                            if(status==ReassemblyStatus::NeedIdr)request_idr();
+                            else if(status==ReassemblyStatus::Complete){
+                                const auto first=take_arrival(assembled.frame_id,arrival);
+                                handle_complete(assembled,static_cast<double>(arrival-first)/1000.0,first);
+                            }
+                        }
+                    }
+                }
+            }
+            if(media.load()&&last_media_packet.time_since_epoch().count()!=0&&Clock::now()-last_media_packet>=std::chrono::seconds(1)){
+                failed.store(true);run.store(false);break;
+            }
+            control_tick();
+        }
+        audio_output.close();presenter.close();window.store(0);decoder.flush();
+    }
 };
 
 VideoReceiver::VideoReceiver():impl_(std::make_unique<Impl>()){}
