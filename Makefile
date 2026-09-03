@@ -112,6 +112,10 @@ test-direct-video-pipeline: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lssl -lcrypto -lX11 -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-direct-video-pipeline
 	$(BUILD)/test-direct-video-pipeline
 
+test-direct-video-stress: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_stress.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -lcrypto -o $(BUILD)/test-direct-video-stress
+	$(BUILD)/test-direct-video-stress
+
 test-input: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input.cpp $(INPUT_SRCS) -o $(BUILD)/test-input
 	$(BUILD)/test-input
@@ -144,7 +148,7 @@ test-hardening: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_hardening.cpp src/crypto.cpp -lcrypto -o $(BUILD)/test-hardening
 	$(BUILD)/test-hardening
 
-test-direct-media-sanitize: test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline
+test-direct-media-sanitize: test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress
 
 test-clean: all
 	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
@@ -152,7 +156,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
+test: all test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -193,4 +197,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-media-sanitize test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
+.PHONY: all test test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-direct-video-session test-direct-video-security test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-direct-media-sanitize test-input test-setup test-daemon test-tunnel test-tunnel-recovery test-net test-session test-hardening test-clean test-install install uninstall clean
