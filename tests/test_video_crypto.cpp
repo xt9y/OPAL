@@ -1,5 +1,6 @@
 #include <opal/video_crypto.hpp>
 #include <opal/net.hpp>
+#include <algorithm>
 #include <arpa/inet.h>
 #include <array>
 #include <cassert>
