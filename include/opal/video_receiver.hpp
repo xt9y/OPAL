@@ -1,10 +1,12 @@
 #pragma once
 
 #include <opal/direct_video_session.hpp>
+#include <opal/video_crypto.hpp>
 #include <X11/Xlib.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace opal {
@@ -22,6 +24,9 @@ public:
     VideoReceiver(const VideoReceiver&)=delete;
     VideoReceiver& operator=(const VideoReceiver&)=delete;
     bool start(DirectVideoPath path,std::function<void(const std::string&)> control_send);
+    bool start_native(const VideoKeys &keys,std::uint64_t session_id,std::uint32_t generation,
+                      std::function<void(const std::string&)> control_send);
+    bool accept_datagram(std::span<const std::uint8_t> wire);
     bool handle_control_line(const std::string& line);
     bool media_started() const;
     bool failed() const;
