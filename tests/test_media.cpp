@@ -14,6 +14,7 @@ int automatic_bitrate_kbps(int,int,int);
 std::string video_request_line(const std::string&,int,int,int);
 bool parse_video_request_line(const std::string&,std::string&,int&,int&,int&);
 std::string capture_command(bool,int,int,bool,const std::string&,int,int);
+int video_player_write_timeout_ms();
 }
 
 static std::string read_file(const char *path){std::ifstream f(path);return std::string((std::istreambuf_iterator<char>(f)),{});}
@@ -38,6 +39,17 @@ int main() {
         char buf[8]{};
         assert(opal::read_capture(capture,buf,sizeof(buf),100)==-2);
         opal::stop_capture(capture);
+    }
+    {
+        // ffplay can take a few hundred milliseconds to start reading stdin.
+        // A live stream must tolerate that startup stall instead of tearing
+        // down the TLS/video session as soon as the pipe fills.
+        auto sink=opal::start_sink("sleep 0.35; cat >/dev/null");
+        assert(sink.pid>0&&sink.fd>=0);
+        std::string burst(256*1024,'V');
+        assert(opal::video_player_write_timeout_ms()>=1000);
+        assert(opal::write_sink_timeout(sink,burst.data(),burst.size(),opal::video_player_write_timeout_ms()));
+        opal::stop_sink(sink);
     }
     {
         int w=-1,h=-1;
@@ -95,6 +107,7 @@ int main() {
         auto host=read_file("src/host.cpp");
         assert(host.find("automatic_bitrate_kbps")!=std::string::npos);
         auto session=read_file("src/session.cpp");
+        assert(session.find("video_player_write_timeout_ms()")!=std::string::npos);
         assert(session.find("-fflags nobuffer")!=std::string::npos);
         assert(session.find("-avioflags direct")!=std::string::npos);
         assert(session.find("-probesize 32")!=std::string::npos);
