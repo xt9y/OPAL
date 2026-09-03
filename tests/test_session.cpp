@@ -183,7 +183,7 @@ int main(){
     assert(player_args.find("driver=x11")!=std::string::npos);
     assert(player_args.find("driver=wayland")==std::string::npos);
     assert(player_args.find("-fflags nobuffer")!=std::string::npos);
-    assert(player_args.find("-avioflags direct")!=std::string::npos);
+    assert(player_args.find("-avioflags direct")==std::string::npos);
     assert(player_args.find("-probesize 32")!=std::string::npos);
     assert(player_args.find("-analyzeduration 0")!=std::string::npos);
     assert(player_args.find("-sync video")!=std::string::npos);
