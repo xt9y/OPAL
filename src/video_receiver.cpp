@@ -45,6 +45,7 @@ struct VideoReceiver::Impl{
         replay.reset();
         std::array<std::uint8_t,kVideoMaxDatagramBytes+1> wire{};
         while(run.load()){
+            bool authenticated_packet=false;
             sockaddr_storage source{};
             socklen_t source_len=sizeof(source);
             const int received=recv_datagram(path.socket.fd,wire,source,source_len,20);
@@ -58,6 +59,7 @@ struct VideoReceiver::Impl{
                     std::size_t plaintext_size=0;
                     if(cipher&&cipher->open(header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext_buffer,plaintext_size)&&
                        plaintext_size==header.payload_length&&replay.accept(header.packet_sequence)){
+                        authenticated_packet=true;
                         last_media_packet=Clock::now();
                         note_sequence(header.packet_sequence);
                         if(header.media_type!=VideoMediaType::Keepalive){
@@ -73,7 +75,7 @@ struct VideoReceiver::Impl{
                     }
                 }
             }
-            if(media.load()&&last_media_packet.time_since_epoch().count()!=0&&Clock::now()-last_media_packet>=std::chrono::seconds(1)){
+            if(!authenticated_packet&&media.load()&&last_media_packet.time_since_epoch().count()!=0&&Clock::now()-last_media_packet>=std::chrono::seconds(1)){
                 fail(VideoReceiverFailure::MediaStall);break;
             }
             control_tick();
