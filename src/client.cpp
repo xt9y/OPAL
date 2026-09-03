@@ -161,7 +161,7 @@ int error_code_for(const std::string&message){
 int hosts_add(const std::string&name,const std::string&address,const std::string&mac){auto p=Paths::load();ensure_layout(p);Ini h;h.load(p.hosts);h.set(name,"address",address);h.set(name,"port","47990");h.set(name,"video_port","47991");if(!mac.empty())h.set(name,"mac",mac);if(!h.save(p.hosts))return 1;std::cout<<"saved host "<<name<<" -> "<<address<<"\n";return 0;}
 int hosts_list(){auto p=Paths::load();Ini h;if(!h.load(p.hosts)){std::cout<<"No saved hosts.\n";return 0;}for(auto&[s,v]:h.sections())if(!s.empty()){auto it=v.find("address");std::cout<<s<<(it==v.end()?"":"  "+it->second)<<"\n";}return 0;}
 
-int client_connect(const std::string&target_in,const std::string&password_arg){
+int client_connect(const std::string&target_in,const std::string&password_arg,const StreamOptions&stream){
     auto p=Paths::load();ensure_layout(p);ensure_identity(p.identity_key,p.identity_pub);
     Ini hosts;hosts.load(p.hosts);
     std::string target=target_in,saved_address;
@@ -190,6 +190,7 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
     options.paired=saved&&hosts.get(target_in,"paired")=="true";
     options.pairing_password=password_arg;
     options.label=target_in;
+    options.stream=stream;
     if(!options.paired&&options.pairing_password.empty()){
         options.pairing_password_provider=[](){std::string password;std::cout<<"Pairing password: "<<std::flush;std::cin>>password;return password;};
     }
@@ -233,4 +234,6 @@ int client_connect(const std::string&target_in,const std::string&password_arg){
     else run_x11_fallback_control(d,root,session);
     XCloseDisplay(d);session.stop();return 0;
 }
+
+int client_connect(const std::string&target_in,const std::string&password_arg){return client_connect(target_in,password_arg,{});}
 }
