@@ -20,4 +20,9 @@ int automatic_bitrate_kbps(int width,int height,int fps){
     long long bitrate=18000LL+(12000LL*pixel_rate)/reference;
     return static_cast<int>(std::clamp<long long>(bitrate,20000,100000));
 }
+
+std::uint64_t capture_stale_budget_us(int fps){
+    fps=std::clamp(fps,15,240);
+    return static_cast<std::uint64_t>(std::clamp(2000000/fps,20000,150000));
+}
 }
