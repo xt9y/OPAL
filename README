@@ -1,0 +1,8 @@
+OPAL
+
+Performance-first Linux remote desktop.
+
+install --> make -j"$(nproc)" && sudo make install
+run     --> opal
+doctor  --> opal doctor
+test    --> make test
