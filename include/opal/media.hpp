@@ -17,6 +17,7 @@ CaptureProcess start_capture(const std::string &command);
 int read_capture(CaptureProcess &capture,void *buffer,size_t size,int timeout_ms);
 void stop_capture(CaptureProcess &capture);
 SinkProcess start_sink(const std::string &command);
+int video_player_write_timeout_ms();
 bool write_sink_timeout(SinkProcess &sink,const void *data,size_t size,int timeout_ms);
 void stop_sink(SinkProcess &sink);
 }
