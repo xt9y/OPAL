@@ -20,20 +20,32 @@ Native Linux remote desktop focused on minimum interactive latency.
 
 ## Dependencies
 
-Fedora / Fedora Asahi Remix with RPM Fusion FFmpeg:
+`make` runs a dependency preflight before compiling the OPAL binary and uses `pkg-config` for FFmpeg include/library paths. This matters on Fedora, where FFmpeg headers are installed below `/usr/include/ffmpeg` rather than directly below `/usr/include`.
+
+Fedora / Fedora Asahi Remix using Fedora's FFmpeg packages:
 
 ```bash
 sudo dnf install -y \
-  gcc-c++ make openssl-devel libX11-devel libXi-devel libglvnd-devel \
-  pulseaudio-libs-devel ffmpeg ffmpeg-devel
+  gcc-c++ make pkgconf-pkg-config openssl-devel libX11-devel libXi-devel \
+  libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel
 ```
+
+If the machine intentionally uses RPM Fusion's full FFmpeg packages, use `ffmpeg ffmpeg-devel` in place of `ffmpeg-free ffmpeg-free-devel`.
 
 Debian / Ubuntu:
 
 ```bash
 sudo apt-get install -y \
-  g++ make libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev \
-  ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+  g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev \
+  libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
+  libswresample-dev
+```
+
+Arch Linux / CachyOS:
+
+```bash
+sudo pacman -S --needed \
+  base-devel pkgconf openssl libx11 libxi libglvnd libpulse ffmpeg
 ```
 
 GPU Screen Recorder is recommended for the lowest-latency Wayland/X11 capture path. OPAL enables its H.264 CPU fallback when a usable hardware encoder is unavailable.
