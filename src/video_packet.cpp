@@ -14,6 +14,51 @@ bool valid_type(VideoMediaType type){const auto v=static_cast<unsigned>(type);re
 
 bool use_fec_for_media(VideoMediaType type){return type==VideoMediaType::VideoH264;}
 
+VideoFragmentCursor::VideoFragmentCursor(
+    VideoMediaType type,std::uint16_t flags,std::uint32_t generation,std::uint64_t session_id,
+    std::uint64_t frame_id,std::uint64_t capture_timestamp_us,std::span<const std::uint8_t> data,
+    std::uint64_t &next_packet_sequence,bool fec)
+    :type_(type),flags_(flags),generation_(generation),session_id_(session_id),frame_id_(frame_id),
+     timestamp_(capture_timestamp_us),data_(data),sequence_(&next_packet_sequence),fec_(fec){
+    count_=std::max<std::size_t>(1,(data_.size()+kVideoDataFragmentBytes-1)/kVideoDataFragmentBytes);
+    valid_=count_<=65535&&valid_type(type_);
+}
+
+bool VideoFragmentCursor::valid() const{return valid_;}
+
+bool VideoFragmentCursor::next(VideoPacketHeader &header,std::span<const std::uint8_t> &payload){
+    payload={};if(!valid_||!sequence_)return false;
+    if(emit_fec_){
+        parity_.fill(0);
+        const std::size_t group_count=std::min<std::size_t>(10,count_-fec_group_start_);
+        parity_[0]=static_cast<std::uint8_t>(group_count);std::size_t longest=0;
+        for(std::size_t j=0;j<group_count;++j){
+            const std::size_t index=fec_group_start_+j,offset=index*kVideoDataFragmentBytes;
+            const std::size_t length=offset<data_.size()?std::min(kVideoDataFragmentBytes,data_.size()-offset):0;
+            put16(parity_.data()+1+j*2,static_cast<std::uint16_t>(length));longest=std::max(longest,length);
+            for(std::size_t k=0;k<length;++k)parity_[kVideoFecMetadataBytes+k]^=data_[offset+k];
+        }
+        header={};header.media_type=VideoMediaType::Fec;header.flags=flags_;header.generation=generation_;
+        header.session_id=session_id_;header.packet_sequence=(*sequence_)++;header.frame_id=frame_id_;
+        header.capture_timestamp_us=timestamp_;header.fragment_index=static_cast<std::uint16_t>(fec_group_start_);
+        header.fragment_count=static_cast<std::uint16_t>(count_);header.fec_group=static_cast<std::uint16_t>(fec_group_start_/10);
+        header.payload_length=static_cast<std::uint16_t>(kVideoFecMetadataBytes+longest);
+        payload=std::span<const std::uint8_t>(parity_.data(),header.payload_length);emit_fec_=false;return true;
+    }
+    if(next_index_>=count_)return false;
+
+    const std::size_t index=next_index_++,offset=index*kVideoDataFragmentBytes;
+    const std::size_t length=offset<data_.size()?std::min(kVideoDataFragmentBytes,data_.size()-offset):0;
+    header={};header.media_type=type_;header.flags=flags_|(index+1==count_?FrameEnd:0);
+    header.generation=generation_;header.session_id=session_id_;header.packet_sequence=(*sequence_)++;
+    header.frame_id=frame_id_;header.capture_timestamp_us=timestamp_;header.fragment_index=static_cast<std::uint16_t>(index);
+    header.fragment_count=static_cast<std::uint16_t>(count_);header.fec_group=static_cast<std::uint16_t>(index/10);
+    header.payload_length=static_cast<std::uint16_t>(length);
+    payload=length?data_.subspan(offset,length):std::span<const std::uint8_t>{};
+    if(fec_&&(next_index_%10==0||next_index_==count_)){emit_fec_=true;fec_group_start_=index-(index%10);}
+    return true;
+}
+
 std::array<std::uint8_t,kVideoHeaderBytes> serialize_video_header(const VideoPacketHeader &h){
     std::array<std::uint8_t,kVideoHeaderBytes> out{};
     put32(out.data(),h.magic);out[4]=h.version;out[5]=static_cast<std::uint8_t>(h.media_type);
@@ -54,33 +99,10 @@ std::vector<VideoPlainPacket> fragment_media_unit(
     const std::size_t count=std::max<std::size_t>(1,(data.size()+kVideoDataFragmentBytes-1)/kVideoDataFragmentBytes);
     if(count>65535)return {};
     std::vector<VideoPlainPacket> packets;packets.reserve(count+(fec?(count+9)/10:0));
-    for(std::size_t start=0;start<count;start+=10){
-        const std::size_t group_count=std::min<std::size_t>(10,count-start);
-        std::vector<std::vector<std::uint8_t>> group;group.reserve(group_count);std::size_t longest=0;
-        for(std::size_t j=0;j<group_count;++j){
-            const std::size_t index=start+j,offset=index*kVideoDataFragmentBytes;
-            const std::size_t length=offset<data.size()?std::min(kVideoDataFragmentBytes,data.size()-offset):0;
-            std::vector<std::uint8_t> payload;if(length)payload.assign(data.begin()+offset,data.begin()+offset+length);
-            longest=std::max(longest,length);group.push_back(payload);
-            VideoPacketHeader header;header.media_type=type;header.flags=flags|(index+1==count?FrameEnd:0);
-            header.generation=generation;header.session_id=session_id;header.packet_sequence=sequence++;
-            header.frame_id=frame_id;header.capture_timestamp_us=timestamp;header.fragment_index=static_cast<std::uint16_t>(index);
-            header.fragment_count=static_cast<std::uint16_t>(count);header.fec_group=static_cast<std::uint16_t>(start/10);
-            header.payload_length=static_cast<std::uint16_t>(length);packets.push_back({header,std::move(payload)});
-        }
-        if(fec){
-            std::vector<std::uint8_t> parity(kVideoFecMetadataBytes+longest,0);parity[0]=static_cast<std::uint8_t>(group_count);
-            for(std::size_t j=0;j<group_count;++j){
-                put16(parity.data()+1+j*2,static_cast<std::uint16_t>(group[j].size()));
-                for(std::size_t k=0;k<group[j].size();++k)parity[kVideoFecMetadataBytes+k]^=group[j][k];
-            }
-            VideoPacketHeader header;header.media_type=VideoMediaType::Fec;header.flags=flags;header.generation=generation;
-            header.session_id=session_id;header.packet_sequence=sequence++;header.frame_id=frame_id;header.capture_timestamp_us=timestamp;
-            header.fragment_index=static_cast<std::uint16_t>(start);header.fragment_count=static_cast<std::uint16_t>(count);
-            header.fec_group=static_cast<std::uint16_t>(start/10);header.payload_length=static_cast<std::uint16_t>(parity.size());
-            packets.push_back({header,std::move(parity)});
-        }
-    }
+    VideoFragmentCursor cursor(type,flags,generation,session_id,frame_id,timestamp,data,sequence,fec);
+    if(!cursor.valid())return {};
+    VideoPacketHeader header;std::span<const std::uint8_t> payload;
+    while(cursor.next(header,payload))packets.push_back({header,std::vector<std::uint8_t>(payload.begin(),payload.end())});
     return packets;
 }
 }
