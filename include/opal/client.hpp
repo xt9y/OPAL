@@ -1,5 +1,5 @@
 #pragma once
-#include <opal/media.hpp>
+#include <opal/media_profile.hpp>
 #include <string>
 namespace opal {
 int client_connect(const std::string &target,const std::string &password="");
