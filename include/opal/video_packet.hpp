@@ -14,7 +14,7 @@ constexpr std::size_t kVideoFecMetadataBytes=21;
 constexpr std::size_t kVideoDataFragmentBytes=kVideoPlaintextBytes-kVideoFecMetadataBytes;
 
 enum class VideoMediaType : std::uint8_t {
-    VideoH264=1,AudioAac=2,Probe=3,ProbeAck=4,Fec=5
+    VideoH264=1,AudioAac=2,Probe=3,ProbeAck=4,Fec=5,Keepalive=6
 };
 enum VideoFrameFlags : std::uint16_t {
     FrameKeyframe=1u,FrameConfig=2u,FrameEnd=4u
