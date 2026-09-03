@@ -105,7 +105,9 @@ struct VideoSender::Impl {
         }
         if(inject_drop)test_drop_done=true;
         if(failures){
-            if(ordinary||audio_frame)stale.fetch_add(1);else idr_requested.store(true);
+            if(ordinary){stale.fetch_add(1);idr_requested.store(true);}
+            else if(audio_frame)stale.fetch_add(1);
+            else idr_requested.store(true);
             return false;
         }
         return true;
@@ -129,7 +131,7 @@ struct VideoSender::Impl {
     }
 
     void debug_sample(const EncodedMediaUnit &unit){
-        if(!unit.capture_time_us)return;const double sample=static_cast<double>(monotonic_us()-unit.capture_time_us)/1000.0;
+        if(!unit.capture_time_us)return;const auto now_us=monotonic_us();const double sample=now_us>unit.capture_time_us?static_cast<double>(now_us-unit.capture_time_us)/1000.0:0.0;
         capture_to_packet_ewma=capture_to_packet_ewma==0.0?sample:capture_to_packet_ewma*0.8+sample*0.2;
         const auto now=Clock::now();if(debug_enabled()&&(last_debug.time_since_epoch().count()==0||now-last_debug>=std::chrono::seconds(1))){
             last_debug=now;std::cerr<<"OPAL latency capture->packet="<<capture_to_packet_ewma<<"ms bitrate="<<active_kbps.load()<<"kbps stale="<<stale.load()<<"\n";
@@ -145,6 +147,12 @@ struct VideoSender::Impl {
                 if(capture.ended()&&!restart_capture()){run.store(false);break;}
                 continue;
             }
+            const auto now_us=monotonic_us();
+            const auto age_us=unit.capture_time_us&&now_us>unit.capture_time_us?now_us-unit.capture_time_us:0;
+            if(unit.kind==MediaKind::VideoH264&&age_us>capture_stale_budget_us(stream.fps)){
+                stale.fetch_add(1);idr_requested.store(true);debug_sample(unit);continue;
+            }
+            if(unit.kind==MediaKind::AudioAac&&age_us>40000){continue;}
             const auto type=unit.kind==MediaKind::VideoH264?VideoMediaType::VideoH264:VideoMediaType::AudioAac;
             const std::uint16_t flags=unit.keyframe?FrameKeyframe:0;send_frame(type,flags,unit.data,unit.capture_time_us);debug_sample(unit);
         }
