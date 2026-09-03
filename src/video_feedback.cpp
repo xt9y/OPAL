@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 namespace opal {
@@ -67,6 +68,34 @@ std::string clock_sync_reply_line(std::uint32_t generation,std::int64_t t0_us,st
 bool parse_clock_sync_line(const std::string &line,std::uint32_t generation,std::int64_t &t0,std::int64_t &t1,std::int64_t &t2){
     std::istringstream in(line);std::string word,extra;unsigned long long gen=0;
     if(!(in>>word>>gen>>t0>>t1>>t2)||in>>extra||word!="CLOCK_SYNC"||gen!=generation)return false;return true;
+}
+
+std::string host_media_debug_line(std::uint32_t generation,const HostMediaDebugSample &s){
+    return "HOST_MEDIA "+std::to_string(generation)+" "+std::to_string(s.frame_id)+" "+std::to_string(s.frame_bytes)+" "+
+        std::to_string(s.data_fragments)+" "+std::to_string(s.fec_fragments)+" "+std::to_string(s.send_span_us)+" "+
+        std::to_string(s.capture_to_packet_us)+" "+std::to_string(s.target_kbps)+" "+std::to_string(s.active_kbps)+" "+
+        std::to_string(s.stale_frames)+" "+std::to_string(s.idr_requests)+" "+std::to_string(s.restarts)+" "+(s.chain_valid?"1":"0");
+}
+
+bool parse_host_media_debug_line(const std::string &line,std::uint32_t generation,HostMediaDebugSample &s){
+    std::istringstream in(line);std::string word,extra;unsigned long long gen=0,frame=0,bytes=0,data=0,fec=0,send=0,capture=0,target=0,active=0,stale=0,idr=0,restarts=0,chain=0;
+    if(!(in>>word>>gen>>frame>>bytes>>data>>fec>>send>>capture>>target>>active>>stale>>idr>>restarts>>chain)||in>>extra||
+       word!="HOST_MEDIA"||gen!=generation||data>65535ULL||fec>65535ULL||send>60000000ULL||capture>60000000ULL||
+       target>1000000ULL||active>1000000ULL||chain>1ULL)return false;
+    s.frame_id=frame;s.frame_bytes=bytes;s.data_fragments=static_cast<std::uint32_t>(data);s.fec_fragments=static_cast<std::uint32_t>(fec);
+    s.send_span_us=static_cast<std::uint32_t>(send);s.capture_to_packet_us=static_cast<std::uint32_t>(capture);
+    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=idr;s.restarts=restarts;s.chain_valid=chain==1;return true;
+}
+
+std::string format_host_media_debug(const HostMediaDebugSample &s){
+    std::ostringstream out;out.setf(std::ios::fixed);out<<std::setprecision(1)
+        <<"OPAL host frame="<<s.frame_id<<" bytes="<<s.frame_bytes
+        <<" packets="<<s.data_fragments<<"+"<<s.fec_fragments
+        <<" send="<<(static_cast<double>(s.send_span_us)/1000.0)<<"ms"
+        <<" capture->packet="<<(static_cast<double>(s.capture_to_packet_us)/1000.0)<<"ms"
+        <<" bitrate="<<s.active_kbps<<"kbps target="<<s.target_kbps<<"kbps"
+        <<" stale="<<s.stale_frames<<" idr="<<s.idr_requests<<" restarts="<<s.restarts
+        <<" chain="<<(s.chain_valid?"ok":"waiting-idr");return out.str();
 }
 
 std::string format_latency_telemetry(const LatencyTelemetry &t){
