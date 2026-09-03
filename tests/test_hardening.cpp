@@ -33,6 +33,7 @@ int main(){
     assert(host.find("sanitize_label")!=std::string::npos);
     assert(host.find("CHALLENGE OPAL2 ")!=std::string::npos);
     assert(host.find("negotiate_host_direct_video")!=std::string::npos);
+    assert(host.find("DIRECT_RECEIVER_READY")!=std::string::npos);
     assert(host.find("DIRECT_MEDIA_READY")!=std::string::npos);
     assert(host.find("video_session_active")==std::string::npos);
     assert(host.find("47991")==std::string::npos);
@@ -41,6 +42,7 @@ int main(){
     const auto session=read_all("src/session.cpp");
     assert(session.find("negotiate_client_direct_video")!=std::string::npos);
     assert(session.find("VIDEO_PROFILE ")!=std::string::npos);
+    assert(session.find("DIRECT_RECEIVER_READY ")!=std::string::npos);
     assert(session.find("ffplay")==std::string::npos);
     assert(session.find("open_video")==std::string::npos);
     assert(session.find("video_port")==std::string::npos);
@@ -62,13 +64,14 @@ int main(){
     assert(media.find("video_player_write_timeout_ms")==std::string::npos);
     assert(media_header.find("video_request_line")==std::string::npos);
 
+    const auto packet_header=read_all("include/opal/video_packet.hpp");
+    assert(packet_header.find("Keepalive=6")!=std::string::npos);
+
     const auto tunnel=read_all("src/tunnel.cpp");
     assert(tunnel.find("zrok2-control-only")!=std::string::npos);
     assert(tunnel.find("connection_code=\"opal:\"+control")!=std::string::npos);
     assert(tunnel.find("video_pid")==std::string::npos);
     assert(tunnel.find("opal-vid-")==std::string::npos);
-    // 47991 may appear only in legacy-process cleanup recognition, never as a
-    // live host listener/share/access command.
     assert(tunnel.find("--bind\",\"127.0.0.1:47991") == std::string::npos);
     assert(tunnel.find("\"127.0.0.1:47991\"},true") == std::string::npos);
 
