@@ -109,7 +109,10 @@ int main() {
         auto session=read_file("src/session.cpp");
         assert(session.find("video_player_write_timeout_ms()")!=std::string::npos);
         assert(session.find("-fflags nobuffer")!=std::string::npos);
-        assert(session.find("-avioflags direct")!=std::string::npos);
+        // AVIO direct mode is unsafe for a live FLV pipe: ffplay can misread
+        // PreviousTagSize0, fail codec discovery, close stdin, and trigger an
+        // endless OPAL reconnect loop.
+        assert(session.find("-avioflags direct")==std::string::npos);
         assert(session.find("-probesize 32")!=std::string::npos);
         assert(session.find("-analyzeduration 0")!=std::string::npos);
         assert(session.find("-sync video")!=std::string::npos);
