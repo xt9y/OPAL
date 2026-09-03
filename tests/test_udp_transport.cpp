@@ -1,5 +1,6 @@
 #include <opal/udp_transport.hpp>
 #include <arpa/inet.h>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstring>
@@ -74,6 +75,14 @@ int main(){
     std::uint8_t receive[32]{};sockaddr_storage source{};socklen_t source_len=sizeof(source);
     int n=opal::recv_datagram(b.fd,receive,source,source_len,500);
     assert(n==4&&std::memcmp(receive,payload.data(),4)==0);
+
+    std::array<std::array<std::uint8_t,32>,16> batch_buffers{};
+    std::array<opal::UdpReceiveSlot,16> slots{};
+    for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=batch_buffers[i];
+    for(std::uint8_t i=0;i<12;++i){const std::array<std::uint8_t,3> p={'B','T',i};assert(opal::send_datagram(a.fd,dst_storage,sizeof(dst),p));}
+    const int batched=opal::recv_datagrams_batch(b.fd,slots,500);
+    assert(batched>=2&&batched<=12);
+    for(int i=0;i<batched;++i){assert(slots[static_cast<std::size_t>(i)].size==3);assert(slots[static_cast<std::size_t>(i)].buffer[0]=='B');assert(slots[static_cast<std::size_t>(i)].buffer[1]=='T');assert(slots[static_cast<std::size_t>(i)].source_length>0);}
 
     auto locals=opal::local_udp_candidates(a);assert(!locals.empty());
     for(const auto &candidate:locals)assert(candidate.port==a.local_port&&candidate.type==opal::CandidateType::Local);
