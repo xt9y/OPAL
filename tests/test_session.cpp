@@ -128,8 +128,10 @@ int main(){
             pollfd p{lfd,POLLIN,0};if(poll(&p,1,100)<=0)continue;
             auto c=opal::accept_tls(server_ctx,lfd);if(!c.ssl)continue;
             std::string line;if(!opal::tls_read_line_timeout(c.ssl,line,3000)){opal::close_tls(c);continue;}
-            assert(line.rfind("VIDEO ",0)==0);
-            {std::lock_guard<std::mutex>l(tokens_mu);video_tokens.push_back(line.substr(6));}
+            std::string token;int max_width=0,max_height=0,fps=0;
+            assert(opal::parse_video_request_line(line,token,max_width,max_height,fps));
+            assert(max_width==1920&&max_height==1080&&fps==60);
+            {std::lock_guard<std::mutex>l(tokens_mu);video_tokens.push_back(token);}
             ++video_accepts;
             assert(opal::tls_write_line(c.ssl,"READY"));
             std::string payload(4096,'V');
