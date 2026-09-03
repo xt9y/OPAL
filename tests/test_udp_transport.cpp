@@ -58,6 +58,15 @@ std::uint16_t fake_stun_silent(){
 int main(){
     auto a=opal::open_udp_socket();auto b=opal::open_udp_socket();
     assert(a.fd>=0&&a.local_port>0&&b.fd>=0&&b.local_port>0);
+
+    int send_buffer=0,receive_buffer=0,traffic_class=0;socklen_t option_len=sizeof(int);
+    assert(getsockopt(a.fd,SOL_SOCKET,SO_SNDBUF,&send_buffer,&option_len)==0);
+    option_len=sizeof(int);assert(getsockopt(a.fd,SOL_SOCKET,SO_RCVBUF,&receive_buffer,&option_len)==0);
+    option_len=sizeof(int);assert(getsockopt(a.fd,IPPROTO_IPV6,IPV6_TCLASS,&traffic_class,&option_len)==0);
+    assert(send_buffer>=opal::kUdpQueueBufferBytes&&send_buffer<=opal::kUdpQueueBufferBytes*4);
+    assert(receive_buffer>=opal::kUdpQueueBufferBytes&&receive_buffer<=opal::kUdpQueueBufferBytes*4);
+    assert((traffic_class&0xfc)==opal::kUdpInteractiveTrafficClass);
+
     sockaddr_in6 dst{};dst.sin6_family=AF_INET6;dst.sin6_addr=in6addr_loopback;dst.sin6_port=htons(b.local_port);
     sockaddr_storage dst_storage{};std::memcpy(&dst_storage,&dst,sizeof(dst));
     const std::vector<std::uint8_t> payload={'O','P','A','L'};
