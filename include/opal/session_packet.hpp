@@ -7,7 +7,7 @@
 namespace opal {
 
 constexpr std::uint32_t kSessionPacketMagic=0x4f504c34u; // OPL4
-constexpr std::size_t kSessionPacketHeaderBytes=48;
+constexpr std::size_t kSessionPacketHeaderBytes=52;
 constexpr std::size_t kSessionPacketMaxPayload=1050;
 constexpr std::size_t kSessionPacketMaxBytes=kSessionPacketHeaderBytes+kSessionPacketMaxPayload+16;
 
