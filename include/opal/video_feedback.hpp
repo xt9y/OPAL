@@ -20,7 +20,6 @@ public:
 private:
     int ceiling_=0,floor_=0,target_=0;
     std::uint32_t baseline_rtt_us_=0;
-    int bad_samples_=0;
     std::chrono::steady_clock::time_point good_since_{},last_raise_{};
 };
 
