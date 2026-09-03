@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -31,6 +32,7 @@ public:
                        DecodedVideoView &out,std::size_t &superseded);
     bool decode(std::span<const std::uint8_t> unit,std::int64_t pts_us,
                 std::vector<DecodedVideoFrame>& out);
+    std::string backend_name() const;
     void flush();
     ~VideoDecoder();
 private:
