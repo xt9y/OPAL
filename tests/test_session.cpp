@@ -1,6 +1,6 @@
 #include <opal/session.hpp>
-#include <opal/media.hpp>
 #include <opal/crypto.hpp>
+#include <opal/direct_video_session.hpp>
 #include <opal/net.hpp>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
@@ -9,9 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <functional>
-#include <iterator>
 #include <mutex>
 #include <poll.h>
 #include <sstream>
@@ -21,7 +19,6 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 
 namespace fs=std::filesystem;
 using namespace std::chrono_literals;
@@ -39,8 +36,6 @@ static bool wait_until(const std::function<bool()>&pred,int timeout_ms){
     while(std::chrono::steady_clock::now()<end){if(pred())return true;std::this_thread::sleep_for(25ms);}return pred();
 }
 
-static int line_count(const fs::path&p){std::ifstream in(p);int n=0;std::string s;while(std::getline(in,s))++n;return n;}
-static std::string read_all(const fs::path&p){std::ifstream in(p);return std::string((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());}
 static std::string cert_fingerprint(const std::string&path){
     FILE*f=std::fopen(path.c_str(),"r");assert(f);
     X509*x=PEM_read_X509(f,nullptr,nullptr,nullptr);std::fclose(f);assert(x);
@@ -48,97 +43,83 @@ static std::string cert_fingerprint(const std::string&path){
     return opal::hex(md,n);
 }
 
+static std::uint32_t parse_generation(const std::string&line){
+    std::istringstream in(line);std::string word,extra;unsigned long long generation=0;
+    assert(in>>word>>generation);assert(word=="UDP_GENERATION");assert(!(in>>extra));assert(generation>0&&generation<=0xffffffffULL);
+    return static_cast<std::uint32_t>(generation);
+}
+
+static void assert_profile(const std::string&line,std::uint32_t generation){
+    std::istringstream in(line);std::string word,extra;unsigned long long got=0;int width=0,height=0,fps=0;
+    assert(in>>word>>got>>width>>height>>fps);assert(!(in>>extra));
+    assert(word=="VIDEO_PROFILE"&&got==generation);
+    assert(width==1920&&height==1080&&fps==60);
+}
+
 int main(){
     auto root=fs::temp_directory_path()/"opal-session-supervisor-test";
     fs::remove_all(root);fs::create_directories(root);
+    setenv("OPAL_DISABLE_STUN","1",1);
+
     auto cert=(root/"cert.pem").string(),key=(root/"key.pem").string();
     assert(opal::ensure_tls_certificate(cert,key));
     const auto server_fp=cert_fingerprint(cert);
     auto priv=root/"client.key",pub=root/"client.pub";assert(opal::ensure_identity(priv,pub));
     auto public_hex=opal::public_key_hex(pub);assert(!public_hex.empty());
 
-    auto player_log=root/"players.log";
-    auto bin=root/"bin";fs::create_directories(bin);
-    auto player=bin/"ffplay";
-    {
-        std::ofstream out(player);
-        out<<"#!/bin/sh\n"
-              "printf 'driver=%s args=%s\\n' \"$SDL_VIDEODRIVER\" \"$*\" >> \"$OPAL_TEST_PLAYER_LOG\"\n"
-              "dd bs=1 count=128 of=/dev/null 2>/dev/null\n";
-    }
-    chmod(player.c_str(),0755);
-    std::string old_path=std::getenv("PATH")?std::getenv("PATH"):"";
-    const bool had_display=std::getenv("DISPLAY")!=nullptr;
-    const bool had_wayland=std::getenv("WAYLAND_DISPLAY")!=nullptr;
-    const std::string old_display=had_display?std::getenv("DISPLAY"):"";
-    const std::string old_wayland=had_wayland?std::getenv("WAYLAND_DISPLAY"):"";
-    std::string test_path=bin.string()+":"+old_path;
-    setenv("PATH",test_path.c_str(),1);
-    setenv("DISPLAY",":99",1);
-    setenv("WAYLAND_DISPLAY","wayland-test",1);
-    unsetenv("OPAL_PLAYER_CMD");
-    setenv("OPAL_TEST_PLAYER_LOG",player_log.c_str(),1);
-
     SSL_CTX*server_ctx=opal::server_tls_context(cert,key);assert(server_ctx);
-    uint16_t control_port=free_port(),video_port=free_port();
+    uint16_t control_port=free_port();
     std::atomic<bool> run{true};
-    std::atomic<int> pair_count{0},auth_count{0},control_accepts{0},video_accepts{0};
-    std::mutex tokens_mu;std::vector<std::string> video_tokens;
+    std::atomic<int> pair_count{0},auth_count{0},control_accepts{0},direct_paths{0},input_count{0};
+    std::mutex ids_mu;std::vector<std::uint64_t> session_ids;
 
     std::thread control_server([&]{
         int lfd=opal::listen_tcp(control_port,"127.0.0.1");assert(lfd>=0);
-        int generation=0;
-        while(run.load()&&generation<4){
+        int accepted_generation=0;
+        while(run.load()&&accepted_generation<3){
             pollfd p{lfd,POLLIN,0};if(poll(&p,1,100)<=0)continue;
             auto c=opal::accept_tls(server_ctx,lfd);if(!c.ssl)continue;
-            ++generation;++control_accepts;
-            std::string nonce="nonce-"+std::to_string(generation);
+            ++accepted_generation;++control_accepts;
+            const int expected_generation=accepted_generation;
+            std::string nonce="nonce-"+std::to_string(expected_generation);
             std::string challenge=nonce+" 1920 1080 00:11:22:33:44:55";
             assert(opal::tls_write_line(c.ssl,"CHALLENGE OPAL2 "+challenge));
             std::string line;assert(opal::tls_read_line_timeout(c.ssl,line,3000));
-            if(generation==1){
-                std::istringstream auth(line);std::string mode,pubkey,proof;auth>>mode>>pubkey>>proof;
-                assert(mode=="PAIR");assert(pubkey==public_hex);
+            std::istringstream auth(line);std::string mode,pubkey,proof;auth>>mode>>pubkey>>proof;
+            assert(pubkey==public_hex);
+            if(expected_generation==1){
+                assert(mode=="PAIR");
                 auto transcript="OPAL-PAIR-v2\n"+server_fp+"\n"+challenge+"\n"+pubkey;
                 assert(proof==opal::hmac_sha256_hex("test-password",transcript));
                 ++pair_count;
-            }else{assert(line.rfind("AUTH ",0)==0);++auth_count;}
-            std::string token="video-token-"+std::to_string(generation);
-            assert(opal::tls_write_line(c.ssl,"OK "+token));
-            while(run.load()){
-                pollfd peer{c.fd,POLLIN,0};
-                int ready=poll(&peer,1,3000);
-                if(ready<0)break;
-                if(ready==0)continue;
-                if(peer.revents&(POLLERR|POLLHUP|POLLNVAL))break;
-                if(!(peer.revents&POLLIN))continue;
-                if(!opal::tls_read_line_timeout(c.ssl,line,500))break;
-                if(line=="PING"){
-                    if(generation==1){opal::close_tls(c);break;}
-                    assert(opal::tls_write_line(c.ssl,"PONG"));
-                }
+            }else{
+                assert(mode=="AUTH");assert(opal::verify_hex(pubkey,challenge,proof));++auth_count;
             }
-            opal::close_tls(c);
-        }
-        close(lfd);
-    });
 
-    std::thread video_server([&]{
-        int lfd=opal::listen_tcp(video_port,"127.0.0.1");assert(lfd>=0);
-        while(run.load()){
-            pollfd p{lfd,POLLIN,0};if(poll(&p,1,100)<=0)continue;
-            auto c=opal::accept_tls(server_ctx,lfd);if(!c.ssl)continue;
-            std::string line;if(!opal::tls_read_line_timeout(c.ssl,line,3000)){opal::close_tls(c);continue;}
-            std::string token;int max_width=0,max_height=0,fps=0;
-            assert(opal::parse_video_request_line(line,token,max_width,max_height,fps));
-            assert(max_width==1920&&max_height==1080&&fps==60);
-            {std::lock_guard<std::mutex>l(tokens_mu);video_tokens.push_back(token);}
-            ++video_accepts;
-            assert(opal::tls_write_line(c.ssl,"READY"));
-            std::string payload(4096,'V');
-            for(int i=0;i<200&&run.load();++i){
-                if(!opal::tls_write_all_timeout(c.ssl,payload.data(),payload.size(),500))break;
-                std::this_thread::sleep_for(5ms);
+            const std::string token="session-token-"+std::to_string(expected_generation);
+            assert(opal::tls_write_line(c.ssl,"OK "+token));
+            assert(opal::tls_read_line_timeout(c.ssl,line,2000));
+            const auto generation=parse_generation(line);assert(generation==static_cast<std::uint32_t>(expected_generation));
+            assert(opal::tls_read_line_timeout(c.ssl,line,2000));assert_profile(line,generation);
+
+            opal::DirectVideoPath path;std::string error;
+            auto send=[&](const std::string&message,int timeout){return opal::tls_write_line_timeout(c.ssl,message,timeout);};
+            auto read=[&](std::string&message,int timeout){return opal::tls_read_line_timeout(c.ssl,message,timeout);};
+            assert(opal::negotiate_host_direct_video(c.ssl,token,pubkey,server_fp,generation,{},send,read,path,error,3000));
+            assert(path.generation==generation&&path.session_id!=0&&path.socket.fd>=0&&path.peer_len>0);
+            {std::lock_guard<std::mutex> lock(ids_mu);session_ids.push_back(path.session_id);}
+            ++direct_paths;
+            assert(opal::tls_write_line(c.ssl,"DIRECT_MEDIA_READY "+std::to_string(generation)));
+
+            while(run.load()){
+                if(!opal::tls_read_line_timeout(c.ssl,line,1000))break;
+                if(line=="PING"){
+                    if(expected_generation==1){opal::close_tls(c);break;}
+                    assert(opal::tls_write_line(c.ssl,"PONG"));continue;
+                }
+                if(line=="MOUSE 1 2"){++input_count;continue;}
+                if(line.rfind("VIDEO_FEEDBACK ",0)==0||line.rfind("CLOCK_SYNC ",0)==0||line.rfind("REQUEST_IDR ",0)==0)continue;
+                assert(false&&"unexpected control line");
             }
             opal::close_tls(c);
         }
@@ -148,7 +129,6 @@ int main(){
     opal::SessionOptions options;
     options.target="127.0.0.1";
     options.control_port=control_port;
-    options.video_port=video_port;
     options.client_public_key=public_hex;
     options.client_private_key_path=priv.string();
     options.pairing_password="test-password";
@@ -158,42 +138,30 @@ int main(){
     assert(session.remote_width()==1920);
     assert(session.remote_height()==1080);
     assert(session.remote_mac()=="00:11:22:33:44:55");
-    assert(wait_until([&]{return session.media_started();},5000));
-    assert(wait_until([&]{return line_count(player_log)>=2;},5000));
+    assert(!session.media_started()); // no encoded frames are sent by this control fixture
     assert(wait_until([&]{return session.control_generation()>=2;},9000));
-    assert(session.remote_width()==1920);
-    assert(session.remote_height()==1080);
+    assert(session.running());
+    assert(session.remote_width()==1920&&session.remote_height()==1080);
     assert(session.remote_mac()=="00:11:22:33:44:55");
     assert(pair_count.load()==1);
     assert(auth_count.load()>=1);
     assert(control_accepts.load()>=2);
-    assert(wait_until([&]{
-        std::lock_guard<std::mutex>l(tokens_mu);
-        bool first=false,second=false;
-        for(auto&t:video_tokens){first|=t=="video-token-1";second|=t=="video-token-2";}
-        return first&&second;
-    },5000));
-    assert(video_accepts.load()>=3);
+    assert(direct_paths.load()>=2);
+    {
+        std::lock_guard<std::mutex> lock(ids_mu);
+        assert(session_ids.size()>=2);
+        assert(session_ids[0]!=session_ids[1]);
+    }
+
     auto input_started=std::chrono::steady_clock::now();
     assert(session.send_input("MOUSE 1 2"));
     auto input_elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-input_started).count();
     assert(input_elapsed<100);
+    assert(wait_until([&]{return input_count.load()>=1;},2000));
 
     session.stop();run.store(false);
-    control_server.join();video_server.join();SSL_CTX_free(server_ctx);
-    auto player_args=read_all(player_log);
-    assert(!player_args.empty());
-    assert(player_args.find("driver=x11")!=std::string::npos);
-    assert(player_args.find("driver=wayland")==std::string::npos);
-    assert(player_args.find("-fflags nobuffer")!=std::string::npos);
-    assert(player_args.find("-avioflags direct")==std::string::npos);
-    assert(player_args.find("-probesize 32")!=std::string::npos);
-    assert(player_args.find("-analyzeduration 0")!=std::string::npos);
-    assert(player_args.find("-sync video")!=std::string::npos);
-    setenv("PATH",old_path.c_str(),1);
-    if(had_display)setenv("DISPLAY",old_display.c_str(),1);else unsetenv("DISPLAY");
-    if(had_wayland)setenv("WAYLAND_DISPLAY",old_wayland.c_str(),1);else unsetenv("WAYLAND_DISPLAY");
-    unsetenv("OPAL_TEST_PLAYER_LOG");
+    control_server.join();SSL_CTX_free(server_ctx);
+    unsetenv("OPAL_DISABLE_STUN");
     fs::remove_all(root);
     return 0;
 }
