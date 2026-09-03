@@ -1,8 +1,0 @@
-OPAL
-
-Low-latency Linux remote desktop.
-
-install --> make && sudo make install
-run     --> opal
-doctor  --> opal doctor
-debug   --> OPAL_DEBUG=1 opal
