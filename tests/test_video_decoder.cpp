@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <string>
 
@@ -23,6 +24,7 @@ int main(){
     assert(configured);
     int encoded=0,decoded=0;std::size_t superseded_total=0;opal::EncodedMediaUnit unit;
     while(encoded<4){if(!capture.next(unit,1000))break;if(unit.kind!=opal::MediaKind::VideoH264)continue;++encoded;opal::DecodedVideoView latest;std::size_t superseded=0;assert(decoder.decode_latest(unit.data,unit.pts_us,latest,superseded));superseded_total+=superseded;if(latest.frame){assert(latest.frame->width==320&&latest.frame->height==180);assert(latest.pts_us==unit.pts_us);++decoded;}}
+    std::cerr<<"decoder test counts: encoded="<<encoded<<" decoded="<<decoded<<" superseded="<<superseded_total<<'\n';
     assert(encoded==4&&decoded==4);assert(superseded_total==0);
     decoder.flush();capture.stop();unsetenv("OPAL_CAPTURE_CMD");return 0;
 }
