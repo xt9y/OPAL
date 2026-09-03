@@ -57,6 +57,17 @@ int main(){
     opal::VideoCipher client_cipher(client_keys),server_cipher(server_keys);
     assert(client_cipher.valid()&&server_cipher.valid());
     std::array<std::uint8_t,1200> sealed_buffer{},opened_buffer{};
+
+    // Keepalives deliberately carry no plaintext. AAD processing must not leak
+    // its reported byte count into the ciphertext length: an empty ChaCha20-
+    // Poly1305 body is exactly the 16-byte authentication tag.
+    std::size_t empty_sealed_size=0,empty_opened_size=0;
+    const std::span<const std::uint8_t> empty_plaintext{};
+    assert(client_cipher.seal(999,aad,empty_plaintext,sealed_buffer,empty_sealed_size));
+    assert(empty_sealed_size==16);
+    assert(server_cipher.open(999,aad,std::span<const std::uint8_t>(sealed_buffer.data(),empty_sealed_size),opened_buffer,empty_opened_size));
+    assert(empty_opened_size==0);
+
     for(std::uint64_t sequence=1000;sequence<6000;++sequence){
         std::size_t sealed_size=0,opened_size=0;
         assert(client_cipher.seal(sequence,aad,plaintext,sealed_buffer,sealed_size));
