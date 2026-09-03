@@ -91,7 +91,7 @@ struct VideoSender::Impl {
         const auto start=Clock::now();const bool ordinary=type==VideoMediaType::VideoH264&&(flags&(FrameKeyframe|FrameConfig))==0;
         const bool audio_frame=type==VideoMediaType::AudioAac&&(flags&FrameConfig)==0;
         const auto deadline=start+(ordinary?std::chrono::microseconds(1000000/std::max(15,stream.fps)):(audio_frame?std::chrono::milliseconds(10):std::chrono::milliseconds(250)));
-        auto packets=fragment_media_unit(type,flags,path.generation,path.session_id,frame_id++,capture_time?capture_time:monotonic_us(),data,packet_sequence,true);
+        auto packets=fragment_media_unit(type,flags,path.generation,path.session_id,frame_id++,capture_time?capture_time:monotonic_us(),data,packet_sequence,use_fec_for_media(type));
         if(packets.empty())return false;
         int failures=0;int deliberately_dropped=0;
         const bool inject_drop=!test_drop_done&&type==VideoMediaType::VideoH264&&(flags&FrameConfig)==0&&test_drop_fragments>0;
