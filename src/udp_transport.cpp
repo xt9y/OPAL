@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <opal/udp_transport.hpp>
 #include <algorithm>
 #include <array>
@@ -13,6 +16,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <vector>
 
@@ -90,6 +94,10 @@ UdpSocket open_udp_socket(){
     int queue_bytes=kUdpQueueBufferBytes;
     if(setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&queue_bytes,sizeof(queue_bytes))!=0||
        setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&queue_bytes,sizeof(queue_bytes))!=0){close(fd);return {};}
+#ifdef SO_RXQ_OVFL
+    int overflow_reporting=1;
+    (void)setsockopt(fd,SOL_SOCKET,SO_RXQ_OVFL,&overflow_reporting,sizeof(overflow_reporting));
+#endif
     int traffic_class=kUdpInteractiveTrafficClass;
     if(setsockopt(fd,IPPROTO_IPV6,IPV6_TCLASS,&traffic_class,sizeof(traffic_class))!=0){close(fd);return {};}
     // Best effort for IPv4-mapped destinations on the dual-stack socket.
@@ -201,6 +209,45 @@ int recv_datagram(int fd,std::span<std::uint8_t> data,sockaddr_storage &source,
     }while(received<0&&errno==EINTR);
     if(received<0&&(errno==EAGAIN||errno==EWOULDBLOCK))return -2;
     return received<0?-1:static_cast<int>(received);
+}
+
+int recv_datagrams_batch(int fd,std::span<UdpReceiveSlot> slots,int timeout_ms){
+    if(fd<0||slots.empty())return -1;
+    const std::size_t count=std::min(slots.size(),kUdpReceiveBatchMax);
+    for(std::size_t i=0;i<count;++i){if(slots[i].buffer.empty())return -1;slots[i].size=0;slots[i].source_length=0;slots[i].kernel_drops=0;}
+    pollfd descriptor{fd,POLLIN,0};int rc=0;
+    do{rc=poll(&descriptor,1,std::max(0,timeout_ms));}while(rc<0&&errno==EINTR);
+    if(rc==0)return 0;if(rc<0||!(descriptor.revents&POLLIN))return -1;
+#if defined(__linux__)
+    std::array<mmsghdr,kUdpReceiveBatchMax> messages{};
+    std::array<iovec,kUdpReceiveBatchMax> vectors{};
+#ifdef SO_RXQ_OVFL
+    constexpr std::size_t control_bytes=CMSG_SPACE(sizeof(std::uint32_t));
+    std::array<std::array<unsigned char,control_bytes>,kUdpReceiveBatchMax> controls{};
+#endif
+    for(std::size_t i=0;i<count;++i){
+        vectors[i].iov_base=slots[i].buffer.data();vectors[i].iov_len=slots[i].buffer.size();
+        messages[i].msg_hdr.msg_name=&slots[i].source;messages[i].msg_hdr.msg_namelen=sizeof(slots[i].source);
+        messages[i].msg_hdr.msg_iov=&vectors[i];messages[i].msg_hdr.msg_iovlen=1;
+#ifdef SO_RXQ_OVFL
+        messages[i].msg_hdr.msg_control=controls[i].data();messages[i].msg_hdr.msg_controllen=controls[i].size();
+#endif
+    }
+    int received=0;do{received=recvmmsg(fd,messages.data(),static_cast<unsigned int>(count),MSG_DONTWAIT,nullptr);}while(received<0&&errno==EINTR);
+    if(received<0&&(errno==EAGAIN||errno==EWOULDBLOCK))return 0;if(received<0)return -1;
+    for(int i=0;i<received;++i){auto &slot=slots[static_cast<std::size_t>(i)];slot.size=messages[static_cast<std::size_t>(i)].msg_len;slot.source_length=messages[static_cast<std::size_t>(i)].msg_hdr.msg_namelen;
+#ifdef SO_RXQ_OVFL
+        for(cmsghdr *cmsg=CMSG_FIRSTHDR(&messages[static_cast<std::size_t>(i)].msg_hdr);cmsg;cmsg=CMSG_NXTHDR(&messages[static_cast<std::size_t>(i)].msg_hdr,cmsg)){
+            if(cmsg->cmsg_level==SOL_SOCKET&&cmsg->cmsg_type==SO_RXQ_OVFL&&cmsg->cmsg_len>=CMSG_LEN(sizeof(std::uint32_t))){std::uint32_t drops=0;std::memcpy(&drops,CMSG_DATA(cmsg),sizeof(drops));slot.kernel_drops=drops;break;}
+        }
+#endif
+    }
+    return received;
+#else
+    int received=0;
+    for(std::size_t i=0;i<count;++i){auto &slot=slots[i];socklen_t length=sizeof(slot.source);const int n=recv_datagram(fd,slot.buffer,slot.source,length,i==0?timeout_ms:0);if(n==-2)break;if(n<0)return received?received:-1;slot.size=static_cast<std::size_t>(n);slot.source_length=length;++received;}
+    return received;
+#endif
 }
 
 std::optional<UdpCandidate> discover_server_reflexive_candidate(
