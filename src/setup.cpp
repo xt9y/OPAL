@@ -96,7 +96,7 @@ int connect_default(const Ini &cfg,const StreamOptions &stream) {
         std::cout<<"Waking "<<name<<"...\n";
         (void)wake_named(name);
     }
-    std::cout<<"Connecting to "<<name<<" through OPAL tunnel...\n";
+    std::cout<<"Connecting to "<<name<<" through OPAL control tunnel...\n";
     return client_connect(name,"",stream);
 }
 
@@ -118,14 +118,18 @@ int first_setup(const StreamOptions &stream={}) {
         if(tunnel_host_setup(code)!=0) return 1;
         if(!save_role("host")) return 1;
         if(ask_yes_no("Enable Wake-on-LAN support? [Y/n] ",true)) configure_host_wol();
-        std::cout<<"\nOPAL connection code\n"<<code<<"\n\nGive this code to the client. No IP address or port forwarding is required.\n";
+        std::cout<<"\nOPAL connection code\n"<<code
+                 <<"\n\nGive this code to the client. zrok carries authenticated control only; video uses mandatory direct encrypted UDP.\n";
         return ensure_host_service();
     }
     if(choice=="2") {
         if(init()!=0) return 1;
         auto code=read_line("OPAL connection code: ");
-        std::string control,video;
-        if(!tunnel_connection_code(code,&control,&video)) {std::cerr<<"Invalid OPAL connection code. Expected: opal:CONTROL,VIDEO\n";return 2;}
+        std::string control,legacy_video;
+        if(!tunnel_connection_code(code,&control,&legacy_video)) {
+            std::cerr<<"Invalid OPAL connection code. Expected: opal:CONTROL\n";
+            return 2;
+        }
         auto name=read_line("Save as [desktop]: ","desktop");
         if(hosts_add(name,code)!=0||!save_role("client",name)) return 1;
         return client_connect(name,"",stream);
