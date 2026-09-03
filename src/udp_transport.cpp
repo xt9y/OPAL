@@ -86,7 +86,14 @@ UdpSocket open_udp_socket(){
     const int fd=socket(AF_INET6,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,0);
     if(fd<0)return {};
     int off=0;
-    setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&off,sizeof(off));
+    if(setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&off,sizeof(off))!=0){close(fd);return {};}
+    int queue_bytes=kUdpQueueBufferBytes;
+    if(setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&queue_bytes,sizeof(queue_bytes))!=0||
+       setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&queue_bytes,sizeof(queue_bytes))!=0){close(fd);return {};}
+    int traffic_class=kUdpInteractiveTrafficClass;
+    if(setsockopt(fd,IPPROTO_IPV6,IPV6_TCLASS,&traffic_class,sizeof(traffic_class))!=0){close(fd);return {};}
+    // Best effort for IPv4-mapped destinations on the dual-stack socket.
+    setsockopt(fd,IPPROTO_IP,IP_TOS,&traffic_class,sizeof(traffic_class));
     sockaddr_in6 address{};
     address.sin6_family=AF_INET6;
     address.sin6_addr=in6addr_any;
