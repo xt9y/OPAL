@@ -84,13 +84,13 @@ struct VideoSender::Impl {
         tokens-=wire.size();return send_datagram(path.socket.fd,path.peer,path.peer_len,wire);
     }
 
-    bool encrypt_packet(const VideoPlainPacket &packet,std::size_t &wire_size){
+    bool encrypt_packet(const VideoPacketHeader &header,std::span<const std::uint8_t> payload,std::size_t &wire_size){
         wire_size=0;if(!cipher||!cipher->valid())return false;
-        const auto aad=serialize_video_header(packet.header);
+        const auto aad=serialize_video_header(header);
         std::copy(aad.begin(),aad.end(),wire_buffer.begin());
         std::size_t sealed_size=0;
         auto sealed_output=std::span<std::uint8_t>(wire_buffer).subspan(aad.size());
-        if(!cipher->seal(packet.header.packet_sequence,aad,packet.payload,sealed_output,sealed_size))return false;
+        if(!cipher->seal(header.packet_sequence,aad,payload,sealed_output,sealed_size))return false;
         wire_size=aad.size()+sealed_size;
         return wire_size<=wire_buffer.size();
     }
@@ -99,19 +99,22 @@ struct VideoSender::Impl {
         const auto start=Clock::now();const bool ordinary=type==VideoMediaType::VideoH264&&(flags&(FrameKeyframe|FrameConfig))==0;
         const bool audio_frame=type==VideoMediaType::AudioAac&&(flags&FrameConfig)==0;
         const auto deadline=start+(ordinary?std::chrono::microseconds(1000000/std::max(15,stream.fps)):(audio_frame?std::chrono::milliseconds(10):std::chrono::milliseconds(250)));
-        auto packets=fragment_media_unit(type,flags,path.generation,path.session_id,frame_id++,capture_time?capture_time:monotonic_us(),data,packet_sequence,use_fec_for_media(type));
-        if(packets.empty())return false;
-        int failures=0;int deliberately_dropped=0;
+        VideoFragmentCursor cursor(type,flags,path.generation,path.session_id,frame_id++,capture_time?capture_time:monotonic_us(),data,packet_sequence,use_fec_for_media(type));
+        if(!cursor.valid())return false;
+        int failures=0,deliberately_dropped=0;bool any=false;
         const bool inject_drop=!test_drop_done&&type==VideoMediaType::VideoH264&&(flags&FrameConfig)==0&&test_drop_fragments>0;
-        for(const auto &packet:packets){
-            if(inject_drop&&packet.header.media_type!=VideoMediaType::Fec&&deliberately_dropped<test_drop_fragments){++deliberately_dropped;continue;}
+        VideoPacketHeader header;std::span<const std::uint8_t> payload;
+        while(cursor.next(header,payload)){
+            any=true;
+            if(inject_drop&&header.media_type!=VideoMediaType::Fec&&deliberately_dropped<test_drop_fragments){++deliberately_dropped;continue;}
             std::size_t wire_size=0;
-            if(!encrypt_packet(packet,wire_size)||!paced_send(std::span<const std::uint8_t>(wire_buffer.data(),wire_size),deadline,ordinary||audio_frame)){
+            if(!encrypt_packet(header,payload,wire_size)||!paced_send(std::span<const std::uint8_t>(wire_buffer.data(),wire_size),deadline,ordinary||audio_frame)){
                 ++failures;
                 if(ordinary||audio_frame)break;
             }
         }
         if(inject_drop)test_drop_done=true;
+        if(!any)return false;
         if(failures){
             if(ordinary){stale.fetch_add(1);idr_requested.store(true);}
             else if(audio_frame)stale.fetch_add(1);
