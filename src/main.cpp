@@ -11,7 +11,7 @@ static void help() {
     std::cout<<R"(OPAL - performance-first Linux remote desktop
 
 Commands:
-  opal                                      Wake and connect using native resolution at 60 FPS
+  opal                                      Wake and connect at up to 1080p / 60 FPS
   opal [--mode max|1080p|1440p|4k] [--fps 15-240]
                                             Connect with temporary stream overrides
   opal select                               Select a saved host
