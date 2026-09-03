@@ -31,7 +31,9 @@ int main(){
 
     const auto host=read_all("src/host.cpp");
     assert(host.find("sanitize_label")!=std::string::npos);
-    assert(host.find("CHALLENGE OPAL2 ")!=std::string::npos);
+    assert(host.find("CHALLENGE OPAL3 ")!=std::string::npos);
+    assert(host.find("CHALLENGE OPAL2 ")==std::string::npos);
+    assert(host.find("OPAL-PAIR-v3")!=std::string::npos);
     assert(host.find("negotiate_host_direct_video")!=std::string::npos);
     assert(host.find("DIRECT_RECEIVER_READY")!=std::string::npos);
     assert(host.find("DIRECT_MEDIA_READY")!=std::string::npos);
@@ -40,6 +42,8 @@ int main(){
     assert(host.find("listen_tcp(static_cast<uint16_t>(cp)")!=std::string::npos);
 
     const auto session=read_all("src/session.cpp");
+    assert(session.find("OPAL3 ")!=std::string::npos);
+    assert(session.find("OPAL-PAIR-v3")!=std::string::npos);
     assert(session.find("negotiate_client_direct_video")!=std::string::npos);
     assert(session.find("VIDEO_PROFILE ")!=std::string::npos);
     assert(session.find("DIRECT_RECEIVER_READY ")!=std::string::npos);
