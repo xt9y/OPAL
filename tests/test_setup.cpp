@@ -26,9 +26,13 @@ int hosts_add(const std::string&name,const std::string&address,const std::string
 int client_connect(const std::string&target,const std::string&password,const StreamOptions&stream){(void)password;++client_calls;client_target=target;client_stream=stream;return 0;}
 int client_connect(const std::string&target,const std::string&password){return client_connect(target,password,{});}
 int wake_named(const std::string&name){++wake_calls;wake_target=name;return 0;}
-int tunnel_host_setup(std::string &code){++tunnel_setup_calls;code="opal:control-token,video-token";return 0;}
+int tunnel_host_setup(std::string &code){++tunnel_setup_calls;code="opal:control-token";return 0;}
 int tunnel_host_start(){++tunnel_start_calls;return 0;}
-bool tunnel_connection_code(const std::string&code,std::string*control,std::string*video){if(code!="opal:control-token,video-token")return false;if(control)*control="control-token";if(video)*video="video-token";return true;}
+bool tunnel_connection_code(const std::string&code,std::string*control,std::string*legacy){
+    if(code=="opal:control-token"){if(control)*control="control-token";if(legacy)*legacy="";return true;}
+    if(code=="opal:control-token,legacy-video-token"){if(control)*control="control-token";if(legacy)*legacy="legacy-video-token";return true;}
+    return false;
+}
 }
 
 static void reset_calls(){
@@ -63,19 +67,26 @@ int main(){
         opal::Ini c;assert(c.load(p/"config.ini"));assert(c.get("opal","role")=="host");
         assert(opal::host_setup_calls==1);assert(opal::tunnel_setup_calls==1);
         assert(opal::host_service_calls==1);assert(opal::tunnel_start_calls==0);assert(opal::host_run_calls==0);
-        assert(out.find("opal:control-token,video-token")!=std::string::npos);
+        assert(out.find("opal:control-token")!=std::string::npos);
+        assert(out.find("direct encrypted UDP")!=std::string::npos);
     }
     {
         auto p=fresh("opal-setup-client-test");reset_calls();
-        assert(run_default("2\nopal:control-token,video-token\ndesktop\n")==0);
+        assert(run_default("2\nopal:control-token\ndesktop\n")==0);
         opal::Ini c;assert(c.load(p/"config.ini"));assert(c.get("opal","role")=="client");assert(c.get("opal","default_host")=="desktop");
-        assert(opal::add_calls==1);assert(opal::added_address=="opal:control-token,video-token");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
+        assert(opal::add_calls==1);assert(opal::added_address=="opal:control-token");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
         assert(opal::client_stream.max_width==1920&&opal::client_stream.max_height==1080&&opal::client_stream.fps==60);
+    }
+    {
+        fresh("opal-setup-legacy-code-test");reset_calls();
+        assert(run_default("2\nopal:control-token,legacy-video-token\ndesktop\n")==0);
+        assert(opal::added_address=="opal:control-token,legacy-video-token");
+        assert(opal::client_calls==1);
     }
     {
         fresh("opal-setup-invalid-code-test");reset_calls();std::string err;
         assert(run_default("2\nopal,opal-ctl-bad,opal-vid-bad\n",nullptr,&err)==2);
-        assert(err.find("Invalid OPAL connection code. Expected: opal:CONTROL,VIDEO")!=std::string::npos);
+        assert(err.find("Invalid OPAL connection code. Expected: opal:CONTROL")!=std::string::npos);
         assert(opal::add_calls==0);assert(opal::client_calls==0);
     }
     {
@@ -83,22 +94,22 @@ int main(){
         assert(run_default("")==0);assert(opal::host_service_calls==1);assert(opal::tunnel_start_calls==0);assert(opal::host_run_calls==0);
     }
     {
-        auto p=fresh("opal-auto-client-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.set("desktop","mac","00:11:22:33:44:55");h.save(p/"hosts.ini");
+        auto p=fresh("opal-auto-client-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token");h.set("desktop","mac","00:11:22:33:44:55");h.save(p/"hosts.ini");
         assert(run_default("")==0);assert(opal::wake_calls==1);assert(opal::wake_target=="desktop");assert(opal::client_calls==1);assert(opal::client_target=="desktop");
         assert(opal::client_stream.max_width==1920&&opal::client_stream.max_height==1080&&opal::client_stream.fps==60);
     }
     {
-        auto p=fresh("opal-stream-override-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token,video-token");h.save(p/"hosts.ini");
+        auto p=fresh("opal-stream-override-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","desktop");c.save(p/"config.ini");opal::Ini h;h.set("desktop","address","opal:control-token");h.save(p/"hosts.ini");
         opal::StreamOptions stream{2560,1440,120};
         assert(run_default_stream(stream,"")==0);assert(opal::client_calls==1);assert(opal::client_stream.max_width==2560);assert(opal::client_stream.max_height==1440);assert(opal::client_stream.fps==120);
         opal::Ini saved;assert(saved.load(p/"config.ini"));assert(saved.get("opal","stream_width").empty());assert(saved.get("opal","stream_height").empty());assert(saved.get("opal","stream_fps").empty());
     }
     {
-        auto p=fresh("opal-select-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","alpha");c.save(p/"config.ini");opal::Ini h;h.set("alpha","address","opal:control-token,video-token");h.set("beta","address","opal:control-token,video-token");h.save(p/"hosts.ini");
+        auto p=fresh("opal-select-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","alpha");c.save(p/"config.ini");opal::Ini h;h.set("alpha","address","opal:control-a");h.set("beta","address","opal:control-b");h.save(p/"hosts.ini");
         assert(run_with([]{return opal::interactive_select();},"2\n")==0);opal::Ini selected;assert(selected.load(p/"config.ini"));assert(selected.get("opal","default_host")=="beta");assert(opal::client_calls==0);
     }
     {
-        auto p=fresh("opal-remove-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","alpha");c.save(p/"config.ini");opal::Ini h;h.set("alpha","address","opal:control-token,video-token");h.set("beta","address","opal:control-token,video-token");h.save(p/"hosts.ini");
+        auto p=fresh("opal-remove-test");reset_calls();opal::Ini c;c.set("opal","role","client");c.set("opal","default_host","alpha");c.save(p/"config.ini");opal::Ini h;h.set("alpha","address","opal:control-a");h.set("beta","address","opal:control-b");h.save(p/"hosts.ini");
         assert(run_with([]{return opal::interactive_remove();},"1\n")==0);opal::Ini left;assert(left.load(p/"hosts.ini"));assert(left.sections().count("alpha")==0);assert(left.sections().count("beta")==1);opal::Ini selected;assert(selected.load(p/"config.ini"));assert(selected.get("opal","default_host")=="beta");
     }
     std::cout<<"setup tests passed\n";
