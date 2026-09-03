@@ -1,5 +1,6 @@
 #include <opal/video_present.hpp>
 #include <cassert>
+#include <cstring>
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/imgutils.h>
