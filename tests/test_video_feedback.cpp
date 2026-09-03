@@ -29,8 +29,6 @@ int main(){
 
     auto estimate=opal::estimate_clock_offset(1000000,1005500,1005600,1001100);
     assert(estimate.valid);assert(estimate.rtt_us==1000);assert(estimate.offset_us==5000);
-    // steady_clock epochs are machine-local. A host that booted much later can be
-    // hundreds of seconds behind the client while the measured RTT is still tiny.
     auto cross_boot=opal::estimate_clock_offset(200000000,1000500,1000600,200001100);
     assert(cross_boot.valid);assert(cross_boot.rtt_us==1000);assert(cross_boot.offset_us==-199000000);
     auto request=opal::clock_sync_request_line(4,123);std::int64_t t0=0,t1=0,t2=0;
@@ -67,5 +65,15 @@ int main(){
     assert(!opal::parse_debug_media_request_line(debug_on,8,debug_enabled));
     assert(!opal::parse_debug_media_request_line(debug_on+" extra",9,debug_enabled));
     assert(!opal::parse_debug_media_request_line("DEBUG_MEDIA 9 2",9,debug_enabled));
+
+    opal::LatencyTelemetry latency{};
+    latency.capture_to_packet_ms=4.1;latency.network_ms=23.5;latency.reassembly_ms=3.2;
+    latency.decode_ms=4.7;latency.present_ms=2.1;latency.total_ms=37.6;latency.loss_percent=0.2;
+    latency.stale_frames=2;latency.bitrate_kbps=28400;latency.decoder_backend="software-slice";
+    latency.decoded_fps=59.4;latency.presented_fps=59.1;
+    const auto latency_line=opal::format_latency_telemetry(latency);
+    assert(latency_line.find("decoder=software-slice")!=std::string::npos);
+    assert(latency_line.find("decode_fps=59.4")!=std::string::npos);
+    assert(latency_line.find("present_fps=59.1")!=std::string::npos);
     return 0;
 }
