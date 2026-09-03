@@ -52,9 +52,8 @@ DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
 DIRECT_MEDIA_SRCS := $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS)
 NATIVE_CONTROL_SRCS := $(RENDEZVOUS_PROTOCOL_SRCS) $(RENDEZVOUS_CLIENT_SRCS) $(RELAY_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(PEER_SESSION_SRCS)
-SESSION_SRCS := src/session.cpp $(NATIVE_CONTROL_SRCS) $(DIRECT_VIDEO_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) src/config.cpp src/crypto.cpp
 APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(NATIVE_CONTROL_SRCS) $(INPUT_SRCS) src/net.cpp
-MEDIA_TEST_TARGETS := test-video-capture test-video-decoder test-video-present test-audio-output test-direct-video-pipeline test-session
+MEDIA_TEST_TARGETS := test-video-capture test-video-decoder test-video-present test-audio-output test-direct-video-pipeline
 
 all: $(PRODUCT) $(INPUT)
 
@@ -189,7 +188,7 @@ test-net: | $(BUILD)
 	$(BUILD)/test-net
 
 test-session: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_session.cpp $(SESSION_SRCS) -lssl -lcrypto -lX11 -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-session
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_session.cpp -o $(BUILD)/test-session
 	$(BUILD)/test-session
 
 test-hardening: | $(BUILD)
