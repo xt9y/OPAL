@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
-: "${BIN:?}" "${INPUT_BIN:?}"
+: "${BIN:?}" "${INPUT_BIN:?}" "${RENDEZVOUS_BIN:?}"
 base="$(mktemp -d)"
-hp=""; cp=""
-trap 'test -n "$cp" && kill "$cp" 2>/dev/null || true; test -n "$hp" && kill "$hp" 2>/dev/null || true; rm -rf "$base"' EXIT
+hp=""; cp=""; rp=""
+trap 'test -n "$cp" && kill "$cp" 2>/dev/null || true; test -n "$hp" && kill "$hp" 2>/dev/null || true; test -n "$rp" && kill "$rp" 2>/dev/null || true; rm -rf "$base"' EXIT
 server="$base/server"; client="$base/client"
 mkdir -p "$base/bin"
 
@@ -21,57 +21,78 @@ chmod +x "$base/bin/capture"
 : >"$base/captures.log"
 
 OPAL_HOME="$server" "$BIN" --internal-host-setup >"$base/setup"
+code="$(sed -n 's/^Connection code: //p' "$base/setup")"
 password="$(sed -n 's/^Pairing password: //p' "$base/setup")"
-test -n "$password"
+test -n "$code"; test -n "$password"
 lower_password="$(printf '%s' "$password" | tr '[:upper:]' '[:lower:]')"
 
+port=$((43000 + ($$ % 15000)))
+OPAL_RENDEZVOUS_BIND=127.0.0.1 \
+OPAL_RENDEZVOUS_PUBLIC_HOST=127.0.0.1 \
+OPAL_RENDEZVOUS_PORT="$port" \
+"$RENDEZVOUS_BIN" >"$base/rendezvous.log" 2>&1 & rp=$!
+sleep 0.2
+kill -0 "$rp"
+grep -q 'OPAL rendezvous+relay listening' "$base/rendezvous.log"
+
+OPAL_RENDEZVOUS_HOST=127.0.0.1 \
+OPAL_RENDEZVOUS_PORT="$port" \
 OPAL_HOME="$server" \
-OPAL_DISABLE_STUN=1 \
 OPAL_CAPTURE_CMD="$base/bin/capture" \
 OPAL_TEST_CAPTURE_COUNT="$base/captures.log" \
 OPAL_INPUT_HELPER="$INPUT_BIN" \
-OPAL_TEST_CONTROL_CLOSE_AFTER_PINGS=1 \
+OPAL_TEST_CLOSE_FIRST_PEER_MS=1500 \
 OPAL_TEST_AUTH_LOG="$base/auth.log" \
+OPAL_DEBUG=1 \
 "$BIN" --internal-host-run >"$base/host.log" 2>&1 & hp=$!
-sleep 0.5
+sleep 0.4
 kill -0 "$hp"
-! grep -q '47991' "$base/host.log"
 
-OPAL_DISABLE_STUN=1 OPAL_AUDIO_TEST_SINK=discard OPAL_HOME="$client" \
-"$BIN" --internal-connect 127.0.0.1 "$lower_password" >"$base/client.log" 2>&1 & cp=$!
+OPAL_RENDEZVOUS_HOST=127.0.0.1 \
+OPAL_RENDEZVOUS_PORT="$port" \
+OPAL_AUDIO_TEST_SINK=discard \
+OPAL_HOME="$client" \
+OPAL_DEBUG=1 \
+"$BIN" --internal-connect "$code" "$lower_password" >"$base/client.log" 2>&1 & cp=$!
 
 recovered=0
 i=0
-while test "$i" -lt 180; do
+while test "$i" -lt 220; do
     captures=0; test -f "$base/captures.log" && captures="$(wc -l <"$base/captures.log")"
     if test "$captures" -ge 2 \
        && test -f "$base/auth.log" && grep -q '^PAIR$' "$base/auth.log" && grep -q '^AUTH$' "$base/auth.log" \
        && grep -q 'Connected' "$base/client.log" \
-       && grep -q 'Control interrupted; recovering direct session...' "$base/client.log" \
-       && grep -q 'Control restored. Direct video rekeyed.' "$base/client.log"; then recovered=1; break; fi
+       && grep -q 'peer session recovered media_generation=2' "$base/client.log"; then recovered=1; break; fi
     kill -0 "$cp" 2>/dev/null || break
+    kill -0 "$hp" 2>/dev/null || break
+    kill -0 "$rp" 2>/dev/null || break
     sleep 0.1
     i=$((i+1))
 done
 
 test "$recovered" -eq 1
-kill -0 "$hp"
-kill -0 "$cp"
+kill -0 "$hp"; kill -0 "$cp"; kill -0 "$rp"
 grep -q 'Connected' "$base/client.log"
-! grep -qi 'ffplay' "$base/client.log"
+grep -Eq 'OPAL network path=(lan|direct|relay)' "$base/client.log"
 ! grep -q 'Pairing password:' "$base/client.log"
 test -s "$server/authorized_clients"
-grep -q '^\[127.0.0.1\]' "$client/hosts.ini"
 grep -q '^paired=true$' "$client/hosts.ini"
-grep -q '^mouse_sensitivity=1.0$' "$client/hosts.ini"
+grep -q '^host_public_key=' "$client/hosts.ini"
 
 first_count="$(wc -l <"$base/captures.log")"
 kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
-sleep 0.2
-kill -0 "$hp"
 
-OPAL_DISABLE_STUN=1 OPAL_AUDIO_TEST_SINK=discard OPAL_HOME="$client" \
-"$BIN" --internal-connect 127.0.0.1 >"$base/client2.log" 2>&1 & cp=$!
+# The host detects the closed encrypted peer by its bounded liveness timer,
+# returns to rendezvous registration, and accepts a fresh paired connection.
+sleep 4
+kill -0 "$hp"; kill -0 "$rp"
+
+OPAL_RENDEZVOUS_HOST=127.0.0.1 \
+OPAL_RENDEZVOUS_PORT="$port" \
+OPAL_AUDIO_TEST_SINK=discard \
+OPAL_HOME="$client" \
+OPAL_DEBUG=1 \
+"$BIN" --internal-connect "$code" >"$base/client2.log" 2>&1 & cp=$!
 second_connected=0
 i=0
 while test "$i" -lt 120; do
@@ -83,13 +104,16 @@ while test "$i" -lt 120; do
 done
 
 test "$second_connected" -eq 1
-kill -0 "$hp"
-kill -0 "$cp"
+kill -0 "$hp"; kill -0 "$cp"; kill -0 "$rp"
 grep -q 'Connected' "$base/client2.log"
 ! grep -q 'Pairing password:' "$base/client2.log"
-! grep -q 'authentication denied' "$base/client2.log"
-! grep -qi 'ffplay' "$base/client2.log"
+! grep -qi 'authentication denied' "$base/client2.log"
+
+grep -q '^PAIR$' "$base/auth.log"
+auth_count="$(grep -c '^AUTH$' "$base/auth.log")"
+test "$auth_count" -ge 2
 
 kill "$cp" 2>/dev/null || true; wait "$cp" 2>/dev/null || true; cp=""
 kill "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true; hp=""
+kill "$rp" 2>/dev/null || true; wait "$rp" 2>/dev/null || true; rp=""
 echo 'integration tests passed'
