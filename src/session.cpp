@@ -25,6 +25,7 @@ bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::s
 bool pointer_command(const std::string&s){return s.rfind("POINTER ",0)==0;}
 bool local_discovery_enabled(){const char*v=std::getenv("OPAL_LOCAL_DISCOVERY");return !(v&&*v&&std::string(v)=="0");}
 bool rendezvous_timeout(const std::string&s){return s=="rendezvous timeout"||s=="rendezvous protocol timeout"||s=="rendezvous introduction timeout";}
+const char*receiver_failure_name(VideoReceiverFailure reason){switch(reason){case VideoReceiverFailure::NoFailure:return "none";case VideoReceiverFailure::PresenterOpen:return "presenter-open";case VideoReceiverFailure::Present:return "present";case VideoReceiverFailure::MediaStall:return "media-stall";}return "unknown";}
 }
 
 struct SessionSupervisor::Impl {
@@ -88,17 +89,53 @@ struct SessionSupervisor::Impl {
         paired_state.store(true);generation.store(gen);{std::lock_guard<std::mutex>lock(session_mu);peer=std::move(next_peer);receiver=std::move(next_receiver);}if(debug_enabled())std::cerr<<"OPAL network path="<<path_value<<" session="<<intro.session_id.substr(0,8)<<"... media_generation="<<gen<<"\n";return true;
     }
 
-    bool current_healthy(){std::lock_guard<std::mutex>lock(session_mu);return peer&&peer->running()&&receiver&&!receiver->failed();}
-    void monitor(){while(run.load()){std::this_thread::sleep_for(100ms);if(!run.load())break;if(current_healthy())continue;const auto failed_generation=static_cast<std::uint32_t>(generation.load());teardown_current();bool restored=false;for(int attempt=0;attempt<5&&run.load();++attempt){const auto next=failed_generation+1;if(connect_generation(next,false)){restored=true;if(debug_enabled())std::cerr<<"OPAL peer session recovered media_generation="<<next<<" path="<<path_value<<"\n";break;}std::this_thread::sleep_for(std::chrono::milliseconds(250*(1<<std::min(attempt,4))));}if(!restored){run.store(false);break;}}}
+    std::string unhealthy_reason(){
+        std::lock_guard<std::mutex>lock(session_mu);
+        if(!peer)return "peer-missing";
+        if(!peer->running()){auto why=peer->last_error();return why.empty()?"peer-stopped":why;}
+        if(!receiver)return "receiver-missing";
+        if(receiver->failed())return std::string("receiver-")+receiver_failure_name(receiver->failure_reason());
+        return{};
+    }
+    bool current_healthy(){return unhealthy_reason().empty();}
+    void monitor(){
+        while(run.load()){
+            std::this_thread::sleep_for(100ms);if(!run.load())break;
+            auto reason=unhealthy_reason();if(reason.empty())continue;
+            const auto failed_generation=static_cast<std::uint32_t>(generation.load());set_error(reason);
+            if(debug_enabled())std::cerr<<"OPAL generation="<<failed_generation<<" unhealthy reason="<<reason<<"\n";
+            teardown_current();bool restored=false;
+            for(int attempt=0;attempt<5&&run.load();++attempt){const auto next=failed_generation+1;if(connect_generation(next,false)){restored=true;if(debug_enabled())std::cerr<<"OPAL peer session recovered media_generation="<<next<<" path="<<path_value<<"\n";break;}std::this_thread::sleep_for(std::chrono::milliseconds(250*(1<<std::min(attempt,4))));}
+            if(!restored){run.store(false);break;}
+        }
+    }
 
     bool start(){if(run.load())return true;if(options.rendezvous_id.empty()||options.client_public_key.empty()||options.client_private_key_path.empty()){set_error("invalid native session configuration");return false;}if(!paired_state.load()){std::string password=options.pairing_password;if(password.empty()&&options.pairing_password_provider)password=options.pairing_password_provider();password=normalize_pairing_code(password);if(password.empty()){set_error("pairing password required");return false;}options.pairing_password=std::move(password);}run.store(true);if(!connect_generation(1,true)){run.store(false);teardown_current();return false;}monitor_thread=std::thread([this]{monitor();});return true;}
     void stop(){const bool was=run.exchange(false);if(monitor_thread.joinable())monitor_thread.join();teardown_current();if(!was)return;}
     bool send_input(const std::string&command){if(command.empty()||!run.load())return false;std::lock_guard<std::mutex>lock(session_mu);if(!peer||!peer->running())return false;return pointer_command(command)?peer->send_pointer(command):peer->send_input(command);}
     bool media_started()const{std::lock_guard<std::mutex>lock(session_mu);return receiver&&receiver->media_started();}
+    bool take_latest_video(DecodedVideoFrame&out){std::lock_guard<std::mutex>lock(session_mu);return receiver&&receiver->take_latest_video(out);}
+    void note_presented_video(std::int64_t pts_us,double present_ms){std::lock_guard<std::mutex>lock(session_mu);if(receiver)receiver->note_presented_video(pts_us,present_ms);}
 };
 
-SessionSupervisor::SessionSupervisor(SessionOptions o):impl_(std::make_unique<Impl>(std::move(o))){}SessionSupervisor::~SessionSupervisor(){impl_->stop();}
-bool SessionSupervisor::start(){return impl_->start();}void SessionSupervisor::stop(){impl_->stop();}bool SessionSupervisor::send_input(const std::string&c){return impl_->send_input(c);}unsigned long SessionSupervisor::control_generation()const{return impl_->generation.load();}bool SessionSupervisor::media_started()const{return impl_->media_started();}unsigned long SessionSupervisor::presentation_window()const{std::lock_guard<std::mutex>lock(impl_->session_mu);return impl_->receiver?static_cast<unsigned long>(impl_->receiver->presentation_window()):0;}bool SessionSupervisor::running()const{return impl_->run.load();}bool SessionSupervisor::paired()const{return impl_->paired_state.load();}
-int SessionSupervisor::remote_width()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_width_value;}int SessionSupervisor::remote_height()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_height_value;}std::string SessionSupervisor::remote_mac()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_mac_value;}std::string SessionSupervisor::remote_tailnet_address()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_tailnet_value;}std::string SessionSupervisor::host_public_key()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->host_key_value;}std::string SessionSupervisor::fingerprint()const{return host_public_key();}std::string SessionSupervisor::path_name()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->path_value;}std::string SessionSupervisor::last_error()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->error;}
+SessionSupervisor::SessionSupervisor(SessionOptions o):impl_(std::make_unique<Impl>(std::move(o))){}
+SessionSupervisor::~SessionSupervisor(){impl_->stop();}
+bool SessionSupervisor::start(){return impl_->start();}
+void SessionSupervisor::stop(){impl_->stop();}
+bool SessionSupervisor::send_input(const std::string&c){return impl_->send_input(c);}
+unsigned long SessionSupervisor::control_generation()const{return impl_->generation.load();}
+bool SessionSupervisor::media_started()const{return impl_->media_started();}
+bool SessionSupervisor::take_latest_video(DecodedVideoFrame&out){return impl_->take_latest_video(out);}
+void SessionSupervisor::note_presented_video(std::int64_t pts_us,double present_ms){impl_->note_presented_video(pts_us,present_ms);}
+bool SessionSupervisor::running()const{return impl_->run.load();}
+bool SessionSupervisor::paired()const{return impl_->paired_state.load();}
+int SessionSupervisor::remote_width()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_width_value;}
+int SessionSupervisor::remote_height()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_height_value;}
+std::string SessionSupervisor::remote_mac()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_mac_value;}
+std::string SessionSupervisor::remote_tailnet_address()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->remote_tailnet_value;}
+std::string SessionSupervisor::host_public_key()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->host_key_value;}
+std::string SessionSupervisor::fingerprint()const{return host_public_key();}
+std::string SessionSupervisor::path_name()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->path_value;}
+std::string SessionSupervisor::last_error()const{std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->error;}
 
 }

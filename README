@@ -7,3 +7,37 @@ run     --> opal
 doctor  --> opal doctor
 test    --> make test
 server  --> make deploy-rendezvous
+
+dependencies
+
+automatic / OPAL setup
+  tailscale        --> installed/configured when WAN tailnet setup is needed (curl required)
+  uinput           --> module/rule configured by sudo make install
+  systemd user     --> OPAL host/bridge units installed by sudo make install
+  firewall rules   --> firewalld/UFW LAN rules added by sudo make install when either tool exists
+
+manual required
+  c++20 compiler
+  make
+  pkg-config
+  SDL3 + development files
+  OpenSSL + development files
+  OpenGL/libglvnd + development files
+  FFmpeg executable
+  libavformat + development files
+  libavcodec + development files
+  libavutil + development files
+  libswresample + development files
+  libpulse + libpulse-simple + development files
+  gpu-screen-recorder --> required for native Wayland host capture; preferred on X11
+  systemd + udev       --> required by the standard Linux install/service path
+  curl                 --> required only if OPAL needs to install Tailscale
+
+optional / integration
+  tailscale        --> WAN direct path; OPAL can still use LAN/rendezvous without it
+  firewalld or UFW --> only needed for automatic firewall rule management
+  PipeWire         --> supported through its PulseAudio compatibility service
+
+Fedora --> sudo dnf install gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel
+Arch   --> sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg
+Debian --> sudo apt-get install g++ make pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev

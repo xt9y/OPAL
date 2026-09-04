@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <set>
 #include <string>
 #include <vector>
@@ -12,7 +13,7 @@ enum class ClientControlChord {
     ReleaseCapture
 };
 
-int linux_keycode_from_x11(unsigned int keycode);
+int linux_keycode_from_sdl_scancode(int scancode);
 std::string raw_motion_command(double dx,double dy);
 double mouse_normalization_scale(int resolution);
 double clamp_mouse_sensitivity(double sensitivity);

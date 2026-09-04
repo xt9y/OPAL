@@ -1,14 +1,13 @@
 #include <opal/system.hpp>
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
-#include <X11/Xlib.h>
-#include <X11/extensions/XInput2.h>
+#include <SDL3/SDL.h>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <unistd.h>
 namespace opal {
-static bool xinput2_available(){Display*d=XOpenDisplay(nullptr);if(!d)return false;int opcode=0,event=0,error=0;bool ok=XQueryExtension(d,"XInputExtension",&opcode,&event,&error)!=0;if(ok){int major=2,minor=0;ok=XIQueryVersion(d,&major,&minor)==Success&&major>=2;}XCloseDisplay(d);return ok;}
+static bool sdl_video_available(std::string&driver){const bool was_initialized=(SDL_WasInit(SDL_INIT_VIDEO)&SDL_INIT_VIDEO)!=0;if(!was_initialized&&!SDL_InitSubSystem(SDL_INIT_VIDEO))return false;const char*name=SDL_GetCurrentVideoDriver();driver=name&&*name?name:"unknown";if(!was_initialized)SDL_QuitSubSystem(SDL_INIT_VIDEO);return !driver.empty();}
 int ensure_tailnet(){
     if(!command_exists("tailscale")){
         if(!command_exists("curl")){std::cerr<<"Tailscale setup needs curl; continuing without WAN tailnet.\n";return 1;}
@@ -24,7 +23,7 @@ int ensure_tailnet(){
     return 0;
 }
 int init(){auto p=Paths::load();if(!ensure_layout(p)||!ensure_identity(p.identity_key,p.identity_pub))return 1;Ini c;if(!std::filesystem::exists(p.config)){c.set("video","fps","60");c.set("video","bitrate_kbps","30000");c.set("video","fullscreen","true");c.set("audio","enabled","true");c.set("network","mode","opal-native");c.set("network","transport","rendezvous+direct-udp+relay");c.save(p.config);}std::cout<<"Initialized "<<p.root<<"\n";return 0;}
-int doctor(){auto p=Paths::load();std::cout<<"OPAL doctor\n";auto show=[](const char*n,bool ok){std::cout<<(ok?"[ok]   ":"[warn] ")<<n<<"\n";};show("FFmpeg capture fallback",command_exists("ffmpeg"));show("GPU Screen Recorder (preferred)",command_exists("gpu-screen-recorder"));show("X11/XWayland client display (GLX presenter)",std::getenv("DISPLAY")!=nullptr);show("XInput2 raw client input",xinput2_available());show("PulseAudio/PipeWire audio service",command_exists("pactl")||command_exists("wpctl"));show("Tailscale WAN underlay",command_exists("tailscale"));show("Wayland host session",std::getenv("WAYLAND_DISPLAY")!=nullptr);show("/dev/uinput",access("/dev/uinput",W_OK)==0);show("~/.opal initialized",std::filesystem::exists(p.root));std::cout<<"[info] Networking is built into OPAL: LAN first, Tailscale direct WAN, signed rendezvous fallback.\n";return 0;}
+int doctor(){auto p=Paths::load();std::cout<<"OPAL doctor\n";auto show=[](const char*n,bool ok){std::cout<<(ok?"[ok]   ":"[warn] ")<<n<<"\n";};std::string sdl_driver;const bool sdl_ok=sdl_video_available(sdl_driver);show("FFmpeg capture fallback",command_exists("ffmpeg"));show("GPU Screen Recorder (preferred)",command_exists("gpu-screen-recorder"));const std::string sdl_line="SDL3 client video backend ("+(sdl_ok?sdl_driver:std::string("unavailable"))+")";show(sdl_line.c_str(),sdl_ok);show("PulseAudio/PipeWire audio service",command_exists("pactl")||command_exists("wpctl"));show("Tailscale WAN underlay",command_exists("tailscale"));show("Wayland session",std::getenv("WAYLAND_DISPLAY")!=nullptr);show("/dev/uinput",access("/dev/uinput",W_OK)==0);show("~/.opal initialized",std::filesystem::exists(p.root));std::cout<<"[info] SDL3 client input replaces XInput2 raw client input.\n";std::cout<<"[info] Networking is built into OPAL: LAN first, Tailscale direct WAN, signed rendezvous fallback.\n";return 0;}
 int host_service(bool enable){std::string cmd="systemctl --user ";cmd+=enable?"enable --now opal-host.service":"disable --now opal-host.service";return std::system(cmd.c_str())==0?0:1;}
 int restart_services(){int rc=0;if(std::system("systemctl --user daemon-reload")!=0)rc=1;if(std::system("systemctl --user try-restart opal-host.service")!=0)rc=1;if(std::system("systemctl --user try-restart opal-bridge.service")!=0)rc=1;if(rc==0)std::cout<<"OPAL services restarted.\n";else std::cerr<<"Could not restart all OPAL services.\n";return rc;}
 int clean(){auto p=Paths::load();(void)std::system("systemctl --user disable --now opal-host.service >/dev/null 2>&1");(void)std::system("systemctl --user disable --now opal-bridge.service >/dev/null 2>&1");std::error_code ec;std::filesystem::remove_all(p.root,ec);if(ec){std::cerr<<"Could not remove OPAL state: "<<ec.message()<<"\n";return 1;}std::cout<<"OPAL state cleaned.\n";return 0;}

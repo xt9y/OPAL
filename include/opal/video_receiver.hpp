@@ -1,8 +1,8 @@
 #pragma once
 
 #include <opal/video_crypto.hpp>
+#include <opal/video_decoder.hpp>
 #include <opal/video_path.hpp>
-#include <X11/Xlib.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -31,7 +31,8 @@ public:
     bool media_started() const;
     bool failed() const;
     VideoReceiverFailure failure_reason() const;
-    Window presentation_window() const;
+    bool take_latest_video(DecodedVideoFrame& out);
+    void note_presented_video(std::int64_t pts_us,double present_ms);
     std::uint64_t stale_frames() const;
     std::uint64_t highest_sequence() const;
     std::uint32_t audio_queued_ms() const;

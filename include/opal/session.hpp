@@ -1,10 +1,12 @@
 #pragma once
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <opal/media_profile.hpp>
 
 namespace opal {
+struct DecodedVideoFrame;
 struct SessionOptions {
     std::string rendezvous_id;
     std::string expected_host_public_key;
@@ -30,7 +32,8 @@ public:
     bool send_input(const std::string &command);
     unsigned long control_generation() const;
     bool media_started() const;
-    unsigned long presentation_window() const;
+    bool take_latest_video(DecodedVideoFrame& out);
+    void note_presented_video(std::int64_t pts_us,double present_ms);
     bool running() const;
     bool paired() const;
     int remote_width() const;
