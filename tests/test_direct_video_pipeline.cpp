@@ -1,5 +1,6 @@
 #include <opal/video_path.hpp>
 #include <opal/udp_transport.hpp>
+#include <opal/video_packet.hpp>
 #include <opal/video_receiver.hpp>
 #include <opal/video_sender.hpp>
 #include <atomic>
