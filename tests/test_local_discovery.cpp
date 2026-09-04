@@ -46,6 +46,7 @@ int main(){
     assert(client_result.client_nonce==host_result.client_nonce);
     assert(client_result.host_nonce==host_result.host_nonce);
     assert(client_result.socket.fd>=0&&client_result.socket.local_port>0&&host_result.socket.fd>=0);
+    sockaddr_storage client_socket_address{};socklen_t client_socket_length=sizeof(client_socket_address);assert(getsockname(client_result.socket.fd,reinterpret_cast<sockaddr*>(&client_socket_address),&client_socket_length)==0);assert(client_socket_address.ss_family==AF_INET6);
     assert(listener.fd>=0&&listener.local_port==listener_port);
     assert(host_result.socket.fd!=listener.fd&&host_result.socket.local_port==listener_port);
     assert(client_result.host.port==listener_port);
