@@ -90,12 +90,18 @@ bool discover_local_host(const std::string &rendezvous_id,const std::string &cli
     result={};error.clear();if(!valid_id(rendezvous_id)||!valid_public_key(client_public_key)){error="invalid local discovery identity";return false;}
     std::string socket_error;auto discovery_socket=open_ipv4_socket(0,"0.0.0.0",true,socket_error);if(discovery_socket.fd<0){error=socket_error;return false;}auto peer_socket=open_udp_socket();if(peer_socket.fd<0){close_udp_socket(discovery_socket);error="local peer socket failed";return false;}
     sockaddr_in target{};if(!resolve_ipv4(destination_host,destination_port,target)){close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error="local discovery destination unavailable";return false;}
-    const auto client_nonce=random_hex(16);const std::string request="OPAL_LOCAL_DISCOVER_V1 "+rendezvous_id+" "+client_public_key+" "+client_nonce+" "+std::to_string(peer_socket.local_port);const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));auto next_send=Clock::time_point{};std::array<std::uint8_t,kLocalDiscoveryMessageBytes>buffer{};
+    const auto client_nonce=random_hex(16);const std::string request="OPAL_LOCAL_DISCOVER_V1 "+rendezvous_id+" "+client_public_key+" "+client_nonce+" "+std::to_string(peer_socket.local_port);const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));auto next_send=Clock::time_point{};std::array<std::uint8_t,kLocalDiscoveryMessageBytes>buffer{};std::string rejection_error;
     while(remaining_ms(deadline)>0){const auto now=Clock::now();if(next_send.time_since_epoch().count()==0||now>=next_send){(void)send_text(discovery_socket.fd,reinterpret_cast<const sockaddr*>(&target),sizeof(target),request);next_send=now+std::chrono::milliseconds(75);}const int wait_ms=std::min(75,remaining_ms(deadline));sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(discovery_socket.fd,buffer,source,source_len,wait_ms);if(n==-2)continue;if(n<0){close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
-        std::string id,session_id,host_public_key,host_nonce,signature;std::uint16_t host_peer_port=0;if(!parse_offer(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),id,session_id,host_public_key,host_nonce,host_peer_port,signature)||id!=rendezvous_id)continue;if(rendezvous_id_from_public_key(host_public_key)!=rendezvous_id)continue;const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,host_peer_port);if(!verify_hex(host_public_key,transcript,signature))continue;RendezvousEndpoint host;if(!endpoint_from_sockaddr(source,source_len,host))continue;host.port=host_peer_port;
+        std::string id,session_id,host_public_key,host_nonce,signature;std::uint16_t host_peer_port=0;
+        if(!parse_offer(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),id,session_id,host_public_key,host_nonce,host_peer_port,signature))continue;
+        if(id!=rendezvous_id)continue;
+        if(rendezvous_id_from_public_key(host_public_key)!=rendezvous_id){rejection_error="local discovery host identity mismatch";continue;}
+        const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,host_peer_port);
+        if(!verify_hex(host_public_key,transcript,signature)){rejection_error="local discovery offer signature invalid";continue;}
+        RendezvousEndpoint host;if(!endpoint_from_sockaddr(source,source_len,host)){rejection_error="local discovery offer source invalid";continue;}host.port=host_peer_port;
         close_udp_socket(discovery_socket);result.socket=peer_socket;result.host=host;result.rendezvous_id=id;result.session_id=session_id;result.host_public_key=host_public_key;result.client_nonce=client_nonce;result.host_nonce=host_nonce;return true;
     }
-    close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error="local host not found";return false;
+    close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error=rejection_error.empty()?"local host not found":rejection_error;return false;
 }
 
 }
