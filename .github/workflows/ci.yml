@@ -40,7 +40,7 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
-          DISPLAY=:99 make clean test-direct-media-sanitize test-peer-session test-peer-session-relay test-rendezvous-server CXX=clang++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
+          DISPLAY=:99 make clean test-direct-media-sanitize test-local-discovery test-peer-session test-peer-session-relay test-rendezvous-server CXX=clang++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer'
 
   thread-sanitize:
     if: ${{ inputs.target == 'full' || inputs.target == 'thread-sanitize' }}
@@ -54,7 +54,7 @@ jobs:
           TSAN_OPTIONS: halt_on_error=1
         run: |
           Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
-          DISPLAY=:99 make clean test-peer-session test-peer-session-relay test-direct-video-pipeline test-direct-video-stress CXX=g++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-omit-frame-pointer'
+          DISPLAY=:99 make clean test-local-discovery test-peer-session test-peer-session-relay test-direct-video-pipeline test-direct-video-stress CXX=g++ CXXFLAGS='-std=c++20 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-omit-frame-pointer'
 
   stress:
     if: ${{ inputs.target == 'full' || inputs.target == 'stress' }}
@@ -66,7 +66,7 @@ jobs:
       - name: Native reconnect and transport stress
         run: |
           Xvfb :99 -screen 0 1920x1080x24 >/tmp/opal-xvfb.log 2>&1 &
-          DISPLAY=:99 make all rendezvous-server test-session test-peer-session test-peer-session-relay test-rendezvous-server test-video-reassembly test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress
+          DISPLAY=:99 make all rendezvous-server test-session test-local-discovery test-peer-session test-peer-session-relay test-rendezvous-server test-video-reassembly test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress
           for i in 1 2 3; do
-            DISPLAY=:99 make test-peer-session test-peer-session-relay test-direct-video-stress
+            DISPLAY=:99 make test-local-discovery test-peer-session test-peer-session-relay test-direct-video-stress
           done
