@@ -45,7 +45,10 @@ int client_connect(const std::string&target_in,const std::string&password_arg,co
 
     const std::string section=saved?target_in:format_connection_code(rendezvous_id);hosts.set(section,"rendezvous_id",rendezvous_id);hosts.set(section,"connection_code",format_connection_code(rendezvous_id));hosts.set(section,"host_public_key",session.host_public_key());hosts.set(section,"paired",session.paired()?"true":"false");auto learned_mac=session.remote_mac();if(!learned_mac.empty())hosts.set(section,"mac",learned_mac);if(hosts.get(section,"mouse_sensitivity").empty())hosts.set(section,"mouse_sensitivity","1.0");hosts.save(p.hosts);
 
-    for(int i=0;i<100&&!session.media_started()&&session.running();++i)std::this_thread::sleep_for(std::chrono::milliseconds(100));if(!session.media_started()){auto message=session.last_error();std::cerr<<(message.empty()?"direct video did not start":message)<<"\n";session.stop();return 1;}
+    for(int i=0;i<100&&!session.media_started()&&session.running();++i){
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if(!session.media_started()){auto message=session.last_error();std::cerr<<(message.empty()?"direct video did not start":message)<<"\n";session.stop();return 1;}
     std::cout<<"Connected. Ctrl+Alt+Shift+Q releases remote control.\n";if(const char*d=std::getenv("OPAL_DEBUG");d&&*d&&std::string(d)!="0")std::cerr<<"OPAL connection path="<<session.path_name()<<"\n";
     Display*d=XOpenDisplay(nullptr);if(!d){std::cerr<<"DISPLAY unavailable; direct video cannot accept local input\n";while(session.running())std::this_thread::sleep_for(std::chrono::milliseconds(500));session.stop();return 0;}Window root=DefaultRootWindow(d);int xi_opcode=0;if(setup_xinput2(d,root,xi_opcode))run_xinput2_control(d,root,xi_opcode,session);else run_x11_fallback_control(d,root,session);XCloseDisplay(d);session.stop();return 0;
 }
