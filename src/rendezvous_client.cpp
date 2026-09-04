@@ -9,6 +9,7 @@
 #include <cstring>
 #include <deque>
 #include <iterator>
+#include <netinet/in.h>
 
 namespace opal { namespace {
 using Clock=std::chrono::steady_clock;
