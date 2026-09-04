@@ -28,20 +28,7 @@ std::string offer_transcript(const std::string&id,const std::string&session_id,
            client_nonce+"\n"+host_public_key+"\n"+host_nonce+"\n"+std::to_string(peer_port);
 }
 
-UdpSocket open_ipv4_socket(std::uint16_t port,const std::string&bind_host,bool broadcast,std::string&error){
-    error.clear();const int fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,0);if(fd<0){error="local discovery socket failed";return {};}
-    int one=1;(void)setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));if(broadcast&&setsockopt(fd,SOL_SOCKET,SO_BROADCAST,&one,sizeof(one))!=0){close(fd);error="local discovery broadcast unavailable";return {};}
-    int queue_bytes=kUdpQueueBufferBytes;(void)setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&queue_bytes,sizeof(queue_bytes));(void)setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&queue_bytes,sizeof(queue_bytes));
-    int traffic_class=kUdpInteractiveTrafficClass;(void)setsockopt(fd,IPPROTO_IP,IP_TOS,&traffic_class,sizeof(traffic_class));
-    sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(port);
-    if(bind_host.empty()||bind_host=="0.0.0.0")address.sin_addr.s_addr=htonl(INADDR_ANY);
-    else if(inet_pton(AF_INET,bind_host.c_str(),&address.sin_addr)!=1){close(fd);error="invalid local discovery bind address";return {};}
-    if(bind(fd,reinterpret_cast<sockaddr*>(&address),sizeof(address))!=0){close(fd);error="local discovery bind failed";return {};}
-    socklen_t length=sizeof(address);if(getsockname(fd,reinterpret_cast<sockaddr*>(&address),&length)!=0){close(fd);error="local discovery socket query failed";return {};}
-    return {fd,ntohs(address.sin_port)};
-}
-
-UdpSocket open_dual_stack_listener(std::uint16_t port,std::string&error){
+UdpSocket open_dual_stack_listener(std::uint16_t port,const std::string&bind_host,std::string&error){
     error.clear();const int fd=socket(AF_INET6,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,0);if(fd<0){error="local discovery socket failed";return {};}
     int off=0;if(setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&off,sizeof(off))!=0){close(fd);error="local discovery dual-stack unavailable";return {};}
     int one=1;(void)setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
@@ -50,7 +37,12 @@ UdpSocket open_dual_stack_listener(std::uint16_t port,std::string&error){
     int overflow_reporting=1;(void)setsockopt(fd,SOL_SOCKET,SO_RXQ_OVFL,&overflow_reporting,sizeof(overflow_reporting));
 #endif
     int traffic_class=kUdpInteractiveTrafficClass;if(setsockopt(fd,IPPROTO_IPV6,IPV6_TCLASS,&traffic_class,sizeof(traffic_class))!=0){close(fd);error="local discovery traffic class unavailable";return {};}(void)setsockopt(fd,IPPROTO_IP,IP_TOS,&traffic_class,sizeof(traffic_class));
-    sockaddr_in6 address{};address.sin6_family=AF_INET6;address.sin6_addr=in6addr_any;address.sin6_port=htons(port);
+    sockaddr_in6 address{};address.sin6_family=AF_INET6;address.sin6_port=htons(port);
+    if(bind_host.empty()||bind_host=="0.0.0.0")address.sin6_addr=in6addr_any;
+    else{
+        in_addr ipv4{};if(inet_pton(AF_INET,bind_host.c_str(),&ipv4)!=1){close(fd);error="invalid local discovery bind address";return {};}
+        address.sin6_addr=in6addr_any;address.sin6_addr.s6_addr[10]=0xff;address.sin6_addr.s6_addr[11]=0xff;std::memcpy(address.sin6_addr.s6_addr+12,&ipv4,sizeof(ipv4));
+    }
     if(bind(fd,reinterpret_cast<sockaddr*>(&address),sizeof(address))!=0){close(fd);error="local discovery bind failed";return {};}
     socklen_t length=sizeof(address);if(getsockname(fd,reinterpret_cast<sockaddr*>(&address),&length)!=0){close(fd);error="local discovery socket query failed";return {};}
     return {fd,ntohs(address.sin6_port)};
@@ -79,8 +71,7 @@ int remaining_ms(Clock::time_point deadline){const auto now=Clock::now();if(now>
 }
 
 UdpSocket open_local_discovery_listener(std::uint16_t port,std::string bind_host,std::string &error){
-    if(bind_host.empty()||bind_host=="0.0.0.0")return open_dual_stack_listener(port,error);
-    return open_ipv4_socket(port,bind_host,false,error);
+    return open_dual_stack_listener(port,bind_host,error);
 }
 
 bool wait_local_client(UdpSocket &listener,const std::string &host_public_key,

@@ -32,7 +32,11 @@ int main(){
         opal::LocalDiscoveryHostResult mismatch_result;std::string mismatch_error;assert(!opal::wait_local_client(mismatch_listener,host_id.public_hex,host_id.priv,mismatch_result,120,mismatch_error));assert(mismatch_error=="local discovery timeout");close(fd);opal::close_udp_socket(mismatch_listener);
     }
 
-    std::string error;auto listener=opal::open_local_discovery_listener(0,"0.0.0.0",error);assert(listener.fd>=0&&listener.local_port>0);const auto listener_port=listener.local_port;
+    // A concrete IPv4 bind is the path used by the Tailscale host. It must
+    // still produce a dual-stack socket because PeerSession normalizes IPv4
+    // peers to IPv4-mapped AF_INET6 endpoints.
+    std::string error;auto listener=opal::open_local_discovery_listener(0,"127.0.0.1",error);assert(listener.fd>=0&&listener.local_port>0);const auto listener_port=listener.local_port;
+    sockaddr_storage listener_address{};socklen_t listener_length=sizeof(listener_address);assert(getsockname(listener.fd,reinterpret_cast<sockaddr*>(&listener_address),&listener_length)==0);assert(listener_address.ss_family==AF_INET6);
 
     opal::LocalDiscoveryHostResult host_result;std::string host_error;std::atomic<bool>host_found{false};
     std::thread discovery_host([&]{host_found.store(opal::wait_local_client(listener,host_id.public_hex,host_id.priv,host_result,2000,host_error));});
@@ -47,6 +51,7 @@ int main(){
     assert(client_result.host_nonce==host_result.host_nonce);
     assert(client_result.socket.fd>=0&&client_result.socket.local_port>0&&host_result.socket.fd>=0);
     sockaddr_storage client_socket_address{};socklen_t client_socket_length=sizeof(client_socket_address);assert(getsockname(client_result.socket.fd,reinterpret_cast<sockaddr*>(&client_socket_address),&client_socket_length)==0);assert(client_socket_address.ss_family==AF_INET6);
+    sockaddr_storage host_socket_address{};socklen_t host_socket_length=sizeof(host_socket_address);assert(getsockname(host_result.socket.fd,reinterpret_cast<sockaddr*>(&host_socket_address),&host_socket_length)==0);assert(host_socket_address.ss_family==AF_INET6);
     assert(listener.fd>=0&&listener.local_port==listener_port);
     assert(host_result.socket.fd!=listener.fd&&host_result.socket.local_port==listener_port);
     assert(client_result.host.port==listener_port);
