@@ -29,8 +29,10 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
     if ! ufw status 2>/dev/null | grep -Eq '(^|[[:space:]])47993/udp([[:space:]]|$)'; then
       ufw allow "$rule" comment 'OPAL LAN discovery'
     fi
+    ufw reload >/dev/null
   else
     ufw --force delete allow "$rule" >/dev/null 2>&1 || true
+    ufw reload >/dev/null 2>&1 || true
   fi
   exit 0
 fi
