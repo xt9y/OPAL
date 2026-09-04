@@ -7,13 +7,14 @@ int main(){
     const auto id=opal::rendezvous_id_from_public_key(pub);
     assert(id.size()==opal::kRendezvousIdChars);
     const auto code=opal::format_connection_code(id);
-    assert(code.rfind("opal:",0)==0);
-    assert(code.size()==5+4+1+4+1+4);
+    assert(code.rfind("opal:",0)!=0);
+    assert(code.size()==4+1+4+1+4);
     std::string parsed;
     assert(opal::parse_connection_code(code,parsed)&&parsed==id);
+    assert(opal::parse_connection_code("opal:"+code,parsed)&&parsed==id);
     auto damaged=code;damaged.back()=damaged.back()=='0'?'1':'0';
     assert(!opal::parse_connection_code(damaged,parsed));
-    assert(!opal::parse_connection_code("opal:AAAA-BBBB",parsed));
+    assert(!opal::parse_connection_code("AAAA-BBBB",parsed));
     assert(opal::rendezvous_id_from_public_key("not-a-key").empty());
 
     auto roundtrip=[](opal::RendezvousMessage in){const auto wire=opal::serialize_rendezvous_message(in);assert(!wire.empty());assert(wire.size()<=opal::kRendezvousMaxMessageBytes);opal::RendezvousMessage out;assert(opal::parse_rendezvous_message(wire,out));return out;};
