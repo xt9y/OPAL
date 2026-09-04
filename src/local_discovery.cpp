@@ -56,10 +56,6 @@ UdpSocket open_dual_stack_listener(std::uint16_t port,std::string&error){
     return {fd,ntohs(address.sin6_port)};
 }
 
-bool resolve_ipv4(const std::string&host,std::uint16_t port,sockaddr_in&out){
-    if(host.empty()||port==0)return false;addrinfo hints{};hints.ai_family=AF_INET;hints.ai_socktype=SOCK_DGRAM;addrinfo*result=nullptr;const auto service=std::to_string(port);if(getaddrinfo(host.c_str(),service.c_str(),&hints,&result)!=0)return false;bool ok=false;for(auto*it=result;it&&!ok;it=it->ai_next){if(it->ai_family==AF_INET&&it->ai_addrlen==sizeof(sockaddr_in)){std::memcpy(&out,it->ai_addr,sizeof(out));ok=true;}}freeaddrinfo(result);return ok;
-}
-
 bool endpoint_from_sockaddr(const sockaddr_storage&source,socklen_t length,RendezvousEndpoint&endpoint){
     char host[NI_MAXHOST]{},service[NI_MAXSERV]{};if(getnameinfo(reinterpret_cast<const sockaddr*>(&source),length,host,sizeof(host),service,sizeof(service),NI_NUMERICHOST|NI_NUMERICSERV)!=0)return false;try{const int port=std::stoi(service);if(port<1||port>65535)return false;endpoint={host,static_cast<std::uint16_t>(port)};return true;}catch(...){return false;}
 }
@@ -95,9 +91,6 @@ bool wait_local_client(UdpSocket &listener,const std::string &host_public_key,
     while(remaining_ms(deadline)>0){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(listener.fd,buffer,source,source_len,remaining_ms(deadline));if(n==-2)continue;if(n<0){error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string request_id,client_public_key,client_nonce;std::uint16_t client_peer_port=0;if(!parse_discover(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),request_id,client_public_key,client_nonce,client_peer_port)||request_id!=id)continue;
         RendezvousEndpoint client;if(!endpoint_from_sockaddr(source,source_len,client))continue;
-        // Discovery and the peer session must use the same client UDP socket.
-        // This avoids a fragile fixed-reply-port -> ephemeral-port handoff and
-        // makes the subsequent handshake the continuation of the same flow.
         if(client.port!=client_peer_port)continue;
         const int peer_fd=fcntl(listener.fd,F_DUPFD_CLOEXEC,0);if(peer_fd<0){error="local peer socket duplication failed";return false;}UdpSocket peer_socket{peer_fd,listener.local_port};
         const auto session_id=random_hex(16),host_nonce=random_hex(16);const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,listener.local_port);const auto signature=sign_hex(host_private_key,transcript);if(signature.empty()){close_udp_socket(peer_socket);error="local discovery identity signing failed";return false;}
@@ -112,13 +105,14 @@ bool discover_local_host(const std::string &rendezvous_id,const std::string &cli
                          LocalDiscoveryClientResult &result,std::string &error,int timeout_ms,
                          std::string destination_host,std::uint16_t destination_port){
     result={};error.clear();if(!valid_id(rendezvous_id)||!valid_public_key(client_public_key)){error="invalid local discovery identity";return false;}
-    // Use one ephemeral IPv4 socket for discovery, the signed offer, and the
-    // peer handshake. The packet source port is therefore exactly the peer
-    // port advertised to the host and no fixed inbound reply port is needed.
-    std::string socket_error;auto peer_socket=open_ipv4_socket(0,"0.0.0.0",true,socket_error);if(peer_socket.fd<0){error=socket_error;return false;}
-    sockaddr_in target{};if(!resolve_ipv4(destination_host,destination_port,target)){close_udp_socket(peer_socket);error="local discovery destination unavailable";return false;}
+    // Keep discovery and PeerSession on the same dual-stack UDP socket. Peer
+    // endpoints are normalized to AF_INET6 (IPv4-mapped when necessary), so
+    // handing an AF_INET socket into PeerSession makes its first send fail.
+    auto peer_socket=open_udp_socket();if(peer_socket.fd<0){error="local discovery socket failed";return false;}
+    int one=1;if(setsockopt(peer_socket.fd,SOL_SOCKET,SO_BROADCAST,&one,sizeof(one))!=0){close_udp_socket(peer_socket);error="local discovery broadcast unavailable";return false;}
+    sockaddr_storage target{};socklen_t target_length=0;if(!resolve_udp_endpoint(destination_host,destination_port,target,target_length)){close_udp_socket(peer_socket);error="local discovery destination unavailable";return false;}
     const auto client_nonce=random_hex(16);const std::string request="OPAL_LOCAL_DISCOVER_V1 "+rendezvous_id+" "+client_public_key+" "+client_nonce+" "+std::to_string(peer_socket.local_port);const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));auto next_send=Clock::time_point{};std::array<std::uint8_t,kLocalDiscoveryMessageBytes>buffer{};std::string rejection_error;
-    while(remaining_ms(deadline)>0){const auto now=Clock::now();if(next_send.time_since_epoch().count()==0||now>=next_send){(void)send_text(peer_socket.fd,reinterpret_cast<const sockaddr*>(&target),sizeof(target),request);next_send=now+std::chrono::milliseconds(75);}const int wait_ms=std::min(75,remaining_ms(deadline));sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(peer_socket.fd,buffer,source,source_len,wait_ms);if(n==-2)continue;if(n<0){close_udp_socket(peer_socket);error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
+    while(remaining_ms(deadline)>0){const auto now=Clock::now();if(next_send.time_since_epoch().count()==0||now>=next_send){(void)send_datagram(peer_socket.fd,target,target_length,std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(request.data()),request.size()));next_send=now+std::chrono::milliseconds(75);}const int wait_ms=std::min(75,remaining_ms(deadline));sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(peer_socket.fd,buffer,source,source_len,wait_ms);if(n==-2)continue;if(n<0){close_udp_socket(peer_socket);error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string id,session_id,host_public_key,host_nonce,signature;std::uint16_t host_peer_port=0;
         if(!parse_offer(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),id,session_id,host_public_key,host_nonce,host_peer_port,signature))continue;
         if(id!=rendezvous_id)continue;
