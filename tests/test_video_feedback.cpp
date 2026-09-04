@@ -38,7 +38,7 @@ int main(){
     opal::HostMediaDebugSample host{};
     host.frame_id=91;host.frame_bytes=48123;host.data_fragments=44;host.fec_fragments=5;
     host.send_span_us=2800;host.capture_to_packet_us=4100;host.target_kbps=30000;host.active_kbps=28400;
-    host.stale_frames=2;host.idr_requests=3;host.restarts=1;host.chain_valid=true;
+    host.stale_frames=2;host.idr_requests=3;host.restarts=1;host.chain_valid=true;host.restart_reason="decode-backlog";
     const auto host_line=opal::host_media_debug_line(9,host);
     opal::HostMediaDebugSample host_parsed;
     assert(opal::parse_host_media_debug_line(host_line,9,host_parsed));
@@ -47,14 +47,16 @@ int main(){
     assert(host_parsed.send_span_us==2800&&host_parsed.capture_to_packet_us==4100);
     assert(host_parsed.target_kbps==30000&&host_parsed.active_kbps==28400);
     assert(host_parsed.stale_frames==2&&host_parsed.idr_requests==3&&host_parsed.restarts==1&&host_parsed.chain_valid);
+    assert(host_parsed.restart_reason=="decode-backlog");
     assert(!opal::parse_host_media_debug_line(host_line,10,host_parsed));
     assert(!opal::parse_host_media_debug_line(host_line+" extra",9,host_parsed));
-    auto invalid_bool=host_line;invalid_bool.replace(invalid_bool.size()-1,1,"2");
+    auto invalid_bool=host_line;const auto bool_pos=invalid_bool.rfind(" 1 ");assert(bool_pos!=std::string::npos);invalid_bool.replace(bool_pos+1,1,"2");
     assert(!opal::parse_host_media_debug_line(invalid_bool,9,host_parsed));
     const auto human=opal::format_host_media_debug(host_parsed);
     assert(human.find("frame=91")!=std::string::npos);
     assert(human.find("send=2.8ms")!=std::string::npos);
     assert(human.find("chain=ok")!=std::string::npos);
+    assert(human.find("restart_reason=decode-backlog")!=std::string::npos);
     assert(human.find("key=")==std::string::npos&&human.find("token=")==std::string::npos&&human.find("password=")==std::string::npos);
 
     const auto debug_on=opal::debug_media_request_line(9,true);bool debug_enabled=false;
@@ -70,10 +72,12 @@ int main(){
     latency.capture_to_packet_ms=4.1;latency.network_ms=23.5;latency.reassembly_ms=3.2;
     latency.decode_ms=4.7;latency.present_ms=2.1;latency.total_ms=37.6;latency.loss_percent=0.2;
     latency.stale_frames=2;latency.bitrate_kbps=28400;latency.decoder_backend="software-slice";
-    latency.decoded_fps=59.4;latency.presented_fps=59.1;
+    latency.decoded_fps=59.4;latency.presented_fps=59.1;latency.video_queue_depth=3;latency.skipped_present_frames=7;
     const auto latency_line=opal::format_latency_telemetry(latency);
     assert(latency_line.find("decoder=software-slice")!=std::string::npos);
     assert(latency_line.find("decode_fps=59.4")!=std::string::npos);
     assert(latency_line.find("present_fps=59.1")!=std::string::npos);
+    assert(latency_line.find("queue=3")!=std::string::npos);
+    assert(latency_line.find("skip_present=7")!=std::string::npos);
     return 0;
 }
