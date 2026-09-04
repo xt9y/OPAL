@@ -42,7 +42,11 @@ test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
 	$(BUILD)/test-clipboard
 
-test: test-clipboard
+test-tailnet-discovery-lifecycle: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tailnet_discovery_lifecycle.cpp -o $(BUILD)/test-tailnet-discovery-lifecycle
+	$(BUILD)/test-tailnet-discovery-lifecycle
+
+test: test-clipboard test-tailnet-discovery-lifecycle
 
 test-video-present: | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
