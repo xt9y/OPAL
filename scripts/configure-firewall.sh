@@ -29,19 +29,23 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
   exit 0
 fi
 
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+if command -v ufw >/dev/null 2>&1; then
+  ufw_active=0
+  if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then
+    ufw_active=1
+  fi
   if [ "$action" = "install" ]; then
-    if ! ufw status 2>/dev/null | grep -Eq '(^|[[:space:]])47993/udp([[:space:]]|$)'; then
-      ufw allow "$discovery_rule" comment 'OPAL LAN discovery'
+    ufw allow "$discovery_rule" comment 'OPAL LAN discovery'
+    ufw allow "$reply_rule" comment 'OPAL LAN discovery replies'
+    if [ "$ufw_active" -eq 1 ]; then
+      ufw reload >/dev/null
     fi
-    if ! ufw status 2>/dev/null | grep -Eq '(^|[[:space:]])47994/udp([[:space:]]|$)'; then
-      ufw allow "$reply_rule" comment 'OPAL LAN discovery replies'
-    fi
-    ufw reload >/dev/null
   else
     ufw --force delete allow "$reply_rule" >/dev/null 2>&1 || true
     ufw --force delete allow "$discovery_rule" >/dev/null 2>&1 || true
-    ufw reload >/dev/null 2>&1 || true
+    if [ "$ufw_active" -eq 1 ]; then
+      ufw reload >/dev/null 2>&1 || true
+    fi
   fi
   exit 0
 fi
