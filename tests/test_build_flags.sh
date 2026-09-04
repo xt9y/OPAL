@@ -25,7 +25,11 @@ esac
 EOF
 chmod +x "$TMP/bin/pkg-config"
 
-PATH="$TMP/bin:$PATH" PKG_CONFIG="$TMP/bin/pkg-config" make -C "$ROOT" -n build/opal >"$TMP/out"
+# Force the dry-run rebuild so this regression is independent of whether
+# build/opal already exists. `make test` builds the product before reaching
+# this target, and a plain `make -n build/opal` would otherwise print no
+# compile/link command for the greps below to inspect.
+PATH="$TMP/bin:$PATH" PKG_CONFIG="$TMP/bin/pkg-config" make -C "$ROOT" -Bn build/opal >"$TMP/out"
 
 grep -q -- '-I/opt/opal-pkgconfig-test' "$TMP/out"
 grep -q -- '-L/opt/opal-pkgconfig-test' "$TMP/out"
