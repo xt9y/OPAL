@@ -56,7 +56,13 @@ bool run_native_session(RendezvousClient&rendezvous,const RendezvousMessage&offe
         if(line.rfind("KEY ",0)==0||line.rfind("BUTTON ",0)==0){track_input(line,held);input_send(line);return;}
         if(line.rfind("WHEEL ",0)==0||line.rfind("MOUSE ",0)==0){input_send(line);return;}
         StreamOptions stream;bool debug=false;std::uint32_t media_generation=0;if(parse_media_ready(line,media_generation,stream,debug)){
-            if(sender_started.exchange(true))return;const bool audio=host_cfg.get_bool("audio","enabled",true);if(!sender_ptr->start_native(peer_ptr->media_keys(),peer_ptr->session_id(),media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){sender_started.store(false);peer_ptr->send_input("MEDIA_ERROR capture-startup");return;}if(debug)sender_ptr->handle_control_line(debug_media_request_line(media_generation,true));return;
+            if(sender_started.exchange(true))return;
+            const bool audio=host_cfg.get_bool("audio","enabled",true);
+            if(!sender_ptr->start_native(peer_ptr->media_keys(),peer_ptr->session_id(),media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){
+                sender_started.store(false);peer_ptr->send_input("MEDIA_ERROR capture-startup");return;
+            }
+            if(debug)sender_ptr->handle_control_line(debug_media_request_line(media_generation,true));
+            return;
         }
         if(sender_started.load()&&sender_ptr->handle_control_line(line))return;
     };
