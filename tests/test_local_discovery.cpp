@@ -14,7 +14,7 @@ Identity identity(const char*name){Identity i;i.root=std::filesystem::temp_direc
 }
 
 int main(){
-    auto client_id=identity("opal-local-discovery-client"),host_id=identity("opal-local-discovery-host");
+    auto client_id=identity("opal-local-discovery-client"),host_id=identity("opal-local-discovery-host"),wrong_signer=identity("opal-local-discovery-wrong-signer");
     const auto rendezvous_id=opal::rendezvous_id_from_public_key(host_id.public_hex);assert(!rendezvous_id.empty());
     std::string error;auto listener=opal::open_local_discovery_listener(0,"127.0.0.1",error);assert(listener.fd>=0&&listener.local_port>0);
 
@@ -42,5 +42,16 @@ int main(){
     std::this_thread::sleep_for(std::chrono::milliseconds(20));assert(client.start(std::move(client_options),peer_client_error));peer_host.join();assert(host_started.load());
     assert(client.established()&&host.established());assert(client.path_name()=="lan"&&host.path_name()=="lan");
 
-    client.stop();host.stop();opal::close_udp_socket(listener);std::filesystem::remove_all(client_id.root);std::filesystem::remove_all(host_id.root);return 0;
+    client.stop();host.stop();opal::close_udp_socket(listener);
+
+    std::string bad_listener_error;auto bad_listener=opal::open_local_discovery_listener(0,"127.0.0.1",bad_listener_error);assert(bad_listener.fd>=0&&bad_listener.local_port>0);
+    opal::LocalDiscoveryHostResult bad_host_result;std::string bad_host_error;std::atomic<bool>bad_host_found{false};
+    std::thread bad_discovery_host([&]{bad_host_found.store(opal::wait_local_client(bad_listener,host_id.public_hex,wrong_signer.priv,bad_host_result,2000,bad_host_error));});
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    opal::LocalDiscoveryClientResult rejected_result;std::string rejected_error;
+    assert(!opal::discover_local_host(rendezvous_id,client_id.public_hex,rejected_result,rejected_error,300,"127.0.0.1",bad_listener.local_port));
+    bad_discovery_host.join();assert(bad_host_found.load());assert(rejected_error=="local discovery offer signature invalid");
+    opal::close_udp_socket(bad_host_result.socket);opal::close_udp_socket(bad_listener);
+
+    std::filesystem::remove_all(client_id.root);std::filesystem::remove_all(host_id.root);std::filesystem::remove_all(wrong_signer.root);return 0;
 }
