@@ -37,7 +37,7 @@ std::uint64_t sender_burst_budget_bytes(int bitrate_kbps,int fps,bool keyframe){
     fps=std::clamp(fps,15,240);
     const std::uint64_t average=(static_cast<std::uint64_t>(bitrate_kbps)*1000ULL)/(8ULL*static_cast<std::uint64_t>(fps));
     const std::uint64_t scaled=average*2ULL;
-    return std::clamp(scaled,128ULL*1024ULL,512ULL*1024ULL);
+    return std::clamp<std::uint64_t>(scaled,128ULL*1024ULL,512ULL*1024ULL);
 }
 
 int sender_pacing_rate_kbps(int bitrate_kbps,bool keyframe){
