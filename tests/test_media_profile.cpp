@@ -23,17 +23,18 @@ int main() {
     assert(opal::normal_gop_frames(15)==30);
     assert(opal::normal_gop_frames(240)==480);
 
+    // IDRs stay tightly paced so a large intra frame cannot monopolize the
+    // shared UDP socket. Ordinary frames need a frame-sized token budget so
+    // normal 60 FPS traffic does not consume the entire frame deadline and
+    // spuriously trigger send-failure capture restarts.
     constexpr std::uint64_t two_datagrams=2*1200;
-    assert(opal::sender_burst_budget_bytes(30000,60,false)==two_datagrams);
     assert(opal::sender_burst_budget_bytes(30000,60,true)==two_datagrams);
-    assert(opal::sender_burst_budget_bytes(20000,15,false)==two_datagrams);
-    assert(opal::sender_burst_budget_bytes(100000,15,false)==two_datagrams);
     assert(opal::sender_burst_budget_bytes(100000,15,true)==two_datagrams);
-    assert(opal::sender_burst_budget_bytes(1,1000,false)==two_datagrams);
+    assert(opal::sender_burst_budget_bytes(30000,60,false)==128ULL*1024ULL);
+    assert(opal::sender_burst_budget_bytes(20000,15,false)==333332ULL);
+    assert(opal::sender_burst_budget_bytes(100000,15,false)==512ULL*1024ULL);
+    assert(opal::sender_burst_budget_bytes(1,1000,false)==128ULL*1024ULL);
 
-    // Ordinary media retains the 20% pacing headroom. IDRs get a bounded 4x
-    // serialization rate so a large intra frame does not make the following
-    // dependent P-frame exceed the two-frame capture freshness budget.
     assert(opal::sender_pacing_rate_kbps(30000,false)==36000);
     assert(opal::sender_pacing_rate_kbps(30000,true)==120000);
     assert(opal::sender_pacing_rate_kbps(100000,false)==120000);
