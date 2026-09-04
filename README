@@ -6,4 +6,4 @@ install --> make -j"$(nproc)" && sudo make install
 run     --> opal
 doctor  --> opal doctor
 test    --> make test
-server  --> bash scripts/deploy-rendezvous-server.sh
+server  --> make deploy-rendezvous

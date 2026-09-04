@@ -7,7 +7,7 @@
 static std::string read_all(const char *path){std::ifstream f(path);assert(f.good());return std::string((std::istreambuf_iterator<char>(f)),{});}
 
 int main() {
-    std::ifstream f("systemd/opal-host.service");
+    std::ifstream f("system/opal-host.service");
     assert(f.good());
     std::stringstream ss;ss<<f.rdbuf();const auto unit=ss.str();
     assert(unit.find("ExecStart=/usr/local/bin/opal --internal-host-daemon")!=std::string::npos);

@@ -1,3 +1,7 @@
+SHELL := /bin/sh
+.SHELLFLAGS := -ec
+.ONESHELL:
+
 CXX ?= c++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic
 PKG_CONFIG ?= pkg-config
@@ -17,6 +21,8 @@ LIBEXECDIR ?= $(PREFIX)/libexec/opal
 SYSTEMDUSERDIR ?= $(PREFIX)/lib/systemd/user
 UDEVDIR ?= /usr/lib/udev/rules.d
 INSTALL ?= install
+PUBLIC_HOST ?= rendezvous.opal.xt9y.de
+RENDEZVOUS_PORT ?= 47992
 BUILD := build
 PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
@@ -60,7 +66,29 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 deps-check:
-	@PKG_CONFIG="$(PKG_CONFIG)" sh ./scripts/check-build-deps.sh
+	@PKG_CONFIG_BIN='$(PKG_CONFIG)'
+	REQUIRED_PKGS='openssl x11 xi gl libpulse-simple libavformat libavcodec libavutil libswresample'
+	if ! command -v "$$PKG_CONFIG_BIN" >/dev/null 2>&1; then
+		echo 'OPAL build dependency check failed: pkg-config is not installed.' >&2
+		missing=pkg-config
+	else
+		missing=''
+		for pkg in $$REQUIRED_PKGS; do
+			if ! "$$PKG_CONFIG_BIN" --exists "$$pkg"; then missing="$$missing $$pkg"; fi
+		done
+	fi
+	if [ -n "$$missing" ]; then
+		[ "$$missing" = pkg-config ] || { echo 'OPAL build dependency check failed.' >&2; echo "Missing pkg-config modules:$$missing" >&2; }
+		id=''; like=''
+		if [ -r /etc/os-release ]; then . /etc/os-release; id=$${ID:-}; like=$${ID_LIKE:-}; fi
+		case "$$id $$like" in
+			*fedora*|*rhel*) echo 'Install: sudo dnf install -y gcc-c++ make pkgconf-pkg-config openssl-devel libX11-devel libXi-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel' >&2 ;;
+			*debian*|*ubuntu*) echo 'Install: sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev' >&2 ;;
+			*arch*) echo 'Install: sudo pacman -S --needed base-devel pkgconf openssl libx11 libxi libglvnd libpulse ffmpeg' >&2 ;;
+			*) echo 'Install a C++20 compiler, pkg-config, OpenSSL/X11/XInput/GL/PulseAudio development files, and FFmpeg development files.' >&2 ;;
+		esac
+		exit 1
+	fi
 
 $(PRODUCT): $(APP_SRCS) include/opal/*.hpp | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(APP_SRCS) $(LDFLAGS) $(LDLIBS) -o $@
@@ -68,18 +96,12 @@ $(PRODUCT): $(APP_SRCS) include/opal/*.hpp | $(BUILD) deps-check
 $(INPUT): src/input_helper.cpp | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
 
-$(RENDEZVOUS_SERVER): server/rendezvous_server.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp include/opal/*.hpp | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) server/rendezvous_server.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp -lcrypto -lpthread -o $@
+$(RENDEZVOUS_SERVER): src/rendezvous_main.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp include/opal/*.hpp | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/rendezvous_main.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp -lcrypto -lpthread -o $@
 
 rendezvous-server: $(RENDEZVOUS_SERVER)
 
 $(MEDIA_TEST_TARGETS): | deps-check
-
-test-build-flags:
-	sh ./tests/test_build_flags.sh
-
-test-firewall:
-	sh ./tests/test_firewall.sh
 
 test-core: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_core.cpp $(CORE_SRCS) $(PROFILE_SRCS) -lcrypto -o $(BUILD)/test-core
@@ -199,48 +221,301 @@ test-hardening: | $(BUILD)
 
 test-direct-media-sanitize: deps-check test-video-crypto test-video-packet test-video-reassembly test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress
 
+test-build-flags:
+	@TMP=$$(mktemp -d)
+	trap 'rm -rf "$$TMP"' EXIT INT TERM
+	mkdir -p "$$TMP/bin"
+	cat >"$$TMP/bin/pkg-config" <<'SH'
+	#!/bin/sh
+	case "$$1" in
+	  '--cflags') echo '-I/opt/opal-pkgconfig-test' ;;
+	  '--libs') echo '-L/opt/opal-pkgconfig-test -lopal-pkgconfig-test' ;;
+	  '--exists') exit 0 ;;
+	  *) exit 0 ;;
+	esac
+	SH
+	chmod +x "$$TMP/bin/pkg-config"
+	PATH="$$TMP/bin:$$PATH" PKG_CONFIG="$$TMP/bin/pkg-config" $(MAKE) -Bn build/opal >"$$TMP/out"
+	grep -q -- '-I/opt/opal-pkgconfig-test' "$$TMP/out"
+	grep -q -- '-L/opt/opal-pkgconfig-test' "$$TMP/out"
+	echo 'build flag tests passed'
+
+firewall-install:
+	@if [ "$${OPAL_SKIP_FIREWALL:-0}" = 1 ]; then exit 0; fi
+	discovery_rule='47993/udp'; reply_rule='47994/udp'
+	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+		firewall-cmd --quiet --permanent --add-port="$$discovery_rule"
+		firewall-cmd --quiet --add-port="$$discovery_rule"
+		firewall-cmd --quiet --permanent --add-port="$$reply_rule"
+		firewall-cmd --quiet --add-port="$$reply_rule"
+	fi
+	if command -v ufw >/dev/null 2>&1; then
+		ufw_active=0
+		if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then ufw_active=1; fi
+		ufw allow "$$discovery_rule" comment 'OPAL LAN discovery'
+		ufw allow "$$reply_rule" comment 'OPAL LAN discovery replies'
+		if [ "$$ufw_active" -eq 1 ]; then ufw reload >/dev/null; fi
+	fi
+
+firewall-remove:
+	@if [ "$${OPAL_SKIP_FIREWALL:-0}" = 1 ]; then exit 0; fi
+	discovery_rule='47993/udp'; reply_rule='47994/udp'
+	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+		firewall-cmd --quiet --permanent --remove-port="$$reply_rule" >/dev/null 2>&1 || true
+		firewall-cmd --quiet --remove-port="$$reply_rule" >/dev/null 2>&1 || true
+		firewall-cmd --quiet --permanent --remove-port="$$discovery_rule" >/dev/null 2>&1 || true
+		firewall-cmd --quiet --remove-port="$$discovery_rule" >/dev/null 2>&1 || true
+	fi
+	if command -v ufw >/dev/null 2>&1; then
+		ufw_active=0
+		if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then ufw_active=1; fi
+		ufw --force delete allow "$$reply_rule" >/dev/null 2>&1 || true
+		ufw --force delete allow "$$discovery_rule" >/dev/null 2>&1 || true
+		if [ "$$ufw_active" -eq 1 ]; then ufw reload >/dev/null 2>&1 || true; fi
+	fi
+
+test-firewall:
+	@base=$$(mktemp -d)
+	trap 'rm -rf "$$base"' EXIT
+	mkdir -p "$$base/bin"
+	cat >"$$base/bin/firewall-cmd" <<'SH'
+	#!/bin/sh
+	if [ "$${1:-}" = '--state' ]; then echo running; exit 0; fi
+	printf '%s\n' "$$*" >>"$${OPAL_TEST_FIREWALL_LOG:?}"
+	SH
+	chmod +x "$$base/bin/firewall-cmd"
+	PATH="$$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$$base/firewalld.log" $(MAKE) --no-print-directory firewall-install
+	PATH="$$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$$base/firewalld.log" $(MAKE) --no-print-directory firewall-remove
+	grep -qx -- '--quiet --permanent --add-port=47993/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --add-port=47993/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --permanent --add-port=47994/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --add-port=47994/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --permanent --remove-port=47994/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --remove-port=47994/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --permanent --remove-port=47993/udp' "$$base/firewalld.log"
+	grep -qx -- '--quiet --remove-port=47993/udp' "$$base/firewalld.log"
+	cat >"$$base/bin/ufw" <<'SH'
+	#!/bin/sh
+	if [ "$${1:-}" = status ]; then echo "Status: $${OPAL_TEST_UFW_STATUS:-active}"; exit 0; fi
+	printf '%s\n' "$$*" >>"$${OPAL_TEST_FIREWALL_LOG:?}"
+	SH
+	chmod +x "$$base/bin/ufw"
+	: >"$$base/both.log"
+	PATH="$$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$$base/both.log" $(MAKE) --no-print-directory firewall-install
+	PATH="$$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$$base/both.log" $(MAKE) --no-print-directory firewall-remove
+	grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$$base/both.log"
+	grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$$base/both.log"
+	grep -qx -- '--force delete allow 47994/udp' "$$base/both.log"
+	grep -qx -- '--force delete allow 47993/udp' "$$base/both.log"
+	test "$$(grep -c '^reload$$' "$$base/both.log")" -eq 2
+	: >"$$base/both-inactive.log"
+	PATH="$$base/bin:/usr/bin:/bin" OPAL_TEST_UFW_STATUS=inactive OPAL_TEST_FIREWALL_LOG="$$base/both-inactive.log" $(MAKE) --no-print-directory firewall-install
+	! grep -q '^reload$$' "$$base/both-inactive.log"
+	echo 'firewall lifecycle tests passed'
+
 test-clean: all
-	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
+	@BIN='$(abspath $(PRODUCT))'
+	base=$$(mktemp -d)
+	trap 'rm -rf "$$base"' EXIT
+	opal_home="$$base/opal"; external="$$base/external"; bin="$$base/bin"
+	mkdir -p "$$opal_home/cache/nested" "$$external" "$$bin"
+	printf 'state\n' >"$$opal_home/config.ini"
+	printf 'identity\n' >"$$opal_home/identity.key"
+	printf 'cached\n' >"$$opal_home/cache/nested/file"
+	printf 'keep\n' >"$$external/sentinel"
+	cat >"$$bin/systemctl" <<'SH'
+	#!/bin/sh
+	printf '%s\n' "$$*" >>"$${OPAL_TEST_SYSTEMCTL_LOG:?}"
+	exit 0
+	SH
+	chmod +x "$$bin/systemctl"
+	: >"$$base/systemctl.log"
+	PATH="$$bin:$$PATH" OPAL_TEST_SYSTEMCTL_LOG="$$base/systemctl.log" OPAL_HOME="$$opal_home" "$$BIN" clean >"$$base/clean.out"
+	test ! -e "$$opal_home"
+	test -f "$$external/sentinel"
+	grep -Fxq -- '--user disable --now opal-host.service' "$$base/systemctl.log"
+	grep -Fxq -- '--user disable --now opal-bridge.service' "$$base/systemctl.log"
+	grep -q '^OPAL state cleaned\.$$' "$$base/clean.out"
+	: >"$$base/systemctl-second.log"
+	PATH="$$bin:$$PATH" OPAL_TEST_SYSTEMCTL_LOG="$$base/systemctl-second.log" OPAL_HOME="$$opal_home" "$$BIN" clean >"$$base/clean-second.out"
+	test ! -e "$$opal_home"
+	grep -q '^OPAL state cleaned\.$$' "$$base/clean-second.out"
+	echo 'clean tests passed'
 
 test-install: all
-	MAKE=$(MAKE) sh ./tests/test_install.sh
+	@base=$$(mktemp -d)
+	trap 'rm -rf "$$base"' EXIT
+	mkdir -p "$$base/bin" "$$base/prefix" "$$base/udev"
+	cat >"$$base/bin/modprobe" <<'SH'
+	#!/bin/sh
+	printf '%s\n' "$$*" >>"$${OPAL_TEST_MODPROBE_LOG:?}"
+	SH
+	cat >"$$base/bin/udevadm" <<'SH'
+	#!/bin/sh
+	printf '%s\n' "$$*" >>"$${OPAL_TEST_UDEV_LOG:?}"
+	SH
+	chmod +x "$$base/bin/modprobe" "$$base/bin/udevadm"
+	PATH="$$base/bin:$$PATH" OPAL_SKIP_FIREWALL=1 OPAL_TEST_MODPROBE_LOG="$$base/modprobe.log" OPAL_TEST_UDEV_LOG="$$base/udev.log" $(MAKE) --no-print-directory install PREFIX="$$base/prefix" UDEVDIR="$$base/udev" >/dev/null
+	test -f "$$base/udev/70-opal-uinput.rules"
+	grep -q 'KERNEL=="uinput"' "$$base/udev/70-opal-uinput.rules"
+	grep -q 'TAG+="uaccess"' "$$base/udev/70-opal-uinput.rules"
+	grep -qx 'uinput' "$$base/modprobe.log"
+	grep -qx 'control --reload-rules' "$$base/udev.log"
+	grep -q '^trigger .*uinput' "$$base/udev.log"
+	echo 'uinput install lifecycle tests passed'
 
-test: all rendezvous-server test-build-flags test-firewall test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
-	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
-	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) RENDEZVOUS_BIN=$(abspath $(RENDEZVOUS_SERVER)) ./tests/integration.sh
-	@tmp=$$(mktemp -d); \
-	  $(MAKE) install DESTDIR=$$tmp >/dev/null; \
-	  test -x "$$tmp$(BINDIR)/opal"; \
-	  test -x "$$tmp$(LIBEXECDIR)/opal-input"; \
-	  test -f "$$tmp$(SYSTEMDUSERDIR)/opal-host.service"; \
-	  test -f "$$tmp$(UDEVDIR)/70-opal-uinput.rules"; \
-	  "$$tmp$(BINDIR)/opal" version | grep -q '^OPAL 0.2.0$$'; \
-	  $(MAKE) uninstall DESTDIR=$$tmp >/dev/null; \
-	  test ! -e "$$tmp$(BINDIR)/opal"; \
-	  rm -rf $$tmp; \
-	  echo 'install tests passed'
+test-smoke: all
+	@BIN='$(abspath $(PRODUCT))'; INPUT_BIN='$(abspath $(INPUT))'
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT
+	OPAL_HOME="$$tmp/.opal" "$$BIN" version | grep -q '^OPAL 0.2.0$$'
+	OPAL_HOME="$$tmp/.opal" "$$BIN" help >"$$tmp/help.txt"
+	for command in restart clean select new remove doctor version help; do grep -q "opal $$command" "$$tmp/help.txt"; done
+	grep -q -- 'opal \[--mode max|1080p|1440p|4k\] \[--fps 15-240\]' "$$tmp/help.txt"
+	for removed in setup init host connect hosts wake bridge tunnel; do ! grep -Eq "^[[:space:]]+opal $$removed([[:space:]]|$$)" "$$tmp/help.txt"; done
+	grep -q 'signed rendezvous, direct end-to-end encrypted UDP' "$$tmp/help.txt"
+	grep -q 'blind encrypted relay fallback' "$$tmp/help.txt"
+	OPAL_HOME="$$tmp/.opal" "$$BIN" doctor >"$$tmp/doctor.txt"
+	grep -q 'XInput2 raw client input' "$$tmp/doctor.txt"
+	grep -q 'Networking is built into OPAL' "$$tmp/doctor.txt"
+	printf '3\n' | OPAL_HOME="$$tmp/fresh" "$$BIN" >"$$tmp/default.txt"
+	grep -q '^OPAL SETUP$$' "$$tmp/default.txt"
+	printf '3\n' | OPAL_HOME="$$tmp/mode" "$$BIN" --mode 1080p --fps 30 >"$$tmp/mode.txt"
+	grep -q '^OPAL SETUP$$' "$$tmp/mode.txt"
+	printf '3\n' | OPAL_HOME="$$tmp/new" "$$BIN" new >"$$tmp/new.txt"
+	grep -q '^OPAL SETUP$$' "$$tmp/new.txt"
+	set +e
+	OPAL_HOME="$$tmp/.opal" "$$BIN" --mode potato >/dev/null 2>"$$tmp/mode.err"; rc=$$?
+	set -e
+	test "$$rc" -eq 2; grep -q 'invalid --mode' "$$tmp/mode.err"
+	set +e
+	OPAL_HOME="$$tmp/.opal" "$$BIN" --fps 0 >/dev/null 2>"$$tmp/fps.err"; rc=$$?
+	set -e
+	test "$$rc" -eq 2; grep -q 'invalid --fps' "$$tmp/fps.err"
+	set +e
+	OPAL_HOME="$$tmp/.opal" "$$BIN" host >/dev/null 2>"$$tmp/removed.err"; rc=$$?
+	set -e
+	test "$$rc" -eq 2; grep -q "Unknown command. Run 'opal help'." "$$tmp/removed.err"
+	mkdir -p "$$tmp/bin" "$$tmp/.opal"
+	cat >"$$tmp/bin/systemctl" <<'SH'
+	#!/bin/sh
+	printf '%s\n' "$$*" >>"$$OPAL_TEST_SYSTEMCTL_LOG"
+	SH
+	chmod +x "$$tmp/bin/systemctl"
+	: >"$$tmp/systemctl.log"; touch "$$tmp/.opal/restart-sentinel"
+	PATH="$$tmp/bin:$$PATH" OPAL_TEST_SYSTEMCTL_LOG="$$tmp/systemctl.log" OPAL_HOME="$$tmp/.opal" "$$BIN" restart >"$$tmp/restart.txt"
+	grep -Fxq -- '--user daemon-reload' "$$tmp/systemctl.log"
+	grep -Fxq -- '--user try-restart opal-host.service' "$$tmp/systemctl.log"
+	grep -Fxq -- '--user try-restart opal-bridge.service' "$$tmp/systemctl.log"
+	test -f "$$tmp/.opal/restart-sentinel"
+	"$$INPUT_BIN" </dev/null >/dev/null 2>&1 || true
+	echo 'smoke tests passed'
+
+test-integration: all rendezvous-server
+	@BIN='$(abspath $(PRODUCT))'; INPUT_BIN='$(abspath $(INPUT))'; RENDEZVOUS_BIN='$(abspath $(RENDEZVOUS_SERVER))'
+	base=$$(mktemp -d); hp=''; cp=''; rp=''
+	trap 'test -n "$$cp" && kill "$$cp" 2>/dev/null || true; test -n "$$hp" && kill "$$hp" 2>/dev/null || true; test -n "$$rp" && kill "$$rp" 2>/dev/null || true; rm -rf "$$base"' EXIT
+	server="$$base/server"; client="$$base/client"; mkdir -p "$$base/bin"
+	cat >"$$base/bin/capture" <<'SH'
+	#!/bin/sh
+	printf 'start\n' >>"$${OPAL_TEST_CAPTURE_COUNT:?}"
+	exec ffmpeg -hide_banner -loglevel error -re \
+	  -f lavfi -i testsrc=size=320x180:rate=60 \
+	  -f lavfi -i anullsrc=r=48000:cl=stereo \
+	  -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency \
+	  -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 \
+	  -c:a aac -b:a 96k -f flv pipe:1
+	SH
+	chmod +x "$$base/bin/capture"; : >"$$base/captures.log"
+	OPAL_HOME="$$server" "$$BIN" --internal-host-setup >"$$base/setup"
+	code=$$(sed -n 's/^Connection code: //p' "$$base/setup"); password=$$(sed -n 's/^Pairing password: //p' "$$base/setup")
+	test -n "$$code"; test -n "$$password"; lower_password=$$(printf '%s' "$$password" | tr '[:upper:]' '[:lower:]')
+	port=$$((43000 + ($$$$ % 15000)))
+	OPAL_RENDEZVOUS_BIND=127.0.0.1 OPAL_RENDEZVOUS_PUBLIC_HOST=127.0.0.1 OPAL_RENDEZVOUS_PORT="$$port" "$$RENDEZVOUS_BIN" >"$$base/rendezvous.log" 2>&1 & rp=$$!
+	sleep 0.2; kill -0 "$$rp"; grep -q 'OPAL rendezvous+relay listening' "$$base/rendezvous.log"
+	OPAL_RENDEZVOUS_HOST=127.0.0.1 OPAL_RENDEZVOUS_PORT="$$port" OPAL_HOME="$$server" OPAL_CAPTURE_CMD="$$base/bin/capture" OPAL_TEST_CAPTURE_COUNT="$$base/captures.log" OPAL_INPUT_HELPER="$$INPUT_BIN" OPAL_TEST_CLOSE_FIRST_PEER_MS=1500 OPAL_TEST_AUTH_LOG="$$base/auth.log" OPAL_DEBUG=1 "$$BIN" --internal-host-run >"$$base/host.log" 2>&1 & hp=$$!
+	sleep 0.4; kill -0 "$$hp"
+	OPAL_RENDEZVOUS_HOST=127.0.0.1 OPAL_RENDEZVOUS_PORT="$$port" OPAL_AUDIO_TEST_SINK=discard OPAL_HOME="$$client" OPAL_DEBUG=1 "$$BIN" --internal-connect "$$code" "$$lower_password" >"$$base/client.log" 2>&1 & cp=$$!
+	recovered=0; i=0
+	while test "$$i" -lt 220; do
+		captures=0; test -f "$$base/captures.log" && captures=$$(wc -l <"$$base/captures.log")
+		if test "$$captures" -ge 2 && test -f "$$base/auth.log" && grep -q '^PAIR$$' "$$base/auth.log" && grep -q '^AUTH$$' "$$base/auth.log" && grep -q 'Connected' "$$base/client.log" && grep -q 'peer session recovered media_generation=2' "$$base/client.log"; then recovered=1; break; fi
+		kill -0 "$$cp" 2>/dev/null || break; kill -0 "$$hp" 2>/dev/null || break; kill -0 "$$rp" 2>/dev/null || break
+		sleep 0.1; i=$$((i+1))
+	done
+	test "$$recovered" -eq 1
+	kill -0 "$$hp"; kill -0 "$$cp"; kill -0 "$$rp"
+	grep -q 'Connected' "$$base/client.log"; grep -Eq 'OPAL network path=(lan|direct|relay)' "$$base/client.log"; ! grep -q 'Pairing password:' "$$base/client.log"
+	test -s "$$server/authorized_clients"; grep -q '^paired=true$$' "$$client/hosts.ini"; grep -q '^host_public_key=' "$$client/hosts.ini"
+	first_count=$$(wc -l <"$$base/captures.log")
+	kill "$$cp" 2>/dev/null || true; wait "$$cp" 2>/dev/null || true; cp=''
+	sleep 4; kill -0 "$$hp"; kill -0 "$$rp"
+	OPAL_RENDEZVOUS_HOST=127.0.0.1 OPAL_RENDEZVOUS_PORT="$$port" OPAL_AUDIO_TEST_SINK=discard OPAL_HOME="$$client" OPAL_DEBUG=1 "$$BIN" --internal-connect "$$code" >"$$base/client2.log" 2>&1 & cp=$$!
+	second_connected=0; i=0
+	while test "$$i" -lt 120; do
+		count=$$(wc -l <"$$base/captures.log")
+		if test "$$count" -gt "$$first_count" && grep -q 'Connected' "$$base/client2.log"; then second_connected=1; break; fi
+		kill -0 "$$cp" 2>/dev/null || break; sleep 0.1; i=$$((i+1))
+	done
+	test "$$second_connected" -eq 1
+	kill -0 "$$hp"; kill -0 "$$cp"; kill -0 "$$rp"
+	grep -q 'Connected' "$$base/client2.log"; ! grep -q 'Pairing password:' "$$base/client2.log"; ! grep -qi 'authentication denied' "$$base/client2.log"
+	grep -q '^PAIR$$' "$$base/auth.log"; auth_count=$$(grep -c '^AUTH$$' "$$base/auth.log"); test "$$auth_count" -ge 2
+	kill "$$cp" 2>/dev/null || true; wait "$$cp" 2>/dev/null || true; cp=''
+	kill "$$hp" 2>/dev/null || true; wait "$$hp" 2>/dev/null || true; hp=''
+	kill "$$rp" 2>/dev/null || true; wait "$$rp" 2>/dev/null || true; rp=''
+	echo 'integration tests passed'
+
+test-install-layout: all
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT
+	$(MAKE) --no-print-directory install DESTDIR="$$tmp" >/dev/null
+	test -x "$$tmp$(BINDIR)/opal"
+	test -x "$$tmp$(LIBEXECDIR)/opal-input"
+	test -f "$$tmp$(SYSTEMDUSERDIR)/opal-host.service"
+	test -f "$$tmp$(UDEVDIR)/70-opal-uinput.rules"
+	"$$tmp$(BINDIR)/opal" version | grep -q '^OPAL 0.2.0$$'
+	$(MAKE) --no-print-directory uninstall DESTDIR="$$tmp" >/dev/null
+	test ! -e "$$tmp$(BINDIR)/opal"
+	echo 'install tests passed'
+
+test: all rendezvous-server test-build-flags test-firewall test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install test-smoke test-integration test-install-layout
+	@echo 'all tests passed'
 
 install: all
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)" "$(DESTDIR)$(SYSTEMDUSERDIR)" "$(DESTDIR)$(UDEVDIR)"
 	$(INSTALL) -m 0755 $(PRODUCT) "$(DESTDIR)$(BINDIR)/opal"
 	$(INSTALL) -m 0755 $(INPUT) "$(DESTDIR)$(LIBEXECDIR)/opal-input"
-	$(INSTALL) -m 0644 systemd/opal-host.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service"
-	$(INSTALL) -m 0644 systemd/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
-	$(INSTALL) -m 0644 packaging/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"
-	@if [ -z "$(DESTDIR)" ]; then \
-	  sh ./scripts/configure-firewall.sh install; \
-	  if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
-	  if command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules; udevadm trigger --action=change --sysname-match=uinput; udevadm settle; fi; \
+	$(INSTALL) -m 0644 system/opal-host.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service"
+	$(INSTALL) -m 0644 system/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
+	$(INSTALL) -m 0644 system/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"
+	if [ -z "$(DESTDIR)" ]; then
+		$(MAKE) --no-print-directory firewall-install
+		if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi
+		if command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules; udevadm trigger --action=change --sysname-match=uinput; udevadm settle; fi
 	fi
-	@echo "Installed OPAL to $(DESTDIR)$(PREFIX)"
-	@echo "Run: opal"
+	echo "Installed OPAL to $(DESTDIR)$(PREFIX)"
+	echo 'Run: opal'
 
 install-rendezvous: $(RENDEZVOUS_SERVER)
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
 	$(INSTALL) -m 0755 $(RENDEZVOUS_SERVER) "$(DESTDIR)$(BINDIR)/opal-rendezvous"
 
+deploy-rendezvous: rendezvous-server
+	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run as a normal user with sudo access, not as root.' >&2; exit 2; fi
+	command -v sudo >/dev/null 2>&1 || { echo 'sudo is required' >&2; exit 1; }
+	sudo install -m 0755 $(RENDEZVOUS_SERVER) /usr/local/bin/opal-rendezvous
+	sudo install -m 0644 system/opal-rendezvous.service /etc/systemd/system/opal-rendezvous.service
+	sudo mkdir -p /etc/systemd/system/opal-rendezvous.service.d
+	printf '%s\n' '[Service]' 'Environment=OPAL_RENDEZVOUS_BIND=::' 'Environment=OPAL_RENDEZVOUS_PUBLIC_HOST=$(PUBLIC_HOST)' 'Environment=OPAL_RENDEZVOUS_PORT=$(RENDEZVOUS_PORT)' | sudo tee /etc/systemd/system/opal-rendezvous.service.d/endpoint.conf >/dev/null
+	if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q '^Status: active'; then sudo ufw allow '$(RENDEZVOUS_PORT)/udp'; fi
+	if command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port='$(RENDEZVOUS_PORT)/udp'; sudo firewall-cmd --reload; fi
+	sudo systemctl daemon-reload
+	sudo systemctl enable --now opal-rendezvous.service
+	sudo systemctl --no-pager --full status opal-rendezvous.service
+	echo "OPAL rendezvous/relay service is running on UDP $(RENDEZVOUS_PORT)."
+	echo "Point $(PUBLIC_HOST) to this VPS public IP if DNS is not already configured."
+
 uninstall:
-	@if [ -z "$(DESTDIR)" ]; then sh ./scripts/configure-firewall.sh remove; fi
+	if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory firewall-remove; fi
 	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
 	-rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null
@@ -248,4 +523,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all rendezvous-server deps-check test test-build-flags test-firewall test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
+.PHONY: all rendezvous-server deps-check firewall-install firewall-remove deploy-rendezvous test test-build-flags test-firewall test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install test-smoke test-integration test-install-layout install install-rendezvous uninstall clean
