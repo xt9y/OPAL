@@ -1,0 +1,33 @@
+[Unit]
+Description=OPAL rendezvous and blind UDP relay
+Documentation=https://github.com/xt9y/OPAL
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/local/bin/opal-rendezvous
+Restart=always
+RestartSec=1
+Environment=OPAL_RENDEZVOUS_BIND=::
+Environment=OPAL_RENDEZVOUS_PUBLIC_HOST=rendezvous.opal.xt9y.de
+Environment=OPAL_RENDEZVOUS_PORT=47992
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
