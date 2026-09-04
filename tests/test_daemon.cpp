@@ -15,8 +15,12 @@ int main() {
     assert(unit.find("Restart=on-failure")==std::string::npos);
 
     const auto host=read_all("src/host.cpp");
-    assert(host.find("Video    direct encrypted UDP")!=std::string::npos);
+    assert(host.find("encrypted direct UDP (relay fallback)")!=std::string::npos);
+    assert(host.find("register_host")!=std::string::npos);
+    assert(host.find("wait_offer")!=std::string::npos);
+    assert(host.find("PeerSession")!=std::string::npos);
     assert(host.find("47991")==std::string::npos);
-    assert(host.find("video_backpressure_timeout_ms")==std::string::npos);
+    assert(host.find("zrok")==std::string::npos);
+    assert(host.find("server_tls_context")==std::string::npos);
     return 0;
 }
