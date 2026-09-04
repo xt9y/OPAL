@@ -40,5 +40,6 @@ PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$scrip
 
 grep -qx -- "allow 47993/udp comment OPAL LAN discovery" "$base/ufw.log"
 grep -qx -- '--force delete allow 47993/udp' "$base/ufw.log"
+test "$(grep -c '^reload$' "$base/ufw.log")" -eq 2
 
 echo 'firewall lifecycle tests passed'
