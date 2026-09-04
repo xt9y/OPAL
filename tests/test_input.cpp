@@ -47,6 +47,8 @@ int main(){
     assert(client.find("<SDL3/SDL.h>")!=std::string::npos);
     assert(client.find("SDL_EVENT_KEY_DOWN")!=std::string::npos);
     assert(client.find("SDL_EVENT_MOUSE_MOTION")!=std::string::npos);
+    assert(client.find("event.motion.xrel")==std::string::npos);
+    assert(client.find("event.motion.yrel")==std::string::npos);
     assert(client.find("SDL_SetWindowRelativeMouseMode")==std::string::npos);
     assert(client.find("presenter.set_relative_mouse_mode")!=std::string::npos);
     assert(client.find("session.take_latest_video")!=std::string::npos);
@@ -54,6 +56,11 @@ int main(){
     assert(client.find("XInput2")==std::string::npos);
     assert(client.find("presentation_window")==std::string::npos);
     assert(client.find("click the OPAL screen to capture again")!=std::string::npos);
+
+    auto presenter=read_file("src/video_present.cpp");
+    assert(presenter.find("SDL_SetWindowMouseGrab")!=std::string::npos);
+    assert(presenter.find("SDL_HideCursor")!=std::string::npos);
+    assert(presenter.find("SDL_ShowCursor")!=std::string::npos);
 
     auto session_header=read_file("include/opal/session.hpp");auto session_source=read_file("src/session.cpp");
     assert(session_header.find("take_latest_video")!=std::string::npos);
