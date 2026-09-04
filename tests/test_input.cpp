@@ -3,6 +3,7 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <linux/input-event-codes.h>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,16 @@ int main(){
     assert((releases==std::vector<std::string>{"KEY 42 0","BUTTON 3 0"}));
     assert(held.release_commands().empty());
 
+    opal::HeldInputState chord;
+    assert(chord.press_key(KEY_LEFTCTRL));
+    assert(chord.press_key(KEY_LEFTALT));
+    assert(chord.press_key(KEY_LEFTSHIFT));
+    assert(opal::client_control_chord(chord,KEY_W)==opal::ClientControlChord::ReleaseCapture);
+    assert(opal::client_control_chord(chord,KEY_Q)==opal::ClientControlChord::Quit);
+    assert(opal::client_control_chord(chord,KEY_A)==opal::ClientControlChord::None);
+    chord.release_key(KEY_LEFTSHIFT);
+    assert(opal::client_control_chord(chord,KEY_W)==opal::ClientControlChord::None);
+
     auto helper=read_file("src/input_helper.cpp");
     assert(helper.find("KEY_MAX")!=std::string::npos);
     assert(helper.find("k<256")==std::string::npos);
@@ -77,6 +88,17 @@ int main(){
     assert(client.find("PointerMotionMask")!=std::string::npos);
     assert(client.find("XISetMask(mask,XI_RawMotion)")==std::string::npos);
     assert(client.find("XWarpPointer")==std::string::npos);
+    assert(client.find("ClientControlChord::ReleaseCapture")!=std::string::npos);
+    assert(client.find("wait_for_reacquire_click")!=std::string::npos);
+    assert(client.find("session.presentation_window()")!=std::string::npos);
+    assert(client.find("XUngrabKeyboard")!=std::string::npos);
+    assert(client.find("XUngrabPointer")!=std::string::npos);
+    assert(client.find("click the OPAL screen to capture again")!=std::string::npos);
+
+    auto session_header=read_file("include/opal/session.hpp");
+    auto session_source=read_file("src/session.cpp");
+    assert(session_header.find("presentation_window() const")!=std::string::npos);
+    assert(session_source.find("receiver->presentation_window()")!=std::string::npos);
 
     auto host=read_file("src/host.cpp");
     assert(host.find("line.rfind(\"POINTER \",0)==0")!=std::string::npos);

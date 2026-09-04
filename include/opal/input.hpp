@@ -6,6 +6,12 @@
 namespace opal {
 inline constexpr int pointer_abs_max=65535;
 
+enum class ClientControlChord {
+    None,
+    Quit,
+    ReleaseCapture
+};
+
 int linux_keycode_from_x11(unsigned int keycode);
 std::string raw_motion_command(double dx,double dy);
 double mouse_normalization_scale(int resolution);
@@ -26,4 +32,6 @@ public:
     bool button_down(int button) const;
     std::vector<std::string> release_commands();
 };
+
+ClientControlChord client_control_chord(const HeldInputState&held,int code);
 }

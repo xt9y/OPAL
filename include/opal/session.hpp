@@ -30,6 +30,7 @@ public:
     bool send_input(const std::string &command);
     unsigned long control_generation() const;
     bool media_started() const;
+    unsigned long presentation_window() const;
     bool running() const;
     bool paired() const;
     int remote_width() const;
