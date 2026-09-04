@@ -37,6 +37,7 @@ VIDEO_RECEIVER_SRCS := src/video_receiver.cpp
 RENDEZVOUS_PROTOCOL_SRCS := src/rendezvous_protocol.cpp
 RENDEZVOUS_STATE_SRCS := src/rendezvous_server.cpp
 RENDEZVOUS_CLIENT_SRCS := src/rendezvous_client.cpp
+LOCAL_DISCOVERY_SRCS := src/local_discovery.cpp
 RELAY_SRCS := src/relay_protocol.cpp
 PEER_HANDSHAKE_SRCS := src/peer_handshake.cpp
 SESSION_PACKET_SRCS := src/session_packet.cpp
@@ -49,7 +50,7 @@ DIRECT_MEDIA_COMMON_SRCS := $(VIDEO_FEEDBACK_SRCS)
 DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(VIDEO_PRESENT_SRCS) $(AUDIO_OUTPUT_SRCS)
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
 DIRECT_MEDIA_SRCS := $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS)
-NATIVE_CONTROL_SRCS := $(RENDEZVOUS_PROTOCOL_SRCS) $(RENDEZVOUS_CLIENT_SRCS) $(RELAY_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(PEER_SESSION_SRCS)
+NATIVE_CONTROL_SRCS := $(RENDEZVOUS_PROTOCOL_SRCS) $(RENDEZVOUS_CLIENT_SRCS) $(LOCAL_DISCOVERY_SRCS) $(RELAY_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(PEER_SESSION_SRCS)
 APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(NATIVE_CONTROL_SRCS) $(INPUT_SRCS)
 MEDIA_TEST_TARGETS := test-video-capture test-video-decoder test-video-present test-audio-output test-direct-video-pipeline
 
@@ -145,6 +146,10 @@ test-rendezvous-server: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_rendezvous_server.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp -lcrypto -o $(BUILD)/test-rendezvous-server
 	$(BUILD)/test-rendezvous-server
 
+test-local-discovery: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_local_discovery.cpp $(LOCAL_DISCOVERY_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(PEER_SESSION_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(RELAY_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) src/crypto.cpp -lcrypto -lpthread -o $(BUILD)/test-local-discovery
+	$(BUILD)/test-local-discovery
+
 test-peer-handshake: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_peer_handshake.cpp $(PEER_HANDSHAKE_SRCS) src/crypto.cpp -lcrypto -o $(BUILD)/test-peer-handshake
 	$(BUILD)/test-peer-handshake
@@ -197,7 +202,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all rendezvous-server test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
+test: all rendezvous-server test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) RENDEZVOUS_BIN=$(abspath $(RENDEZVOUS_SERVER)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -238,4 +243,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all rendezvous-server deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
+.PHONY: all rendezvous-server deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
