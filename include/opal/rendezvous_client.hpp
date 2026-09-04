@@ -38,7 +38,7 @@ public:
     RendezvousClient();
     RendezvousClient(const RendezvousClient&)=delete;
     RendezvousClient& operator=(const RendezvousClient&)=delete;
-    bool open(const RendezvousConfig&=default_rendezvous_config());
+    bool open(const RendezvousConfig& config=default_rendezvous_config());
     bool register_host(const std::string &public_key,const std::filesystem::path &private_key,
                        std::string &rendezvous_id,std::uint32_t &lease_seconds,std::string &error);
     bool wait_offer(RendezvousMessage &offer,int timeout_ms,std::string &error);
