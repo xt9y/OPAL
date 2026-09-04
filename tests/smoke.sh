@@ -3,7 +3,7 @@ set -eu
 : "${BIN:?}" "${INPUT_BIN:?}"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-OPAL_HOME="$tmp/.opal" "$BIN" version | grep -q '^OPAL 0.1.0$'
+OPAL_HOME="$tmp/.opal" "$BIN" version | grep -q '^OPAL 0.2.0$'
 OPAL_HOME="$tmp/.opal" "$BIN" help >"$tmp/help.txt"
 for command in restart clean select new remove doctor version help; do
     grep -q "opal $command" "$tmp/help.txt"
@@ -12,8 +12,11 @@ grep -q -- 'opal \[--mode max|1080p|1440p|4k\] \[--fps 15-240\]' "$tmp/help.txt"
 for removed in setup init host connect hosts wake bridge tunnel; do
     ! grep -Eq "^[[:space:]]+opal $removed([[:space:]]|$)" "$tmp/help.txt"
 done
+grep -q 'signed rendezvous, direct end-to-end encrypted UDP' "$tmp/help.txt"
+grep -q 'blind encrypted relay fallback' "$tmp/help.txt"
 OPAL_HOME="$tmp/.opal" "$BIN" doctor >"$tmp/doctor.txt"
 grep -q 'XInput2 raw client input' "$tmp/doctor.txt"
+grep -q 'Networking is built into OPAL' "$tmp/doctor.txt"
 
 printf '3\n' | OPAL_HOME="$tmp/fresh" "$BIN" >"$tmp/default.txt"
 grep -q '^OPAL SETUP$' "$tmp/default.txt"
