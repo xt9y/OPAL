@@ -10,6 +10,9 @@
 #include <vector>
 
 namespace opal {
+constexpr int kTailnetDiscoveryTimeoutMs=3000;
+constexpr int kTailnetPeerHandshakeTimeoutMs=6000;
+
 inline bool is_tailnet_ipv4(const std::string&address){
     in_addr addr{};
     if(inet_pton(AF_INET,address.c_str(),&addr)!=1)return false;
