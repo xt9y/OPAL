@@ -32,7 +32,7 @@ rm -f "$base/bin/firewall-cmd"
 cat >"$base/bin/ufw" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = "status" ]; then
-  echo 'Status: active'
+  echo "Status: ${OPAL_TEST_UFW_STATUS:-active}"
   exit 0
 fi
 printf '%s\n' "$*" >>"${OPAL_TEST_FIREWALL_LOG:?}"
@@ -47,5 +47,12 @@ grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/ufw.log"
 grep -qx -- '--force delete allow 47994/udp' "$base/ufw.log"
 grep -qx -- '--force delete allow 47993/udp' "$base/ufw.log"
 test "$(grep -c '^reload$' "$base/ufw.log")" -eq 2
+
+: >"$base/ufw-inactive.log"
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_UFW_STATUS=inactive OPAL_TEST_FIREWALL_LOG="$base/ufw-inactive.log" sh "$script" install
+
+grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$base/ufw-inactive.log"
+grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/ufw-inactive.log"
+! grep -q '^reload$' "$base/ufw-inactive.log"
 
 echo 'firewall lifecycle tests passed'
