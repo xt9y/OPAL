@@ -27,7 +27,7 @@
 namespace opal {
 namespace {
 using Clock=std::chrono::steady_clock;
-std::mutex auth_mu,input_mu,test_log_mu;SinkProcess input_sink;Paths G;Ini host_cfg;int host_desktop_width=0,host_desktop_height=0;
+std::mutex auth_mu,input_mu,test_log_mu;SinkProcess input_sink;Paths G;Ini host_cfg;int host_desktop_width=0,host_desktop_height=0;std::atomic<bool>test_close_used{false};
 
 bool authorized_unlocked(const std::string&pub){std::ifstream f(G.authorized);std::string line;while(std::getline(f,line)){const auto p=line.find('|');if((p==std::string::npos?line:line.substr(0,p))==pub)return true;}return false;}
 bool authorized(const std::string&pub){std::lock_guard<std::mutex>l(auth_mu);return authorized_unlocked(pub);}
@@ -62,7 +62,8 @@ bool run_native_session(RendezvousClient&rendezvous,const RendezvousMessage&offe
     if(!peer.start(std::move(options),error)){std::cerr<<"OPAL peer session failed: "<<(error.empty()?"unknown error":error)<<"\n";for(const auto&r:held.release_commands())input_send(r);return false;}
     if(!was_authorized){authorize(offer.public_key,"client");rotate_pairing_password();append_test_log("OPAL_TEST_AUTH_LOG","PAIR");}else append_test_log("OPAL_TEST_AUTH_LOG","AUTH");
     peer.send_input(host_meta());if(const char*d=std::getenv("OPAL_DEBUG");d&&*d&&std::string(d)!="0")std::cerr<<"OPAL host peer path="<<peer.path_name()<<" session="<<intro.session_id.substr(0,8)<<"...\n";
-    while(peer.running())std::this_thread::sleep_for(std::chrono::milliseconds(100));sender.stop();for(const auto&r:held.release_commands())input_send(r);peer.stop();return true;
+    int test_close_ms=0;if(const char*v=std::getenv("OPAL_TEST_CLOSE_FIRST_PEER_MS");v&&*v)try{test_close_ms=std::clamp(std::stoi(v),100,10000);}catch(...){test_close_ms=0;}const bool test_close_this_session=test_close_ms>0&&!test_close_used.exchange(true);const auto test_close_at=Clock::now()+std::chrono::milliseconds(test_close_ms);
+    while(peer.running()){if(test_close_this_session&&Clock::now()>=test_close_at){peer.stop();break;}std::this_thread::sleep_for(std::chrono::milliseconds(100));}sender.stop();for(const auto&r:held.release_commands())input_send(r);peer.stop();return true;
 }
 
 int native_host_loop(){
