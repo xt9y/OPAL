@@ -21,6 +21,7 @@ using namespace std::chrono_literals;
 bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 bool pointer_command(const std::string&s){return s.rfind("POINTER ",0)==0;}
 bool local_discovery_enabled(){const char*v=std::getenv("OPAL_LOCAL_DISCOVERY");return !(v&&*v&&std::string(v)=="0");}
+bool rendezvous_timeout(const std::string&s){return s=="rendezvous timeout"||s=="rendezvous protocol timeout"||s=="rendezvous introduction timeout";}
 }
 
 struct SessionSupervisor::Impl {
@@ -40,13 +41,13 @@ struct SessionSupervisor::Impl {
             if(discover_local_host(options.rendezvous_id,options.client_public_key,local,local_error,300)){
                 local_path=true;socket=local.socket;local.socket={};intro.rendezvous_id=local.rendezvous_id;intro.session_id=local.session_id;intro.peer_public_key=local.host_public_key;intro.local_nonce=local.client_nonce;intro.peer_nonce=local.host_nonce;intro.peer_observed=local.host;
                 if(debug_enabled())std::cerr<<"OPAL discovery=lan host="<<local.host.host<<":"<<local.host.port<<"\n";
-            }
+            }else if(debug_enabled())std::cerr<<"OPAL discovery=lan miss reason="<<(local_error.empty()?"not-found":local_error)<<"\n";
         }
         if(!local_path){
-            const auto config=default_rendezvous_config();RendezvousClient rendezvous;
+            const auto config=default_rendezvous_config();if(debug_enabled())std::cerr<<"OPAL discovery=rendezvous endpoint="<<config.host<<":"<<config.port<<"\n";RendezvousClient rendezvous;
             if(!rendezvous.open(config)){set_error("host not found on LAN; OPAL rendezvous service unreachable at "+config.host+":"+std::to_string(config.port));return false;}
-            std::string connect_error;if(!rendezvous.introduce(options.rendezvous_id,options.client_public_key,intro,connect_error)){set_error("host not found on LAN; "+(connect_error.empty()?std::string("OPAL host is offline"):connect_error));return false;}
-            RelayAllocation relay;std::string relay_error;if(rendezvous.request_relay(intro.session_id,options.client_public_key,options.client_private_key_path,relay,relay_error))relay_fallback=PeerRelayFallback{relay.endpoint,relay.allocation_id,RelayRole::Client};
+            std::string connect_error;if(!rendezvous.introduce(options.rendezvous_id,options.client_public_key,intro,connect_error)){if(rendezvous_timeout(connect_error))set_error("host not found on LAN; OPAL rendezvous service did not respond at "+config.host+":"+std::to_string(config.port));else set_error("host not found on LAN; "+(connect_error.empty()?std::string("OPAL host is offline"):connect_error));return false;}
+            RelayAllocation relay;std::string relay_error;if(rendezvous.request_relay(intro.session_id,options.client_public_key,options.client_private_key_path,relay,relay_error))relay_fallback=PeerRelayFallback{relay.endpoint,relay.allocation_id,RelayRole::Client};else if(debug_enabled())std::cerr<<"OPAL relay=unavailable reason="<<(relay_error.empty()?"not-allocated":relay_error)<<"\n";
             socket=rendezvous.take_socket();if(socket.fd<0){set_error("rendezvous did not preserve peer socket");return false;}
         }
         std::string expected;{std::lock_guard<std::mutex>lock(state_mu);expected=!options.expected_host_public_key.empty()?options.expected_host_public_key:host_key_value;}
@@ -56,7 +57,7 @@ struct SessionSupervisor::Impl {
         PeerSessionOptions peer_options;peer_options.client_side=true;peer_options.socket=socket;peer_options.peer=intro.peer_observed;if(local_path)peer_options.lan_peer=intro.peer_observed;else if(!intro.peer_local.host.empty()&&intro.peer_local.port)peer_options.lan_peer=intro.peer_local;if(relay_fallback)peer_options.relay=*relay_fallback;peer_options.handshake.rendezvous_id=intro.rendezvous_id;peer_options.handshake.session_id=intro.session_id;peer_options.handshake.generation=1;peer_options.handshake.client_identity=options.client_public_key;peer_options.handshake.host_identity=intro.peer_public_key;peer_options.handshake.client_nonce=intro.local_nonce;peer_options.handshake.host_nonce=intro.peer_nonce;peer_options.handshake.auth_binding=pairing?"pairing":"paired";peer_options.identity_private_key=options.client_private_key_path;peer_options.pairing_password=password;
         peer_options.reliable_input=[this,receiver_ptr](const std::string&line){if(line.rfind("HOST_META ",0)==0){parse_host_meta(line);return;}if(line.rfind("MEDIA_ERROR ",0)==0){set_error(line.substr(12));return;}receiver_ptr->handle_control_line(line);};
         peer_options.media_datagram=[receiver_ptr](std::span<const std::uint8_t>wire){receiver_ptr->accept_datagram(wire);};
-        std::string peer_error;if(!next_peer->start(std::move(peer_options),peer_error)){set_error(peer_error.empty()?"direct peer session failed":peer_error);return false;}
+        std::string peer_error;if(!next_peer->start(std::move(peer_options),peer_error)){set_error(peer_error.empty()?"peer session failed":peer_error);return false;}
         if(!next_receiver->start_native(next_peer->media_keys(),next_peer->session_id(),gen,[peer_ptr](const std::string&line){return peer_ptr->send_input(line);})){
             next_peer->stop();set_error("could not start native video receiver");return false;
         }
