@@ -33,7 +33,14 @@ int main(int argc,char**argv){
     while(running.load()){
         std::uint8_t buffer[kBufferBytes+1]{};sockaddr_storage source{};socklen_t source_len=sizeof(source);const ssize_t n=recvfrom(fd,buffer,sizeof(buffer),0,reinterpret_cast<sockaddr*>(&source),&source_len);if(n<0){if(errno==EINTR)continue;break;}if(n<=0||n>static_cast<ssize_t>(kBufferBytes))continue;opal::RendezvousEndpoint endpoint;if(!endpoint_from_sockaddr(source,source_len,endpoint))continue;const auto now=monotonic_ms();const std::span<const std::uint8_t>bytes(buffer,static_cast<std::size_t>(n));
         opal::RelayEnvelope relay;if(opal::parse_relay_datagram(bytes,relay)){opal::RendezvousEndpoint target;if(state.relay_target(relay.allocation_id,relay.role,endpoint,now,target))(void)send_endpoint(fd,target,relay.inner.data(),relay.inner.size());continue;}
-        if(n>static_cast<ssize_t>(opal::kRendezvousMaxMessageBytes))continue;opal::RendezvousMessage message;if(!opal::parse_rendezvous_message(std::string_view(reinterpret_cast<const char*>(buffer),static_cast<std::size_t>(n)),message))continue;const auto outputs=state.process(message,endpoint,now);for(const auto&output:outputs){const auto wire=opal::serialize_rendezvous_message(output.message);if(!wire.empty())(void)send_endpoint(fd,output.target,wire.data(),wire.size());}
+        if(n>static_cast<ssize_t>(opal::kRendezvousMaxMessageBytes))continue;
+        opal::RendezvousMessage message;
+        if(!opal::parse_rendezvous_message(std::string_view(reinterpret_cast<const char*>(buffer),static_cast<std::size_t>(n)),message))continue;
+        const auto outputs=state.process(message,endpoint,now);
+        for(const auto&output:outputs){
+            const auto wire=opal::serialize_rendezvous_message(output.message);
+            if(!wire.empty())(void)send_endpoint(fd,output.target,wire.data(),wire.size());
+        }
     }
     close(fd);return 0;
 }
