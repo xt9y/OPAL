@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <chrono>
 #include <cstring>
+#include <fcntl.h>
 #include <netdb.h>
 #include <sstream>
 #include <string_view>
@@ -40,6 +41,21 @@ UdpSocket open_ipv4_socket(std::uint16_t port,const std::string&bind_host,bool b
     return {fd,ntohs(address.sin_port)};
 }
 
+UdpSocket open_dual_stack_listener(std::uint16_t port,std::string&error){
+    error.clear();const int fd=socket(AF_INET6,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,0);if(fd<0){error="local discovery socket failed";return {};}
+    int off=0;if(setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&off,sizeof(off))!=0){close(fd);error="local discovery dual-stack unavailable";return {};}
+    int one=1;(void)setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
+    int queue_bytes=kUdpQueueBufferBytes;if(setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&queue_bytes,sizeof(queue_bytes))!=0||setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&queue_bytes,sizeof(queue_bytes))!=0){close(fd);error="local discovery socket buffers unavailable";return {};}
+#ifdef SO_RXQ_OVFL
+    int overflow_reporting=1;(void)setsockopt(fd,SOL_SOCKET,SO_RXQ_OVFL,&overflow_reporting,sizeof(overflow_reporting));
+#endif
+    int traffic_class=kUdpInteractiveTrafficClass;if(setsockopt(fd,IPPROTO_IPV6,IPV6_TCLASS,&traffic_class,sizeof(traffic_class))!=0){close(fd);error="local discovery traffic class unavailable";return {};}(void)setsockopt(fd,IPPROTO_IP,IP_TOS,&traffic_class,sizeof(traffic_class));
+    sockaddr_in6 address{};address.sin6_family=AF_INET6;address.sin6_addr=in6addr_any;address.sin6_port=htons(port);
+    if(bind(fd,reinterpret_cast<sockaddr*>(&address),sizeof(address))!=0){close(fd);error="local discovery bind failed";return {};}
+    socklen_t length=sizeof(address);if(getsockname(fd,reinterpret_cast<sockaddr*>(&address),&length)!=0){close(fd);error="local discovery socket query failed";return {};}
+    return {fd,ntohs(address.sin6_port)};
+}
+
 bool resolve_ipv4(const std::string&host,std::uint16_t port,sockaddr_in&out){
     if(host.empty()||port==0)return false;addrinfo hints{};hints.ai_family=AF_INET;hints.ai_socktype=SOCK_DGRAM;addrinfo*result=nullptr;const auto service=std::to_string(port);if(getaddrinfo(host.c_str(),service.c_str(),&hints,&result)!=0)return false;bool ok=false;for(auto*it=result;it&&!ok;it=it->ai_next){if(it->ai_family==AF_INET&&it->ai_addrlen==sizeof(sockaddr_in)){std::memcpy(&out,it->ai_addr,sizeof(out));ok=true;}}freeaddrinfo(result);return ok;
 }
@@ -66,7 +82,10 @@ bool parse_offer(std::string_view wire,std::string&id,std::string&session_id,std
 int remaining_ms(Clock::time_point deadline){const auto now=Clock::now();if(now>=deadline)return 0;return std::max(1,static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count()));}
 }
 
-UdpSocket open_local_discovery_listener(std::uint16_t port,std::string bind_host,std::string &error){return open_ipv4_socket(port,bind_host,false,error);}
+UdpSocket open_local_discovery_listener(std::uint16_t port,std::string bind_host,std::string &error){
+    if(bind_host.empty()||bind_host=="0.0.0.0")return open_dual_stack_listener(port,error);
+    return open_ipv4_socket(port,bind_host,false,error);
+}
 
 bool wait_local_client(UdpSocket &listener,const std::string &host_public_key,
                        const std::filesystem::path &host_private_key,
@@ -75,9 +94,10 @@ bool wait_local_client(UdpSocket &listener,const std::string &host_public_key,
     const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));std::array<std::uint8_t,kLocalDiscoveryMessageBytes>buffer{};
     while(remaining_ms(deadline)>0){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(listener.fd,buffer,source,source_len,remaining_ms(deadline));if(n==-2)continue;if(n<0){error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string request_id,client_public_key,client_nonce;std::uint16_t client_peer_port=0;if(!parse_discover(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),request_id,client_public_key,client_nonce,client_peer_port)||request_id!=id)continue;
-        RendezvousEndpoint client;if(!endpoint_from_sockaddr(source,source_len,client))continue;client.port=client_peer_port;auto peer_socket=open_udp_socket();if(peer_socket.fd<0){error="local peer socket failed";return false;}
-        const auto session_id=random_hex(16),host_nonce=random_hex(16);const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,peer_socket.local_port);const auto signature=sign_hex(host_private_key,transcript);if(signature.empty()){close_udp_socket(peer_socket);error="local discovery identity signing failed";return false;}
-        const std::string offer="OPAL_LOCAL_OFFER_V1 "+id+" "+session_id+" "+host_public_key+" "+host_nonce+" "+std::to_string(peer_socket.local_port)+" "+signature;
+        RendezvousEndpoint client;if(!endpoint_from_sockaddr(source,source_len,client))continue;client.port=client_peer_port;
+        const int peer_fd=fcntl(listener.fd,F_DUPFD_CLOEXEC,0);if(peer_fd<0){error="local peer socket duplication failed";return false;}UdpSocket peer_socket{peer_fd,listener.local_port};
+        const auto session_id=random_hex(16),host_nonce=random_hex(16);const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,listener.local_port);const auto signature=sign_hex(host_private_key,transcript);if(signature.empty()){close_udp_socket(peer_socket);error="local discovery identity signing failed";return false;}
+        const std::string offer="OPAL_LOCAL_OFFER_V1 "+id+" "+session_id+" "+host_public_key+" "+host_nonce+" "+std::to_string(listener.local_port)+" "+signature;
         if(!send_text(listener.fd,reinterpret_cast<const sockaddr*>(&source),source_len,offer)){close_udp_socket(peer_socket);continue;}
         result.socket=peer_socket;result.client=client;result.rendezvous_id=id;result.session_id=session_id;result.client_public_key=client_public_key;result.client_nonce=client_nonce;result.host_nonce=host_nonce;return true;
     }
