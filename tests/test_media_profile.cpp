@@ -23,13 +23,12 @@ int main() {
     assert(opal::normal_gop_frames(15)==30);
     assert(opal::normal_gop_frames(240)==480);
 
-    constexpr std::uint64_t kib=1024;
-    assert(opal::sender_burst_budget_bytes(30000,60,false)==128*kib);
-    assert(opal::sender_burst_budget_bytes(30000,60,true)==512*kib);
-    const auto low_fps=opal::sender_burst_budget_bytes(20000,15,false);
-    assert(low_fps>=333000&&low_fps<=334000);
-    assert(opal::sender_burst_budget_bytes(100000,15,false)==512*kib);
-    assert(opal::sender_burst_budget_bytes(100000,15,true)==2*1024*kib);
-    assert(opal::sender_burst_budget_bytes(1,1000,false)==128*kib);
+    constexpr std::uint64_t two_datagrams=2*1200;
+    assert(opal::sender_burst_budget_bytes(30000,60,false)==two_datagrams);
+    assert(opal::sender_burst_budget_bytes(30000,60,true)==two_datagrams);
+    assert(opal::sender_burst_budget_bytes(20000,15,false)==two_datagrams);
+    assert(opal::sender_burst_budget_bytes(100000,15,false)==two_datagrams);
+    assert(opal::sender_burst_budget_bytes(100000,15,true)==two_datagrams);
+    assert(opal::sender_burst_budget_bytes(1,1000,false)==two_datagrams);
     return 0;
 }
