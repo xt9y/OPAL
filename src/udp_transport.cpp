@@ -14,10 +14,20 @@
 #include <poll.h>
 #include <set>
 #include <string>
+#include <string_view>
 #include <sys/uio.h>
 #include <unistd.h>
 
 namespace opal {
+namespace {
+bool unsuitable_lan_interface(const char*name,unsigned flags){
+    if(!name||!*name||(flags&IFF_LOOPBACK)||(flags&IFF_POINTOPOINT))return true;
+    const std::string_view n{name};
+    constexpr std::string_view virtual_prefixes[]={"docker","veth","virbr","br-","podman","cni","flannel","tailscale","wg","tun","tap","zt"};
+    for(const auto prefix:virtual_prefixes)if(n.starts_with(prefix))return true;
+    return false;
+}
+}
 
 UdpSocket open_udp_socket(){
     const int fd=socket(AF_INET6,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,0);
@@ -49,7 +59,7 @@ std::vector<UdpCandidate> local_udp_candidates(const UdpSocket &socket){
     ifaddrs *addresses=nullptr;if(getifaddrs(&addresses)!=0)return candidates;
     std::set<std::string> seen;
     for(auto *it=addresses;it;it=it->ifa_next){
-        if(!it->ifa_addr||!(it->ifa_flags&IFF_UP)||(it->ifa_flags&IFF_LOOPBACK))continue;
+        if(!it->ifa_addr||!(it->ifa_flags&IFF_UP)||unsuitable_lan_interface(it->ifa_name,it->ifa_flags))continue;
         const int family=it->ifa_addr->sa_family;char text[INET6_ADDRSTRLEN]{};
         if(family==AF_INET){
             const auto *address=reinterpret_cast<const sockaddr_in*>(it->ifa_addr);
