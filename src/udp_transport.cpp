@@ -34,9 +34,10 @@ UdpSocket open_udp_socket(){
     if(fd<0)return {};
     int off=0;
     if(setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&off,sizeof(off))!=0){close(fd);return {};}
-    int queue_bytes=kUdpQueueBufferBytes;
-    if(setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&queue_bytes,sizeof(queue_bytes))!=0||
-       setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&queue_bytes,sizeof(queue_bytes))!=0){close(fd);return {};}
+    int send_queue_bytes=kUdpQueueBufferBytes;
+    int receive_queue_bytes=kUdpReceiveQueueBufferBytes;
+    if(setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&send_queue_bytes,sizeof(send_queue_bytes))!=0||
+       setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&receive_queue_bytes,sizeof(receive_queue_bytes))!=0){close(fd);return {};}
 #ifdef SO_RXQ_OVFL
     int overflow_reporting=1;
     (void)setsockopt(fd,SOL_SOCKET,SO_RXQ_OVFL,&overflow_reporting,sizeof(overflow_reporting));
