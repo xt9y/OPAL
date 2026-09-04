@@ -134,6 +134,7 @@ bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
         const AVCodecHWConfig *config=avcodec_get_hw_config(codec,i);
         if(!config)break;
         if(!(config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))continue;
+        if(requested=="auto"&&config->device_type==AV_HWDEVICE_TYPE_VULKAN)continue;
         const char *name=av_hwdevice_get_type_name(config->device_type);
         if(!name)continue;
         if(requested!=std::string("auto")&&requested!=name)continue;

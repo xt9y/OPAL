@@ -26,6 +26,7 @@ int main(){
     assert(source.find("active_auto_hardware")!=std::string::npos);
     assert(source.find("auto_hardware_disabled")!=std::string::npos);
     assert(source.find("fallback_to_software")!=std::string::npos);
+    assert(source.find("requested==\"auto\"&&config->device_type==AV_HWDEVICE_TYPE_VULKAN")!=std::string::npos);
 
     setenv("OPAL_DECODER","software",1);
     setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 1 -keyint_min 1 -sc_threshold 0 -an -f flv pipe:1",1);
