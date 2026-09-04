@@ -16,8 +16,8 @@ printf '%s\n' "$*" >>"${OPAL_TEST_FIREWALL_LOG:?}"
 EOF
 chmod +x "$base/bin/firewall-cmd"
 
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/firewalld.log" "$script" install
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/firewalld.log" "$script" remove
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/firewalld.log" sh "$script" install
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/firewalld.log" sh "$script" remove
 
 grep -qx -- '--quiet --permanent --add-port=47993/udp' "$base/firewalld.log"
 grep -qx -- '--quiet --add-port=47993/udp' "$base/firewalld.log"
@@ -35,8 +35,8 @@ printf '%s\n' "$*" >>"${OPAL_TEST_FIREWALL_LOG:?}"
 EOF
 chmod +x "$base/bin/ufw"
 
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" "$script" install
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" "$script" remove
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$script" install
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$script" remove
 
 grep -qx -- "allow 47993/udp comment OPAL LAN discovery" "$base/ufw.log"
 grep -qx -- '--force delete allow 47993/udp' "$base/ufw.log"
