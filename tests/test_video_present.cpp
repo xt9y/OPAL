@@ -27,6 +27,7 @@ int main(){
     assert(source.find("_NET_WM_BYPASS_COMPOSITOR")!=std::string::npos);
     assert(source.find("glTexSubImage2D")!=std::string::npos);
     assert(source.find("GL_UNPACK_ROW_LENGTH")!=std::string::npos);
+    assert(source.find("uniform sampler2D tex_uv")!=std::string::npos);
     assert(source.find("presented_frames")!=std::string::npos);
     assert(source.find("std::vector<std::uint8_t> scratch_y,scratch_u,scratch_v,scratch_uv") == std::string::npos);
 
