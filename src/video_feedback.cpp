@@ -6,6 +6,13 @@
 #include <sstream>
 
 namespace opal {
+namespace {
+bool valid_restart_reason(const std::string &reason){
+    return reason=="none"||reason=="unknown"||reason=="reassembly-loss"||reason=="decode-failure"||
+           reason=="decode-backlog"||reason=="bitrate-down"||reason=="bitrate-up"||
+           reason=="capture-ended"||reason=="capture-stale"||reason=="send-failure";
+}
+}
 
 BitrateController::BitrateController(int ceiling_kbps){
     ceiling_=std::max(1000,ceiling_kbps);floor_=std::max(4000,ceiling_*35/100);floor_=std::min(floor_,ceiling_);target_=ceiling_;
@@ -79,20 +86,22 @@ bool parse_debug_media_request_line(const std::string &line,std::uint32_t genera
 }
 
 std::string host_media_debug_line(std::uint32_t generation,const HostMediaDebugSample &s){
+    const std::string reason=valid_restart_reason(s.restart_reason)?s.restart_reason:"unknown";
     return "HOST_MEDIA "+std::to_string(generation)+" "+std::to_string(s.frame_id)+" "+std::to_string(s.frame_bytes)+" "+
         std::to_string(s.data_fragments)+" "+std::to_string(s.fec_fragments)+" "+std::to_string(s.send_span_us)+" "+
         std::to_string(s.capture_to_packet_us)+" "+std::to_string(s.target_kbps)+" "+std::to_string(s.active_kbps)+" "+
-        std::to_string(s.stale_frames)+" "+std::to_string(s.idr_requests)+" "+std::to_string(s.restarts)+" "+(s.chain_valid?"1":"0");
+        std::to_string(s.stale_frames)+" "+std::to_string(s.idr_requests)+" "+std::to_string(s.restarts)+" "+(s.chain_valid?"1":"0")+" "+reason;
 }
 
 bool parse_host_media_debug_line(const std::string &line,std::uint32_t generation,HostMediaDebugSample &s){
-    std::istringstream in(line);std::string word,extra;unsigned long long gen=0,frame=0,bytes=0,data=0,fec=0,send=0,capture=0,target=0,active=0,stale=0,idr=0,restarts=0,chain=0;
-    if(!(in>>word>>gen>>frame>>bytes>>data>>fec>>send>>capture>>target>>active>>stale>>idr>>restarts>>chain)||in>>extra||
+    std::istringstream in(line);std::string word,reason,extra;unsigned long long gen=0,frame=0,bytes=0,data=0,fec=0,send=0,capture=0,target=0,active=0,stale=0,idr=0,restarts=0,chain=0;
+    if(!(in>>word>>gen>>frame>>bytes>>data>>fec>>send>>capture>>target>>active>>stale>>idr>>restarts>>chain)||
        word!="HOST_MEDIA"||gen!=generation||data>65535ULL||fec>65535ULL||send>60000000ULL||capture>60000000ULL||
        target>1000000ULL||active>1000000ULL||chain>1ULL)return false;
+    if(in>>reason){if(!valid_restart_reason(reason)||in>>extra)return false;}else{in.clear();reason="unknown";}
     s.frame_id=frame;s.frame_bytes=bytes;s.data_fragments=static_cast<std::uint32_t>(data);s.fec_fragments=static_cast<std::uint32_t>(fec);
     s.send_span_us=static_cast<std::uint32_t>(send);s.capture_to_packet_us=static_cast<std::uint32_t>(capture);
-    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=idr;s.restarts=restarts;s.chain_valid=chain==1;return true;
+    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=idr;s.restarts=restarts;s.chain_valid=chain==1;s.restart_reason=reason;return true;
 }
 
 std::string format_host_media_debug(const HostMediaDebugSample &s){
@@ -103,7 +112,7 @@ std::string format_host_media_debug(const HostMediaDebugSample &s){
         <<" capture->packet="<<(static_cast<double>(s.capture_to_packet_us)/1000.0)<<"ms"
         <<" bitrate="<<s.active_kbps<<"kbps target="<<s.target_kbps<<"kbps"
         <<" stale="<<s.stale_frames<<" idr="<<s.idr_requests<<" restarts="<<s.restarts
-        <<" chain="<<(s.chain_valid?"ok":"waiting-idr");return out.str();
+        <<" chain="<<(s.chain_valid?"ok":"waiting-idr")<<" restart_reason="<<s.restart_reason;return out.str();
 }
 
 std::string format_latency_telemetry(const LatencyTelemetry &t){
@@ -112,7 +121,8 @@ std::string format_latency_telemetry(const LatencyTelemetry &t){
         <<"ms reassembly="<<t.reassembly_ms<<"ms decode="<<t.decode_ms<<"ms present="<<t.present_ms
         <<"ms total="<<t.total_ms<<"ms loss="<<t.loss_percent<<"% stale="<<t.stale_frames
         <<" bitrate="<<t.bitrate_kbps<<"kbps decoder="<<t.decoder_backend
-        <<" decode_fps="<<t.decoded_fps<<" present_fps="<<t.presented_fps;return out.str();
+        <<" decode_fps="<<t.decoded_fps<<" present_fps="<<t.presented_fps
+        <<" queue="<<t.video_queue_depth<<" skip_present="<<t.skipped_present_frames;return out.str();
 }
 
 }
