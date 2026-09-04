@@ -27,5 +27,14 @@ int main() {
     assert(host.find("47991")==std::string::npos);
     assert(host.find("zrok")==std::string::npos);
     assert(host.find("server_tls_context")==std::string::npos);
+
+    const auto media_ready=host.find("if(parse_media_ready(line,media_generation,stream,debug))");
+    const auto media_feedback=host.find("if(sender_started.load()&&sender_ptr->handle_control_line(line))",media_ready);
+    assert(media_ready!=std::string::npos&&media_feedback!=std::string::npos&&media_feedback>media_ready);
+    const auto media_start=host.substr(media_ready,media_feedback-media_ready);
+    assert(media_start.find("sender_starting.exchange(true)")!=std::string::npos);
+    assert(media_start.find("sender_start_thread=std::thread")!=std::string::npos);
+    assert(media_start.find("start_native")!=std::string::npos);
+    assert(host.find("if(sender_start_thread.joinable())sender_start_thread.join();sender.stop()")!=std::string::npos);
     return 0;
 }

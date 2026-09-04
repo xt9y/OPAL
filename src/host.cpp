@@ -74,7 +74,7 @@ private:
 };
 
 bool run_peer_session(UdpSocket socket,const RendezvousIntroduction&intro,const std::string&client_public_key,const std::string&host_public_key,bool local_path,std::optional<PeerRelayFallback> relay,HostClipboardBridge*clipboard){
-    const bool was_authorized=authorized(client_public_key);HeldInputState held;VideoSender sender;std::atomic<bool>sender_started{false};PeerSession peer;PeerSession*peer_ptr=&peer;VideoSender*sender_ptr=&sender;
+    const bool was_authorized=authorized(client_public_key);HeldInputState held;VideoSender sender;std::atomic<bool>sender_started{false},sender_starting{false};std::thread sender_start_thread;PeerSession peer;PeerSession*peer_ptr=&peer;VideoSender*sender_ptr=&sender;
     PeerSessionOptions options;options.client_side=false;options.socket=socket;options.peer=intro.peer_observed;if(local_path)options.lan_peer=intro.peer_observed;else if(!intro.peer_local.host.empty()&&intro.peer_local.port)options.lan_peer=intro.peer_local;if(relay)options.relay=*relay;options.handshake.rendezvous_id=intro.rendezvous_id;options.handshake.session_id=intro.session_id;options.handshake.generation=1;options.handshake.client_identity=client_public_key;options.handshake.host_identity=host_public_key;options.handshake.client_nonce=intro.peer_nonce;options.handshake.host_nonce=intro.local_nonce;options.handshake.auth_binding=was_authorized?"paired":"pairing";options.identity_private_key=G.identity_key;options.pairing_password=was_authorized?"":pairing_password();
     options.pointer_input=[](const std::string&line){if(line.rfind("POINTER ",0)==0)input_send(line);};
     options.reliable_input=[&](const std::string&line){
@@ -82,11 +82,16 @@ bool run_peer_session(UdpSocket socket,const RendezvousIntroduction&intro,const 
         if(line.rfind("WHEEL ",0)==0||line.rfind("MOUSE ",0)==0){input_send(line);return;}
         if(line.rfind("CLIP ",0)==0){if(clipboard)clipboard->receive_control(line);return;}
         StreamOptions stream;bool debug=false;std::uint32_t media_generation=0;if(parse_media_ready(line,media_generation,stream,debug)){
-            if(sender_started.exchange(true))return;const bool audio=host_cfg.get_bool("audio","enabled",true);
-            if(!sender_ptr->start_native(peer_ptr->media_keys(),peer_ptr->session_id(),media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){
-                sender_started.store(false);peer_ptr->send_input("MEDIA_ERROR capture-startup");return;
-            }
-            if(debug)sender_ptr->handle_control_line(debug_media_request_line(media_generation,true));return;
+            if(sender_started.load()||sender_starting.exchange(true))return;
+            if(sender_start_thread.joinable())sender_start_thread.join();
+            const bool audio=host_cfg.get_bool("audio","enabled",true);const auto media_keys=peer_ptr->media_keys();const auto media_session_id=peer_ptr->session_id();
+            sender_start_thread=std::thread([&,media_keys,media_session_id,media_generation,stream,audio,debug]{
+                if(!sender_ptr->start_native(media_keys,media_session_id,media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){
+                    sender_starting.store(false);if(peer_ptr->running())peer_ptr->send_input("MEDIA_ERROR capture-startup");return;
+                }
+                sender_started.store(true);sender_starting.store(false);if(debug)sender_ptr->handle_control_line(debug_media_request_line(media_generation,true));
+            });
+            return;
         }
         if(sender_started.load()&&sender_ptr->handle_control_line(line))return;
     };
@@ -95,7 +100,7 @@ bool run_peer_session(UdpSocket socket,const RendezvousIntroduction&intro,const 
     if(!was_authorized){authorize(client_public_key,"client");rotate_pairing_password();append_test_log("OPAL_TEST_AUTH_LOG","PAIR");}else append_test_log("OPAL_TEST_AUTH_LOG","AUTH");
     peer.send_input(host_meta());if(debug_enabled())std::cerr<<"OPAL host peer path="<<peer.path_name()<<" session="<<intro.session_id.substr(0,8)<<"...\n";
     int test_close_ms=0;if(const char*v=std::getenv("OPAL_TEST_CLOSE_FIRST_PEER_MS");v&&*v)try{test_close_ms=std::clamp(std::stoi(v),100,10000);}catch(...){test_close_ms=0;}const bool test_close_this_session=test_close_ms>0&&!test_close_used.exchange(true);const auto test_close_at=Clock::now()+std::chrono::milliseconds(test_close_ms);
-    while(peer.running()){if(test_close_this_session&&Clock::now()>=test_close_at){peer.stop();break;}if(clipboard&&!local_path)clipboard->pump();std::this_thread::sleep_for(std::chrono::milliseconds(local_path?100:20));}if(clipboard)clipboard->detach(&peer);sender.stop();for(const auto&r:held.release_commands())input_send(r);peer.stop();return true;
+    while(peer.running()){if(test_close_this_session&&Clock::now()>=test_close_at){peer.stop();break;}if(clipboard&&!local_path)clipboard->pump();std::this_thread::sleep_for(std::chrono::milliseconds(local_path?100:20));}if(clipboard)clipboard->detach(&peer);if(sender_start_thread.joinable())sender_start_thread.join();sender.stop();for(const auto&r:held.release_commands())input_send(r);peer.stop();return true;
 }
 
 bool run_native_session(RendezvousClient&rendezvous,const RendezvousMessage&offer,const std::string&host_public_key,HostClipboardBridge*clipboard){RendezvousIntroduction intro;std::string error;if(!rendezvous.accept_offer(offer,host_public_key,G.identity_key,intro,error)){std::cerr<<"OPAL rendezvous accept failed: "<<error<<"\n";return false;}RelayAllocation allocation;std::string relay_error;std::optional<PeerRelayFallback> relay;if(rendezvous.request_relay(intro.session_id,host_public_key,G.identity_key,allocation,relay_error))relay=PeerRelayFallback{allocation.endpoint,allocation.allocation_id,RelayRole::Host};auto socket=rendezvous.take_socket();if(socket.fd<0){std::cerr<<"OPAL rendezvous socket unavailable after introduction\n";return false;}return run_peer_session(socket,intro,offer.public_key,host_public_key,false,relay,clipboard);}
