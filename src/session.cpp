@@ -19,7 +19,7 @@
 
 namespace opal { namespace {
 using namespace std::chrono_literals;
-enum class BootstrapPath { None, Lan, Tailnet, Rendezvous };
+enum class BootstrapPath { Unset, Lan, Tailnet, Rendezvous };
 bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 bool pointer_command(const std::string&s){return s.rfind("POINTER ",0)==0;}
 bool local_discovery_enabled(){const char*v=std::getenv("OPAL_LOCAL_DISCOVERY");return !(v&&*v&&std::string(v)=="0");}
@@ -37,7 +37,7 @@ struct SessionSupervisor::Impl {
     void teardown_current(){std::unique_ptr<VideoReceiver>old_receiver;std::unique_ptr<PeerSession>old_peer;{std::lock_guard<std::mutex>lock(session_mu);old_receiver=std::move(receiver);old_peer=std::move(peer);}if(old_receiver)old_receiver->stop();if(old_peer)old_peer->stop();}
 
     bool connect_generation(std::uint32_t gen,bool allow_pair){
-        RendezvousIntroduction intro;UdpSocket socket;std::optional<PeerRelayFallback> relay_fallback;BootstrapPath bootstrap=BootstrapPath::None;std::string local_error;
+        RendezvousIntroduction intro;UdpSocket socket;std::optional<PeerRelayFallback> relay_fallback;BootstrapPath bootstrap=BootstrapPath::Unset;std::string local_error;
         auto adopt_direct=[&](LocalDiscoveryClientResult&found,BootstrapPath path){bootstrap=path;socket=found.socket;found.socket={};intro.rendezvous_id=found.rendezvous_id;intro.session_id=found.session_id;intro.peer_public_key=found.host_public_key;intro.local_nonce=found.client_nonce;intro.peer_nonce=found.host_nonce;intro.peer_observed=found.host;};
         if(local_discovery_enabled()){
             LocalDiscoveryClientResult local;
@@ -46,7 +46,7 @@ struct SessionSupervisor::Impl {
                 if(debug_enabled())std::cerr<<"OPAL discovery=lan host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<"\n";
             }else if(debug_enabled())std::cerr<<"OPAL discovery=lan miss reason="<<(local_error.empty()?"not-found":local_error)<<"\n";
         }
-        if(bootstrap==BootstrapPath::None&&is_tailnet_ipv4(options.tailnet_address)){
+        if(bootstrap==BootstrapPath::Unset&&is_tailnet_ipv4(options.tailnet_address)){
             const auto local_tailnet=local_tailnet_ipv4();
             if(!local_tailnet.empty()){
                 LocalDiscoveryClientResult tailnet;std::string tailnet_error;
@@ -56,7 +56,7 @@ struct SessionSupervisor::Impl {
                 }else if(debug_enabled())std::cerr<<"OPAL discovery=tailnet miss host="<<options.tailnet_address<<" reason="<<(tailnet_error.empty()?"not-found":tailnet_error)<<"\n";
             }else if(debug_enabled())std::cerr<<"OPAL discovery=tailnet skip reason=tailscale0-unavailable\n";
         }
-        if(bootstrap==BootstrapPath::None){
+        if(bootstrap==BootstrapPath::Unset){
             bootstrap=BootstrapPath::Rendezvous;const auto config=default_rendezvous_config();if(debug_enabled())std::cerr<<"OPAL discovery=rendezvous endpoint="<<config.host<<":"<<config.port<<"\n";RendezvousClient rendezvous;
             if(!rendezvous.open(config)){set_error("host not found on LAN/Tailscale; OPAL rendezvous service unreachable at "+config.host+":"+std::to_string(config.port));return false;}
             std::string connect_error;if(!rendezvous.introduce(options.rendezvous_id,options.client_public_key,intro,connect_error)){if(rendezvous_timeout(connect_error))set_error("host not found on LAN/Tailscale; OPAL rendezvous service did not respond at "+config.host+":"+std::to_string(config.port));else set_error("host not found on LAN/Tailscale; "+(connect_error.empty()?std::string("OPAL host is offline"):connect_error));return false;}
