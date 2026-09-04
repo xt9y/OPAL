@@ -19,7 +19,8 @@ bool hmac(std::span<const std::uint8_t> key,std::span<const std::uint8_t> data,s
 bool hmac(std::span<const std::uint8_t> key,std::string_view data,std::array<std::uint8_t,32>&out){return hmac(key,std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(data.data()),data.size()),out);}
 
 bool hkdf_expand(std::span<const std::uint8_t> prk,std::string_view info,std::span<std::uint8_t> output){
-    if(output.empty()||output.size()>255u*32u)return false;std::array<std::uint8_t,32> previous{};std::size_t previous_size=0,offset=0;std::uint8_t counter=1;
+    if(output.empty()||output.size()>255u*32u)return false;
+    std::array<std::uint8_t,32> previous{};std::size_t previous_size=0,offset=0;std::uint8_t counter=1;
     while(offset<output.size()){
         std::vector<std::uint8_t> input;input.reserve(previous_size+info.size()+1);input.insert(input.end(),previous.begin(),previous.begin()+static_cast<std::ptrdiff_t>(previous_size));input.insert(input.end(),reinterpret_cast<const std::uint8_t*>(info.data()),reinterpret_cast<const std::uint8_t*>(info.data()+info.size()));input.push_back(counter++);
         if(!hmac(prk,input,previous)){OPENSSL_cleanse(previous.data(),previous.size());return false;}previous_size=previous.size();const auto count=std::min(previous.size(),output.size()-offset);std::memcpy(output.data()+offset,previous.data(),count);offset+=count;
@@ -28,7 +29,8 @@ bool hkdf_expand(std::span<const std::uint8_t> prk,std::string_view info,std::sp
 }
 
 bool derive_shared(const PeerEphemeralKey&local,std::string_view peer_public_hex,std::array<std::uint8_t,32>&shared){
-    if(!local.valid)return false;const auto peer=unhex(std::string(peer_public_hex));if(peer.size()!=32)return false;
+    if(!local.valid)return false;
+    const auto peer=unhex(std::string(peer_public_hex));if(peer.size()!=32)return false;
     EVP_PKEY *local_key=EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519,nullptr,local.private_key.data(),local.private_key.size());EVP_PKEY *peer_key=EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519,nullptr,peer.data(),peer.size());EVP_PKEY_CTX *ctx=local_key?EVP_PKEY_CTX_new(local_key,nullptr):nullptr;size_t n=shared.size();const bool ok=ctx&&peer_key&&EVP_PKEY_derive_init(ctx)==1&&EVP_PKEY_derive_set_peer(ctx,peer_key)==1&&EVP_PKEY_derive(ctx,shared.data(),&n)==1&&n==shared.size();EVP_PKEY_CTX_free(ctx);EVP_PKEY_free(local_key);EVP_PKEY_free(peer_key);return ok;
 }
 
