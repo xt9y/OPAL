@@ -28,7 +28,6 @@ grep -qx -- '--quiet --remove-port=47994/udp' "$base/firewalld.log"
 grep -qx -- '--quiet --permanent --remove-port=47993/udp' "$base/firewalld.log"
 grep -qx -- '--quiet --remove-port=47993/udp' "$base/firewalld.log"
 
-rm -f "$base/bin/firewall-cmd"
 cat >"$base/bin/ufw" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = "status" ]; then
@@ -39,20 +38,25 @@ printf '%s\n' "$*" >>"${OPAL_TEST_FIREWALL_LOG:?}"
 EOF
 chmod +x "$base/bin/ufw"
 
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$script" install
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$script" remove
+: >"$base/both.log"
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/both.log" sh "$script" install
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/both.log" sh "$script" remove
 
-grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$base/ufw.log"
-grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/ufw.log"
-grep -qx -- '--force delete allow 47994/udp' "$base/ufw.log"
-grep -qx -- '--force delete allow 47993/udp' "$base/ufw.log"
-test "$(grep -c '^reload$' "$base/ufw.log")" -eq 2
+grep -qx -- '--quiet --permanent --add-port=47993/udp' "$base/both.log"
+grep -qx -- '--quiet --permanent --add-port=47994/udp' "$base/both.log"
+grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$base/both.log"
+grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/both.log"
+grep -qx -- '--force delete allow 47994/udp' "$base/both.log"
+grep -qx -- '--force delete allow 47993/udp' "$base/both.log"
+test "$(grep -c '^reload$' "$base/both.log")" -eq 2
 
-: >"$base/ufw-inactive.log"
-PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_UFW_STATUS=inactive OPAL_TEST_FIREWALL_LOG="$base/ufw-inactive.log" sh "$script" install
+: >"$base/both-inactive.log"
+PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_UFW_STATUS=inactive OPAL_TEST_FIREWALL_LOG="$base/both-inactive.log" sh "$script" install
 
-grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$base/ufw-inactive.log"
-grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/ufw-inactive.log"
-! grep -q '^reload$' "$base/ufw-inactive.log"
+grep -qx -- '--quiet --permanent --add-port=47993/udp' "$base/both-inactive.log"
+grep -qx -- '--quiet --permanent --add-port=47994/udp' "$base/both-inactive.log"
+grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$base/both-inactive.log"
+grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/both-inactive.log"
+! grep -q '^reload$' "$base/both-inactive.log"
 
 echo 'firewall lifecycle tests passed'
