@@ -7,6 +7,9 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace {
 struct Identity{std::filesystem::path root,priv,pub;std::string public_hex;};
@@ -17,6 +20,18 @@ int main(){
     static_assert(opal::kLocalDiscoveryReplyPort==47994);
     auto client_id=identity("opal-local-discovery-client"),host_id=identity("opal-local-discovery-host"),wrong_signer=identity("opal-local-discovery-wrong-signer");
     const auto rendezvous_id=opal::rendezvous_id_from_public_key(host_id.public_hex);assert(!rendezvous_id.empty());
+
+    // A discovery request may not advertise a different peer port from the
+    // UDP source port. Accepting that split recreates the fixed-reply-port ->
+    // ephemeral-port race that fails on real LAN/Tailscale paths.
+    {
+        std::string mismatch_listener_error;auto mismatch_listener=opal::open_local_discovery_listener(0,"0.0.0.0",mismatch_listener_error);assert(mismatch_listener.fd>=0&&mismatch_listener.local_port>0);
+        int fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);assert(fd>=0);sockaddr_in local{};local.sin_family=AF_INET;local.sin_addr.s_addr=htonl(INADDR_LOOPBACK);assert(bind(fd,reinterpret_cast<sockaddr*>(&local),sizeof(local))==0);socklen_t local_len=sizeof(local);assert(getsockname(fd,reinterpret_cast<sockaddr*>(&local),&local_len)==0);const auto source_port=ntohs(local.sin_port);assert(source_port>0);
+        sockaddr_in target{};target.sin_family=AF_INET;target.sin_port=htons(mismatch_listener.local_port);assert(inet_pton(AF_INET,"127.0.0.1",&target.sin_addr)==1);
+        const auto advertised=static_cast<unsigned int>(source_port==65535?65534:source_port+1);const std::string request="OPAL_LOCAL_DISCOVER_V1 "+rendezvous_id+" "+client_id.public_hex+" "+std::string(32,'0')+" "+std::to_string(advertised);assert(sendto(fd,request.data(),request.size(),0,reinterpret_cast<sockaddr*>(&target),sizeof(target))==static_cast<ssize_t>(request.size()));
+        opal::LocalDiscoveryHostResult mismatch_result;std::string mismatch_error;assert(!opal::wait_local_client(mismatch_listener,host_id.public_hex,host_id.priv,mismatch_result,120,mismatch_error));assert(mismatch_error=="local discovery timeout");close(fd);opal::close_udp_socket(mismatch_listener);
+    }
+
     std::string error;auto listener=opal::open_local_discovery_listener(0,"0.0.0.0",error);assert(listener.fd>=0&&listener.local_port>0);const auto listener_port=listener.local_port;
 
     opal::LocalDiscoveryHostResult host_result;std::string host_error;std::atomic<bool>host_found{false};
@@ -30,7 +45,7 @@ int main(){
     assert(client_result.session_id==host_result.session_id);
     assert(client_result.client_nonce==host_result.client_nonce);
     assert(client_result.host_nonce==host_result.host_nonce);
-    assert(client_result.socket.fd>=0&&host_result.socket.fd>=0);
+    assert(client_result.socket.fd>=0&&client_result.socket.local_port>0&&host_result.socket.fd>=0);
     assert(listener.fd>=0&&listener.local_port==listener_port);
     assert(host_result.socket.fd!=listener.fd&&host_result.socket.local_port==listener_port);
     assert(client_result.host.port==listener_port);
