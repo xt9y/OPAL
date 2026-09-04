@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <iterator>
 
 namespace opal { namespace {
 using Clock=std::chrono::steady_clock;
