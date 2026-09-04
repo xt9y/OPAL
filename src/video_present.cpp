@@ -35,11 +35,11 @@ bool VideoPresenter::present_borrowed(DecodedVideoView decoded){const AVFrame*f=
 bool VideoPresenter::present(DecodedVideoFrame decoded){AVFrame*f=decoded.frame;if(!f)return false;const bool ok=present_borrowed({f,decoded.pts_us});av_frame_free(&f);return ok;}
 std::pair<int,int> VideoPresenter::drawable_size()const{if(!impl_||!impl_->window)return{0,0};int w=0,h=0;if(!SDL_GetWindowSizeInPixels(impl_->window,&w,&h))return{0,0};return{w,h};}
 std::pair<int,int> VideoPresenter::window_size()const{if(!impl_||!impl_->window)return{0,0};int w=0,h=0;if(!SDL_GetWindowSize(impl_->window,&w,&h))return{0,0};return{w,h};}
-bool VideoPresenter::set_relative_mouse_mode(bool enabled){return impl_&&impl_->window&&SDL_SetWindowRelativeMouseMode(impl_->window,enabled);}
+bool VideoPresenter::set_relative_mouse_mode(bool enabled){if(!impl_||!impl_->window)return false;if(!SDL_SetWindowRelativeMouseMode(impl_->window,false))return false;if(!SDL_SetWindowMouseGrab(impl_->window,enabled))return false;return enabled?SDL_HideCursor():SDL_ShowCursor();}
 std::size_t VideoPresenter::pending_frame_count()const{return 0;}
 std::uint64_t VideoPresenter::presented_frames()const{return impl_?impl_->presented:0;}
 std::string VideoPresenter::backend_name()const{const char*driver=SDL_GetCurrentVideoDriver();return driver&&*driver?driver:"unconfigured";}
 bool VideoPresenter::is_open()const{return impl_&&impl_->window&&impl_->context;}
-void VideoPresenter::close(){if(!impl_)return;if(impl_->window&&impl_->context)SDL_GL_MakeCurrent(impl_->window,impl_->context);if(impl_->program){glDeleteProgram(impl_->program);impl_->program=0;}if(impl_->textures[0]){glDeleteTextures(static_cast<GLsizei>(impl_->textures.size()),impl_->textures.data());impl_->textures.fill(0);}if(impl_->context){SDL_GL_DestroyContext(impl_->context);impl_->context=nullptr;}if(impl_->window){SDL_DestroyWindow(impl_->window);impl_->window=nullptr;}}
+void VideoPresenter::close(){if(!impl_)return;if(impl_->window){(void)SDL_SetWindowMouseGrab(impl_->window,false);(void)SDL_SetWindowRelativeMouseMode(impl_->window,false);(void)SDL_ShowCursor();}if(impl_->window&&impl_->context)SDL_GL_MakeCurrent(impl_->window,impl_->context);if(impl_->program){glDeleteProgram(impl_->program);impl_->program=0;}if(impl_->textures[0]){glDeleteTextures(static_cast<GLsizei>(impl_->textures.size()),impl_->textures.data());impl_->textures.fill(0);}if(impl_->context){SDL_GL_DestroyContext(impl_->context);impl_->context=nullptr;}if(impl_->window){SDL_DestroyWindow(impl_->window);impl_->window=nullptr;}}
 VideoPresenter::~VideoPresenter(){close();}
 }
