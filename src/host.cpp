@@ -10,6 +10,7 @@
 #include <opal/video_sender.hpp>
 
 #include <X11/Xlib.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
