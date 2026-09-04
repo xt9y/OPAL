@@ -15,7 +15,10 @@ int main() {
     assert(unit.find("Restart=on-failure")==std::string::npos);
 
     const auto host=read_all("src/host.cpp");
-    assert(host.find("encrypted direct UDP (relay fallback)")!=std::string::npos);
+    assert(host.find("LAN / direct UDP / encrypted relay")!=std::string::npos);
+    assert(host.find("local_discovery_loop")!=std::string::npos);
+    assert(host.find("open_local_discovery_listener")!=std::string::npos);
+    assert(host.find("LAN discovery remains active")!=std::string::npos);
     assert(host.find("register_host")!=std::string::npos);
     assert(host.find("wait_offer")!=std::string::npos);
     assert(host.find("PeerSession")!=std::string::npos);
