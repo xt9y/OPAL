@@ -17,7 +17,8 @@ int main(){
     assert(source.find("av_new_packet") == std::string::npos);
     assert(source.find("decode_error_flags")!=std::string::npos);
     assert(source.find("AV_FRAME_FLAG_CORRUPT")!=std::string::npos);
-    assert(source.find("thread_count=1") == std::string::npos);
+    assert(source.find("ctx->thread_count=0")!=std::string::npos);
+    assert(source.find("ctx->thread_type=FF_THREAD_SLICE")!=std::string::npos);
     assert(source.find("OPAL_DECODER")!=std::string::npos);
     assert(source.find("avcodec_get_hw_config")!=std::string::npos);
     assert(source.find("av_hwdevice_ctx_create")!=std::string::npos);
