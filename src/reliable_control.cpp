@@ -24,7 +24,13 @@ void ReliableControlReceiver::note_seen(std::uint64_t sequence){
 }
 
 bool ReliableControlReceiver::receive(std::uint64_t sequence,std::string payload,std::vector<std::string>&delivered){
-    if(sequence==0||payload.empty()||payload.size()>kReliableControlMaxPayload)return false;if(sequence<next_expected_){note_seen(sequence);return false;}if(buffered_.count(sequence)){note_seen(sequence);return false;}if(buffered_.size()>=kReliableControlMaxPending)return false;note_seen(sequence);buffered_.emplace(sequence,std::move(payload));for(;;){auto it=buffered_.find(next_expected_);if(it==buffered_.end())break;delivered.push_back(std::move(it->second));buffered_.erase(it);if(++next_expected_==0){reset();break;}}return true;
+    if(sequence==0||payload.empty()||payload.size()>kReliableControlMaxPayload)return false;
+    if(sequence<next_expected_){note_seen(sequence);return false;}
+    if(buffered_.count(sequence)){note_seen(sequence);return false;}
+    if(buffered_.size()>=kReliableControlMaxPending)return false;
+    note_seen(sequence);buffered_.emplace(sequence,std::move(payload));
+    for(;;){auto it=buffered_.find(next_expected_);if(it==buffered_.end())break;delivered.push_back(std::move(it->second));buffered_.erase(it);if(++next_expected_==0){reset();break;}}
+    return true;
 }
 ReliableAckState ReliableControlReceiver::ack_state()const{return{highest_seen_,seen_bits_};}
 std::size_t ReliableControlReceiver::buffered()const{return buffered_.size();}
