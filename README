@@ -11,10 +11,10 @@ server  --> make deploy-rendezvous
 dependencies
 
 automatic / OPAL setup
-  tailscale        --> installed/configured when WAN tailnet setup is needed (curl required)
+  tailscale        --> installed/configured when the direct tailnet path is needed (curl required)
   uinput           --> module/rule configured by sudo make install
   systemd user     --> OPAL host/bridge units installed by sudo make install
-  firewall rules   --> firewalld/UFW LAN rules added by sudo make install when either tool exists
+  firewall rules   --> firewalld/UFW OPAL UDP rules added by sudo make install when either tool exists
 
 manual required
   c++20 compiler
@@ -36,8 +36,9 @@ manual required
   systemd + udev      --> required by the standard Linux install/service path
   curl                --> required only if OPAL needs to install Tailscale
 
-optional / integration
-  tailscale        --> WAN direct path; OPAL can still use LAN/rendezvous without it
+network
+  tailscale        --> primary direct discovery + session path; LAN broadcast discovery is disabled
+  rendezvous       --> fallback when the host cannot be reached through Tailscale
   firewalld or UFW --> only needed for automatic firewall rule management
   pactl or wpctl   --> used by opal doctor to report the active audio service
 
