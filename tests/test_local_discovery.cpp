@@ -17,7 +17,7 @@ int main(){
     static_assert(opal::kLocalDiscoveryReplyPort==47994);
     auto client_id=identity("opal-local-discovery-client"),host_id=identity("opal-local-discovery-host"),wrong_signer=identity("opal-local-discovery-wrong-signer");
     const auto rendezvous_id=opal::rendezvous_id_from_public_key(host_id.public_hex);assert(!rendezvous_id.empty());
-    std::string error;auto listener=opal::open_local_discovery_listener(0,"127.0.0.1",error);assert(listener.fd>=0&&listener.local_port>0);
+    std::string error;auto listener=opal::open_local_discovery_listener(0,"0.0.0.0",error);assert(listener.fd>=0&&listener.local_port>0);const auto listener_port=listener.local_port;
 
     opal::LocalDiscoveryHostResult host_result;std::string host_error;std::atomic<bool>host_found{false};
     std::thread discovery_host([&]{host_found.store(opal::wait_local_client(listener,host_id.public_hex,host_id.priv,host_result,2000,host_error));});
@@ -31,10 +31,12 @@ int main(){
     assert(client_result.client_nonce==host_result.client_nonce);
     assert(client_result.host_nonce==host_result.host_nonce);
     assert(client_result.socket.fd>=0&&host_result.socket.fd>=0);
-    assert(client_result.host.port==host_result.socket.local_port);
+    assert(listener.fd>=0&&listener.local_port==listener_port);
+    assert(host_result.socket.fd!=listener.fd&&host_result.socket.local_port==listener_port);
+    assert(client_result.host.port==listener_port);
     assert(host_result.client.port==client_result.socket.local_port);
 
-    opal::PeerHandshakeContext context;context.rendezvous_id=rendezvous_id;context.session_id=client_result.session_id;context.generation=1;context.client_identity=client_id.public_hex;context.host_identity=host_id.public_hex;context.client_nonce=client_result.client_nonce;context.host_nonce=client_result.host_nonce;context.auth_binding="pairing";
+    opal::PeerHandshakeContext context;context.rendezvous_id=rendezvous_id;context.session_id=client_result.session_id;context.generation=1;context.client_identity=client_id.public_hex;context.host_identity=host_id.public_hex;context.client_nonce=client_result.client_nonce;context.host_nonce=host_result.host_nonce;context.auth_binding="pairing";
     opal::PeerSessionOptions host_options;host_options.client_side=false;host_options.socket=host_result.socket;host_options.peer=host_result.client;host_options.lan_peer=host_result.client;host_options.handshake=context;host_options.identity_private_key=host_id.priv;host_options.pairing_password="ABCD-EFGH-JKLM-NPQR";
     opal::PeerSessionOptions client_options;client_options.client_side=true;client_options.socket=client_result.socket;client_options.peer=client_result.host;client_options.lan_peer=client_result.host;client_options.handshake=context;client_options.identity_private_key=client_id.priv;client_options.pairing_password="ABCD-EFGH-JKLM-NPQR";
 
@@ -45,13 +47,15 @@ int main(){
 
     client.stop();host.stop();opal::close_udp_socket(listener);
 
-    std::string bad_listener_error;auto bad_listener=opal::open_local_discovery_listener(0,"127.0.0.1",bad_listener_error);assert(bad_listener.fd>=0&&bad_listener.local_port>0);
+    std::string bad_listener_error;auto bad_listener=opal::open_local_discovery_listener(0,"0.0.0.0",bad_listener_error);assert(bad_listener.fd>=0&&bad_listener.local_port>0);const auto bad_listener_port=bad_listener.local_port;
     opal::LocalDiscoveryHostResult bad_host_result;std::string bad_host_error;std::atomic<bool>bad_host_found{false};
     std::thread bad_discovery_host([&]{bad_host_found.store(opal::wait_local_client(bad_listener,host_id.public_hex,wrong_signer.priv,bad_host_result,2000,bad_host_error));});
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     opal::LocalDiscoveryClientResult rejected_result;std::string rejected_error;
     assert(!opal::discover_local_host(rendezvous_id,client_id.public_hex,rejected_result,rejected_error,300,"127.0.0.1",bad_listener.local_port));
     bad_discovery_host.join();assert(bad_host_found.load());assert(rejected_error=="local discovery offer signature invalid");
+    assert(bad_listener.fd>=0&&bad_listener.local_port==bad_listener_port);
+    assert(bad_host_result.socket.fd!=bad_listener.fd&&bad_host_result.socket.local_port==bad_listener_port);
     opal::close_udp_socket(bad_host_result.socket);opal::close_udp_socket(bad_listener);
 
     std::filesystem::remove_all(client_id.root);std::filesystem::remove_all(host_id.root);std::filesystem::remove_all(wrong_signer.root);return 0;
