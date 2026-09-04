@@ -16,6 +16,7 @@ struct SessionOptions {
     bool paired=false;
     std::string pairing_password;
     std::function<std::string()> pairing_password_provider;
+    std::function<void(const std::string&)> clipboard_control;
     std::string label;
     StreamOptions stream;
 };
@@ -31,6 +32,7 @@ public:
     void stop();
     bool send_input(const std::string &command);
     unsigned long control_generation() const;
+    std::uint64_t reliable_pending() const;
     bool media_started() const;
     bool take_latest_video(DecodedVideoFrame& out);
     void note_presented_video(std::int64_t pts_us,double present_ms);

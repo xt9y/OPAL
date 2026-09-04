@@ -68,7 +68,7 @@ struct SessionSupervisor::Impl {
         auto next_receiver=std::make_unique<VideoReceiver>();auto next_peer=std::make_unique<PeerSession>();PeerSession*peer_ptr=next_peer.get();VideoReceiver*receiver_ptr=next_receiver.get();
         const bool direct_bootstrap=bootstrap==BootstrapPath::Tailnet;
         PeerSessionOptions peer_options;peer_options.client_side=true;peer_options.socket=socket;peer_options.peer=intro.peer_observed;if(direct_bootstrap)peer_options.lan_peer=intro.peer_observed;else if(!intro.peer_local.host.empty()&&intro.peer_local.port)peer_options.lan_peer=intro.peer_local;if(relay_fallback)peer_options.relay=*relay_fallback;if(bootstrap==BootstrapPath::Tailnet)peer_options.direct_handshake_timeout_ms=kTailnetPeerHandshakeTimeoutMs;peer_options.handshake.rendezvous_id=intro.rendezvous_id;peer_options.handshake.session_id=intro.session_id;peer_options.handshake.generation=1;peer_options.handshake.client_identity=options.client_public_key;peer_options.handshake.host_identity=intro.peer_public_key;peer_options.handshake.client_nonce=intro.local_nonce;peer_options.handshake.host_nonce=intro.peer_nonce;peer_options.handshake.auth_binding=pairing?"pairing":"paired";peer_options.identity_private_key=options.client_private_key_path;peer_options.pairing_password=password;
-        peer_options.reliable_input=[this,receiver_ptr](const std::string&line){if(line.rfind("HOST_META ",0)==0){parse_host_meta(line);return;}if(line.rfind("MEDIA_ERROR ",0)==0){set_error(line.substr(12));return;}receiver_ptr->handle_control_line(line);};
+        peer_options.reliable_input=[this,receiver_ptr](const std::string&line){if(line.rfind("HOST_META ",0)==0){parse_host_meta(line);return;}if(line.rfind("CLIP ",0)==0){if(options.clipboard_control)options.clipboard_control(line);return;}if(line.rfind("MEDIA_ERROR ",0)==0){set_error(line.substr(12));return;}receiver_ptr->handle_control_line(line);};
         peer_options.media_datagram=[receiver_ptr](std::span<const std::uint8_t>wire){receiver_ptr->accept_datagram(wire);};
         std::string peer_error;if(!next_peer->start(std::move(peer_options),peer_error)){set_error(peer_error.empty()?"peer session failed":peer_error);return false;}
         if(!next_receiver->start_native(next_peer->media_keys(),next_peer->session_id(),gen,[peer_ptr](const std::string&line){return peer_ptr->send_input(line);})){
@@ -103,6 +103,7 @@ struct SessionSupervisor::Impl {
     bool start(){if(run.load())return true;if(options.rendezvous_id.empty()||options.client_public_key.empty()||options.client_private_key_path.empty()){set_error("invalid native session configuration");return false;}if(!paired_state.load()){std::string password=options.pairing_password;if(password.empty()&&options.pairing_password_provider)password=options.pairing_password_provider();password=normalize_pairing_code(password);if(password.empty()){set_error("pairing password required");return false;}options.pairing_password=std::move(password);}run.store(true);if(!connect_generation(1,true)){run.store(false);teardown_current();return false;}monitor_thread=std::thread([this]{monitor();});return true;}
     void stop(){const bool was=run.exchange(false);if(monitor_thread.joinable())monitor_thread.join();teardown_current();if(!was)return;}
     bool send_input(const std::string&command){if(command.empty()||!run.load())return false;std::lock_guard<std::mutex>lock(session_mu);if(!peer||!peer->running())return false;return pointer_command(command)?peer->send_pointer(command):peer->send_input(command);}
+    std::uint64_t reliable_pending()const{std::lock_guard<std::mutex>lock(session_mu);return peer?peer->reliable_pending():0;}
     bool media_started()const{std::lock_guard<std::mutex>lock(session_mu);return receiver&&receiver->media_started();}
     bool take_latest_video(DecodedVideoFrame&out){std::lock_guard<std::mutex>lock(session_mu);return receiver&&receiver->take_latest_video(out);}
     void note_presented_video(std::int64_t pts_us,double present_ms){std::lock_guard<std::mutex>lock(session_mu);if(receiver)receiver->note_presented_video(pts_us,present_ms);}
@@ -114,6 +115,7 @@ bool SessionSupervisor::start(){return impl_->start();}
 void SessionSupervisor::stop(){impl_->stop();}
 bool SessionSupervisor::send_input(const std::string&c){return impl_->send_input(c);}
 unsigned long SessionSupervisor::control_generation()const{return impl_->generation.load();}
+std::uint64_t SessionSupervisor::reliable_pending()const{return impl_->reliable_pending();}
 bool SessionSupervisor::media_started()const{return impl_->media_started();}
 bool SessionSupervisor::take_latest_video(DecodedVideoFrame&out){return impl_->take_latest_video(out);}
 void SessionSupervisor::note_presented_video(std::int64_t pts_us,double present_ms){impl_->note_presented_video(pts_us,present_ms);}

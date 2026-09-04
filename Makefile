@@ -4,6 +4,9 @@ SDL3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3 2>/dev/null)
 SDL3_LIBS := $(shell $(PKG_CONFIG) --libs sdl3 2>/dev/null)
 CPPFLAGS += $(SDL3_CFLAGS)
 LDLIBS := $(filter-out -lX11 -lXi,$(LDLIBS)) $(SDL3_LIBS)
+CLIPBOARD_SRCS := src/clipboard.cpp
+APP_SRCS += $(CLIPBOARD_SRCS)
+$(PRODUCT): $(CLIPBOARD_SRCS)
 
 # VideoReceiver no longer owns the window/presenter. Product APP_SRCS was
 # assembled by Makefile.core before this override and still contains
@@ -34,6 +37,12 @@ deps-check:
 		esac
 		exit 1
 	fi
+
+test-clipboard: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
+	$(BUILD)/test-clipboard
+
+test: test-clipboard
 
 test-video-present: | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
