@@ -94,7 +94,11 @@ bool wait_local_client(UdpSocket &listener,const std::string &host_public_key,
     const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));std::array<std::uint8_t,kLocalDiscoveryMessageBytes>buffer{};
     while(remaining_ms(deadline)>0){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(listener.fd,buffer,source,source_len,remaining_ms(deadline));if(n==-2)continue;if(n<0){error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string request_id,client_public_key,client_nonce;std::uint16_t client_peer_port=0;if(!parse_discover(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),request_id,client_public_key,client_nonce,client_peer_port)||request_id!=id)continue;
-        RendezvousEndpoint client;if(!endpoint_from_sockaddr(source,source_len,client))continue;client.port=client_peer_port;
+        RendezvousEndpoint client;if(!endpoint_from_sockaddr(source,source_len,client))continue;
+        // Discovery and the peer session must use the same client UDP socket.
+        // This avoids a fragile fixed-reply-port -> ephemeral-port handoff and
+        // makes the subsequent handshake the continuation of the same flow.
+        if(client.port!=client_peer_port)continue;
         const int peer_fd=fcntl(listener.fd,F_DUPFD_CLOEXEC,0);if(peer_fd<0){error="local peer socket duplication failed";return false;}UdpSocket peer_socket{peer_fd,listener.local_port};
         const auto session_id=random_hex(16),host_nonce=random_hex(16);const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,listener.local_port);const auto signature=sign_hex(host_private_key,transcript);if(signature.empty()){close_udp_socket(peer_socket);error="local discovery identity signing failed";return false;}
         const std::string offer="OPAL_LOCAL_OFFER_V1 "+id+" "+session_id+" "+host_public_key+" "+host_nonce+" "+std::to_string(listener.local_port)+" "+signature;
@@ -108,10 +112,13 @@ bool discover_local_host(const std::string &rendezvous_id,const std::string &cli
                          LocalDiscoveryClientResult &result,std::string &error,int timeout_ms,
                          std::string destination_host,std::uint16_t destination_port){
     result={};error.clear();if(!valid_id(rendezvous_id)||!valid_public_key(client_public_key)){error="invalid local discovery identity";return false;}
-    std::string socket_error;auto discovery_socket=open_ipv4_socket(kLocalDiscoveryReplyPort,"0.0.0.0",true,socket_error);if(discovery_socket.fd<0){error=socket_error;return false;}auto peer_socket=open_udp_socket();if(peer_socket.fd<0){close_udp_socket(discovery_socket);error="local peer socket failed";return false;}
-    sockaddr_in target{};if(!resolve_ipv4(destination_host,destination_port,target)){close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error="local discovery destination unavailable";return false;}
+    // Use one ephemeral IPv4 socket for discovery, the signed offer, and the
+    // peer handshake. The packet source port is therefore exactly the peer
+    // port advertised to the host and no fixed inbound reply port is needed.
+    std::string socket_error;auto peer_socket=open_ipv4_socket(0,"0.0.0.0",true,socket_error);if(peer_socket.fd<0){error=socket_error;return false;}
+    sockaddr_in target{};if(!resolve_ipv4(destination_host,destination_port,target)){close_udp_socket(peer_socket);error="local discovery destination unavailable";return false;}
     const auto client_nonce=random_hex(16);const std::string request="OPAL_LOCAL_DISCOVER_V1 "+rendezvous_id+" "+client_public_key+" "+client_nonce+" "+std::to_string(peer_socket.local_port);const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));auto next_send=Clock::time_point{};std::array<std::uint8_t,kLocalDiscoveryMessageBytes>buffer{};std::string rejection_error;
-    while(remaining_ms(deadline)>0){const auto now=Clock::now();if(next_send.time_since_epoch().count()==0||now>=next_send){(void)send_text(discovery_socket.fd,reinterpret_cast<const sockaddr*>(&target),sizeof(target),request);next_send=now+std::chrono::milliseconds(75);}const int wait_ms=std::min(75,remaining_ms(deadline));sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(discovery_socket.fd,buffer,source,source_len,wait_ms);if(n==-2)continue;if(n<0){close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
+    while(remaining_ms(deadline)>0){const auto now=Clock::now();if(next_send.time_since_epoch().count()==0||now>=next_send){(void)send_text(peer_socket.fd,reinterpret_cast<const sockaddr*>(&target),sizeof(target),request);next_send=now+std::chrono::milliseconds(75);}const int wait_ms=std::min(75,remaining_ms(deadline));sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(peer_socket.fd,buffer,source,source_len,wait_ms);if(n==-2)continue;if(n<0){close_udp_socket(peer_socket);error="local discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string id,session_id,host_public_key,host_nonce,signature;std::uint16_t host_peer_port=0;
         if(!parse_offer(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),id,session_id,host_public_key,host_nonce,host_peer_port,signature))continue;
         if(id!=rendezvous_id)continue;
@@ -119,9 +126,9 @@ bool discover_local_host(const std::string &rendezvous_id,const std::string &cli
         const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,host_peer_port);
         if(!verify_hex(host_public_key,transcript,signature)){rejection_error="local discovery offer signature invalid";continue;}
         RendezvousEndpoint host;if(!endpoint_from_sockaddr(source,source_len,host)){rejection_error="local discovery offer source invalid";continue;}host.port=host_peer_port;
-        close_udp_socket(discovery_socket);result.socket=peer_socket;result.host=host;result.rendezvous_id=id;result.session_id=session_id;result.host_public_key=host_public_key;result.client_nonce=client_nonce;result.host_nonce=host_nonce;return true;
+        result.socket=peer_socket;peer_socket={};result.host=host;result.rendezvous_id=id;result.session_id=session_id;result.host_public_key=host_public_key;result.client_nonce=client_nonce;result.host_nonce=host_nonce;return true;
     }
-    close_udp_socket(discovery_socket);close_udp_socket(peer_socket);error=rejection_error.empty()?"local host not found":rejection_error;return false;
+    close_udp_socket(peer_socket);error=rejection_error.empty()?"local host not found":rejection_error;return false;
 }
 
 }
