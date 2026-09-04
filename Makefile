@@ -78,6 +78,9 @@ $(MEDIA_TEST_TARGETS): | deps-check
 test-build-flags:
 	sh ./tests/test_build_flags.sh
 
+test-firewall:
+	sh ./tests/test_firewall.sh
+
 test-core: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_core.cpp $(CORE_SRCS) $(PROFILE_SRCS) -lcrypto -o $(BUILD)/test-core
 	$(BUILD)/test-core
@@ -202,7 +205,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all rendezvous-server test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
+test: all rendezvous-server test-build-flags test-firewall test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) RENDEZVOUS_BIN=$(abspath $(RENDEZVOUS_SERVER)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -225,6 +228,7 @@ install: all
 	$(INSTALL) -m 0644 systemd/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
 	$(INSTALL) -m 0644 packaging/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"
 	@if [ -z "$(DESTDIR)" ]; then \
+	  sh ./scripts/configure-firewall.sh install; \
 	  if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
 	  if command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules; udevadm trigger --action=change --sysname-match=uinput; udevadm settle; fi; \
 	fi
@@ -236,6 +240,7 @@ install-rendezvous: $(RENDEZVOUS_SERVER)
 	$(INSTALL) -m 0755 $(RENDEZVOUS_SERVER) "$(DESTDIR)$(BINDIR)/opal-rendezvous"
 
 uninstall:
+	@if [ -z "$(DESTDIR)" ]; then sh ./scripts/configure-firewall.sh remove; fi
 	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"
 	-rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null
@@ -243,4 +248,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all rendezvous-server deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
+.PHONY: all rendezvous-server deps-check test test-build-flags test-firewall test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-local-discovery test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
