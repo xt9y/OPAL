@@ -34,4 +34,10 @@ int normal_gop_frames(int fps){
 std::uint64_t sender_burst_budget_bytes(int,int,bool){
     return 2ULL*1200ULL;
 }
+
+int sender_pacing_rate_kbps(int bitrate_kbps,bool keyframe){
+    const long long bitrate=std::clamp<long long>(bitrate_kbps,1000,100000);
+    if(keyframe)return static_cast<int>(bitrate*4);
+    return static_cast<int>((bitrate*6+4)/5);
+}
 }
