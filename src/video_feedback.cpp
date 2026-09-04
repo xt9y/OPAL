@@ -65,7 +65,8 @@ std::string clock_sync_reply_line(std::uint32_t generation,std::int64_t t0_us,st
 }
 bool parse_clock_sync_line(const std::string &line,std::uint32_t generation,std::int64_t &t0,std::int64_t &t1,std::int64_t &t2){
     std::istringstream in(line);std::string word,extra;unsigned long long gen=0;
-    if(!(in>>word>>gen>>t0>>t1>>t2)||in>>extra||word!="CLOCK_SYNC"||gen!=generation)return false;return true;
+    if(!(in>>word>>gen>>t0>>t1>>t2)||in>>extra||word!="CLOCK_SYNC"||gen!=generation)return false;
+    return true;
 }
 
 std::string debug_media_request_line(std::uint32_t generation,bool enabled){
