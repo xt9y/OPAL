@@ -21,10 +21,10 @@ PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/firewalld.log" sh "
 
 grep -qx -- '--quiet --permanent --add-port=47993/udp' "$base/firewalld.log"
 grep -qx -- '--quiet --add-port=47993/udp' "$base/firewalld.log"
-grep -qx -- '--quiet --permanent --add-rich-rule=rule source-port port="47993" protocol="udp" accept' "$base/firewalld.log"
-grep -qx -- '--quiet --add-rich-rule=rule source-port port="47993" protocol="udp" accept' "$base/firewalld.log"
-grep -qx -- '--quiet --permanent --remove-rich-rule=rule source-port port="47993" protocol="udp" accept' "$base/firewalld.log"
-grep -qx -- '--quiet --remove-rich-rule=rule source-port port="47993" protocol="udp" accept' "$base/firewalld.log"
+grep -qx -- '--quiet --permanent --add-port=47994/udp' "$base/firewalld.log"
+grep -qx -- '--quiet --add-port=47994/udp' "$base/firewalld.log"
+grep -qx -- '--quiet --permanent --remove-port=47994/udp' "$base/firewalld.log"
+grep -qx -- '--quiet --remove-port=47994/udp' "$base/firewalld.log"
 grep -qx -- '--quiet --permanent --remove-port=47993/udp' "$base/firewalld.log"
 grep -qx -- '--quiet --remove-port=47993/udp' "$base/firewalld.log"
 
@@ -43,8 +43,8 @@ PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$scrip
 PATH="$base/bin:/usr/bin:/bin" OPAL_TEST_FIREWALL_LOG="$base/ufw.log" sh "$script" remove
 
 grep -qx -- 'allow 47993/udp comment OPAL LAN discovery' "$base/ufw.log"
-grep -qx -- 'allow in proto udp from any port 47993 to any comment OPAL LAN discovery replies' "$base/ufw.log"
-grep -qx -- '--force delete allow in proto udp from any port 47993 to any' "$base/ufw.log"
+grep -qx -- 'allow 47994/udp comment OPAL LAN discovery replies' "$base/ufw.log"
+grep -qx -- '--force delete allow 47994/udp' "$base/ufw.log"
 grep -qx -- '--force delete allow 47993/udp' "$base/ufw.log"
 test "$(grep -c '^reload$' "$base/ufw.log")" -eq 2
 

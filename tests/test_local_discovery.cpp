@@ -14,6 +14,7 @@ Identity identity(const char*name){Identity i;i.root=std::filesystem::temp_direc
 }
 
 int main(){
+    static_assert(opal::kLocalDiscoveryReplyPort==47994);
     auto client_id=identity("opal-local-discovery-client"),host_id=identity("opal-local-discovery-host"),wrong_signer=identity("opal-local-discovery-wrong-signer");
     const auto rendezvous_id=opal::rendezvous_id_from_public_key(host_id.public_hex);assert(!rendezvous_id.empty());
     std::string error;auto listener=opal::open_local_discovery_listener(0,"127.0.0.1",error);assert(listener.fd>=0&&listener.local_port>0);
