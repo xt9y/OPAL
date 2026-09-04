@@ -10,7 +10,7 @@ Restart=always
 RestartSec=2
 NoNewPrivileges=true
 PrivateTmp=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 UMask=0077
 
 [Install]

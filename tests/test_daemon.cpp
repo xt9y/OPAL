@@ -13,12 +13,14 @@ int main() {
     assert(unit.find("ExecStart=/usr/local/bin/opal --internal-host-daemon")!=std::string::npos);
     assert(unit.find("Restart=always")!=std::string::npos);
     assert(unit.find("Restart=on-failure")==std::string::npos);
+    assert(unit.find("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK")!=std::string::npos);
 
     const auto host=read_all("src/host.cpp");
-    assert(host.find("LAN / direct UDP / encrypted relay")!=std::string::npos);
+    assert(host.find("Tailscale direct / direct UDP / encrypted relay")!=std::string::npos);
     assert(host.find("local_discovery_loop")!=std::string::npos);
+    assert(host.find("local_tailnet_ipv4")!=std::string::npos);
     assert(host.find("open_local_discovery_listener")!=std::string::npos);
-    assert(host.find("LAN discovery remains active")!=std::string::npos);
+    assert(host.find("Tailscale discovery remains active")!=std::string::npos);
     assert(host.find("register_host")!=std::string::npos);
     assert(host.find("wait_offer")!=std::string::npos);
     assert(host.find("PeerSession")!=std::string::npos);
