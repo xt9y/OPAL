@@ -16,6 +16,7 @@
 #include <sstream>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace opal { namespace {
 using namespace std::chrono_literals;
@@ -46,14 +47,21 @@ struct SessionSupervisor::Impl {
                 if(debug_enabled())std::cerr<<"OPAL discovery=lan host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<"\n";
             }else if(debug_enabled())std::cerr<<"OPAL discovery=lan miss reason="<<(local_error.empty()?"not-found":local_error)<<"\n";
         }
-        if(bootstrap==BootstrapPath::Unset&&is_tailnet_ipv4(options.tailnet_address)){
+        if(bootstrap==BootstrapPath::Unset){
             const auto local_tailnet=local_tailnet_ipv4();
             if(!local_tailnet.empty()){
-                LocalDiscoveryClientResult tailnet;std::string tailnet_error;
-                if(discover_local_host(options.rendezvous_id,options.client_public_key,tailnet,tailnet_error,1500,options.tailnet_address,kLocalDiscoveryPort)){
-                    adopt_direct(tailnet,BootstrapPath::Tailnet);
-                    if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<" local="<<local_tailnet<<"\n";
-                }else if(debug_enabled())std::cerr<<"OPAL discovery=tailnet miss host="<<options.tailnet_address<<" reason="<<(tailnet_error.empty()?"not-found":tailnet_error)<<"\n";
+                std::vector<std::string>candidates;
+                if(is_tailnet_ipv4(options.tailnet_address))candidates.push_back(options.tailnet_address);
+                for(const auto&peer_address:tailnet_peer_ipv4s())if(peer_address!=local_tailnet&&std::find(candidates.begin(),candidates.end(),peer_address)==candidates.end())candidates.push_back(peer_address);
+                if(debug_enabled())std::cerr<<"OPAL discovery=tailnet candidates="<<candidates.size()<<" local="<<local_tailnet<<"\n";
+                for(const auto&candidate:candidates){
+                    LocalDiscoveryClientResult tailnet;std::string tailnet_error;
+                    if(discover_local_host(options.rendezvous_id,options.client_public_key,tailnet,tailnet_error,900,candidate,kLocalDiscoveryPort)){
+                        adopt_direct(tailnet,BootstrapPath::Tailnet);options.tailnet_address=candidate;{std::lock_guard<std::mutex>lock(state_mu);remote_tailnet_value=candidate;}
+                        if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<" local="<<local_tailnet<<"\n";break;
+                    }
+                    if(debug_enabled())std::cerr<<"OPAL discovery=tailnet miss host="<<candidate<<" reason="<<(tailnet_error.empty()?"not-found":tailnet_error)<<"\n";
+                }
             }else if(debug_enabled())std::cerr<<"OPAL discovery=tailnet skip reason=tailscale0-unavailable\n";
         }
         if(bootstrap==BootstrapPath::Unset){
