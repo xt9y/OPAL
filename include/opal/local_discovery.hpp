@@ -9,6 +9,7 @@
 namespace opal {
 
 constexpr std::uint16_t kLocalDiscoveryPort=47993;
+constexpr std::uint16_t kLocalDiscoveryReplyPort=47994;
 
 struct LocalDiscoveryClientResult {
     UdpSocket socket;

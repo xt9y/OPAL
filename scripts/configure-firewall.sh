@@ -11,20 +11,20 @@ if [ "${OPAL_SKIP_FIREWALL:-0}" = "1" ]; then
   exit 0
 fi
 
-rule="47993/udp"
-firewalld_reply_rule='rule source-port port="47993" protocol="udp" accept'
+discovery_rule="47993/udp"
+reply_rule="47994/udp"
 
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
   if [ "$action" = "install" ]; then
-    firewall-cmd --quiet --permanent --add-port="$rule"
-    firewall-cmd --quiet --add-port="$rule"
-    firewall-cmd --quiet --permanent --add-rich-rule="$firewalld_reply_rule"
-    firewall-cmd --quiet --add-rich-rule="$firewalld_reply_rule"
+    firewall-cmd --quiet --permanent --add-port="$discovery_rule"
+    firewall-cmd --quiet --add-port="$discovery_rule"
+    firewall-cmd --quiet --permanent --add-port="$reply_rule"
+    firewall-cmd --quiet --add-port="$reply_rule"
   else
-    firewall-cmd --quiet --permanent --remove-rich-rule="$firewalld_reply_rule" >/dev/null 2>&1 || true
-    firewall-cmd --quiet --remove-rich-rule="$firewalld_reply_rule" >/dev/null 2>&1 || true
-    firewall-cmd --quiet --permanent --remove-port="$rule" >/dev/null 2>&1 || true
-    firewall-cmd --quiet --remove-port="$rule" >/dev/null 2>&1 || true
+    firewall-cmd --quiet --permanent --remove-port="$reply_rule" >/dev/null 2>&1 || true
+    firewall-cmd --quiet --remove-port="$reply_rule" >/dev/null 2>&1 || true
+    firewall-cmd --quiet --permanent --remove-port="$discovery_rule" >/dev/null 2>&1 || true
+    firewall-cmd --quiet --remove-port="$discovery_rule" >/dev/null 2>&1 || true
   fi
   exit 0
 fi
@@ -32,15 +32,15 @@ fi
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   if [ "$action" = "install" ]; then
     if ! ufw status 2>/dev/null | grep -Eq '(^|[[:space:]])47993/udp([[:space:]]|$)'; then
-      ufw allow "$rule" comment 'OPAL LAN discovery'
+      ufw allow "$discovery_rule" comment 'OPAL LAN discovery'
     fi
-    if ! ufw status 2>/dev/null | grep -Fq 'OPAL LAN discovery replies'; then
-      ufw allow in proto udp from any port 47993 to any comment 'OPAL LAN discovery replies'
+    if ! ufw status 2>/dev/null | grep -Eq '(^|[[:space:]])47994/udp([[:space:]]|$)'; then
+      ufw allow "$reply_rule" comment 'OPAL LAN discovery replies'
     fi
     ufw reload >/dev/null
   else
-    ufw --force delete allow in proto udp from any port 47993 to any >/dev/null 2>&1 || true
-    ufw --force delete allow "$rule" >/dev/null 2>&1 || true
+    ufw --force delete allow "$reply_rule" >/dev/null 2>&1 || true
+    ufw --force delete allow "$discovery_rule" >/dev/null 2>&1 || true
     ufw reload >/dev/null 2>&1 || true
   fi
   exit 0
