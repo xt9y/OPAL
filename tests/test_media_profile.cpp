@@ -30,5 +30,15 @@ int main() {
     assert(opal::sender_burst_budget_bytes(100000,15,false)==two_datagrams);
     assert(opal::sender_burst_budget_bytes(100000,15,true)==two_datagrams);
     assert(opal::sender_burst_budget_bytes(1,1000,false)==two_datagrams);
+
+    // Ordinary media retains the 20% pacing headroom. IDRs get a bounded 4x
+    // serialization rate so a large intra frame does not make the following
+    // dependent P-frame exceed the two-frame capture freshness budget.
+    assert(opal::sender_pacing_rate_kbps(30000,false)==36000);
+    assert(opal::sender_pacing_rate_kbps(30000,true)==120000);
+    assert(opal::sender_pacing_rate_kbps(100000,false)==120000);
+    assert(opal::sender_pacing_rate_kbps(100000,true)==400000);
+    assert(opal::sender_pacing_rate_kbps(1,false)==1200);
+    assert(opal::sender_pacing_rate_kbps(1,true)==4000);
     return 0;
 }
