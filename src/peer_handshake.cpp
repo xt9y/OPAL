@@ -4,8 +4,10 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <span>
 #include <string>
 #include <vector>
 
