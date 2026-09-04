@@ -30,14 +30,17 @@ manual required
   libswresample + development files
   libpulse + libpulse-simple + development files
   gpu-screen-recorder --> required for native Wayland host capture; preferred on X11
-  systemd + udev       --> required by the standard Linux install/service path
-  curl                 --> required only if OPAL needs to install Tailscale
+  PipeWire            --> required for native Wayland host capture/audio integration
+  xdg-desktop-portal  --> required for native Wayland portal capture
+  compositor portal   --> xdg-desktop-portal-kde / -gnome / -wlr or equivalent
+  systemd + udev      --> required by the standard Linux install/service path
+  curl                --> required only if OPAL needs to install Tailscale
 
 optional / integration
   tailscale        --> WAN direct path; OPAL can still use LAN/rendezvous without it
   firewalld or UFW --> only needed for automatic firewall rule management
-  PipeWire         --> supported through its PulseAudio compatibility service
+  pactl or wpctl   --> used by opal doctor to report the active audio service
 
-Fedora --> sudo dnf install gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel
-Arch   --> sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg
-Debian --> sudo apt-get install g++ make pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+Fedora --> sudo dnf install gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel pipewire xdg-desktop-portal
+Arch   --> sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg pipewire xdg-desktop-portal
+Debian --> sudo apt-get install g++ make pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev pipewire xdg-desktop-portal
