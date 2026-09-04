@@ -125,6 +125,10 @@ test-video-feedback: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_feedback.cpp $(VIDEO_FEEDBACK_SRCS) -o $(BUILD)/test-video-feedback
 	$(BUILD)/test-video-feedback
 
+test-video-receiver-architecture: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_receiver_architecture.cpp -o $(BUILD)/test-video-receiver-architecture
+	$(BUILD)/test-video-receiver-architecture
+
 test-direct-video-pipeline: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto -lX11 -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-direct-video-pipeline
 	$(BUILD)/test-direct-video-pipeline
@@ -157,6 +161,10 @@ test-peer-session: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_peer_session.cpp $(PEER_SESSION_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(RELAY_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) src/crypto.cpp -lcrypto -lpthread -o $(BUILD)/test-peer-session
 	$(BUILD)/test-peer-session
 
+test-peer-session-relay: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_peer_session_relay.cpp $(PEER_SESSION_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(RELAY_SRCS) $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) src/crypto.cpp -lcrypto -lpthread -o $(BUILD)/test-peer-session-relay
+	$(BUILD)/test-peer-session-relay
+
 test-relay: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_relay.cpp $(RELAY_SRCS) src/crypto.cpp -lcrypto -o $(BUILD)/test-relay
 	$(BUILD)/test-relay
@@ -181,7 +189,7 @@ test-hardening: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_hardening.cpp src/crypto.cpp -lcrypto -o $(BUILD)/test-hardening
 	$(BUILD)/test-hardening
 
-test-direct-media-sanitize: deps-check test-video-crypto test-video-packet test-video-reassembly test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress
+test-direct-media-sanitize: deps-check test-video-crypto test-video-packet test-video-reassembly test-video-capture test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress
 
 test-clean: all
 	BIN=$(abspath $(PRODUCT)) sh ./tests/test_clean.sh
@@ -189,7 +197,7 @@ test-clean: all
 test-install: all
 	MAKE=$(MAKE) sh ./tests/test_install.sh
 
-test: all rendezvous-server test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
+test: all rendezvous-server test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-input test-setup test-daemon test-session test-hardening test-clean test-install
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) ./tests/smoke.sh
 	BIN=$(abspath $(PRODUCT)) INPUT_BIN=$(abspath $(INPUT)) RENDEZVOUS_BIN=$(abspath $(RENDEZVOUS_SERVER)) ./tests/integration.sh
 	@tmp=$$(mktemp -d); \
@@ -230,4 +238,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all rendezvous-server deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
+.PHONY: all rendezvous-server deps-check test test-build-flags test-core test-media-profile test-media test-video-capture test-udp-transport test-video-crypto test-video-packet test-video-reassembly test-video-decoder test-video-present test-audio-output test-video-feedback test-video-receiver-architecture test-direct-video-pipeline test-direct-video-stress test-rendezvous-protocol test-rendezvous-server test-peer-handshake test-session-packet test-reliable-control test-peer-session test-peer-session-relay test-relay test-direct-media-sanitize test-input test-setup test-daemon test-session test-hardening test-clean test-install install install-rendezvous uninstall clean
