@@ -48,7 +48,9 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
         frame.type=VideoMediaType::VideoH264;frame.type_known=true;frame.flags|=header.flags;
         if(!frame.parity_present[header.fec_group]){std::memcpy(frame.parity_ptr(header.fec_group),payload.data(),payload.size());frame.parity_lengths[header.fec_group]=static_cast<std::uint16_t>(payload.size());frame.parity_present[header.fec_group]=1;}
     }else{
-        if(header.fragment_index>=frame.count||payload.size()>kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;if(frame.type_known&&frame.type!=header.media_type)return ReassemblyStatus::Ignored;frame.type=header.media_type;frame.type_known=true;frame.flags|=header.flags;
+        if(header.fragment_index>=frame.count||payload.size()>kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;
+        if(frame.type_known&&frame.type!=header.media_type)return ReassemblyStatus::Ignored;
+        frame.type=header.media_type;frame.type_known=true;frame.flags|=header.flags;
         if(frame.type==VideoMediaType::VideoH264&&(frame.flags&FrameConfig)==0&&frame.video_order==0){frame.video_order=++impl.video_order;for(auto it=impl.frames.begin();it!=impl.frames.end();){if(it==frame_it){++it;continue;}const auto&older=it->second;if(older.type_known&&older.type==VideoMediaType::VideoH264&&older.video_order>0&&frame.video_order>=older.video_order+2){impl.bytes-=older.storage_bytes;it=impl.frames.erase(it);need_idr=true;impl.awaiting_idr=true;}else ++it;}}
         if(frame.type==VideoMediaType::VideoH264&&impl.awaiting_idr&&(frame.flags&(FrameKeyframe|FrameConfig))==0){impl.bytes-=frame.storage_bytes;impl.frames.erase(frame_it);return ReassemblyStatus::NeedIdr;}
         const std::size_t index=header.fragment_index;if(!frame.fragment_present[index]){if(!payload.empty())std::memcpy(frame.fragment_ptr(index),payload.data(),payload.size());frame.fragment_lengths[index]=static_cast<std::uint16_t>(payload.size());frame.fragment_present[index]=1;}
