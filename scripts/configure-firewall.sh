@@ -26,7 +26,6 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
     firewall-cmd --quiet --permanent --remove-port="$discovery_rule" >/dev/null 2>&1 || true
     firewall-cmd --quiet --remove-port="$discovery_rule" >/dev/null 2>&1 || true
   fi
-  exit 0
 fi
 
 if command -v ufw >/dev/null 2>&1; then
@@ -47,7 +46,6 @@ if command -v ufw >/dev/null 2>&1; then
       ufw reload >/dev/null 2>&1 || true
     fi
   fi
-  exit 0
 fi
 
 exit 0
