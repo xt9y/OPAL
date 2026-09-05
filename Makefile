@@ -3,6 +3,7 @@ include Makefile.core
 SDL3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3 2>/dev/null)
 SDL3_LIBS := $(shell $(PKG_CONFIG) --libs sdl3 2>/dev/null)
 CPPFLAGS += $(SDL3_CFLAGS)
+CXXFLAGS += -pthread
 LDLIBS := $(filter-out -lX11 -lXi,$(LDLIBS)) $(SDL3_LIBS)
 CLIPBOARD_SRCS := src/clipboard.cpp
 APP_SRCS += $(CLIPBOARD_SRCS)
@@ -72,17 +73,56 @@ SAN_COMMON := -O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
 ASAN_UBSAN := -fsanitize=address,undefined
 TSAN := -fsanitize=thread
 
-test-direct-media-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic $(SAN_COMMON) $(ASAN_UBSAN)
+test-direct-media-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(ASAN_UBSAN)
 test-direct-media-sanitize: LDFLAGS += $(ASAN_UBSAN)
 test-direct-media-sanitize: export ASAN_OPTIONS := detect_leaks=1:strict_string_checks=1:check_initialization_order=1
 test-direct-media-sanitize: export UBSAN_OPTIONS := print_stacktrace=1:halt_on_error=1
 
-test-thread-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic $(SAN_COMMON) $(TSAN)
+test-thread-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
 test-thread-sanitize: LDFLAGS += $(TSAN)
 test-thread-sanitize: export TSAN_OPTIONS := halt_on_error=1:history_size=7
 test-thread-sanitize: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
 
-.PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize
+NETEM_PIPELINE := $(BUILD)/test-direct-video-pipeline-netem
+$(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto $(AVLIBS) $(AUDIOLIBS) $(GLLIBS) -o $@
+
+# Real kernel networking faults. Prefer an isolated user+network namespace so
+# the developer machine's loopback qdisc is never changed. If user namespaces
+# are disabled, run this target as root and it will clean up the temporary qdisc.
+test-netem: $(NETEM_PIPELINE)
+	@command -v tc >/dev/null 2>&1 || { echo 'test-netem requires iproute2/tc' >&2; exit 2; }
+	command -v ip >/dev/null 2>&1 || { echo 'test-netem requires iproute2/ip' >&2; exit 2; }
+	command -v timeout >/dev/null 2>&1 || { echo 'test-netem requires timeout' >&2; exit 2; }
+	BIN='$(abspath $(NETEM_PIPELINE))'
+	run_cases='\
+		set -eu; \
+		ip link set lo up; \
+		cleanup(){ tc qdisc del dev lo root >/dev/null 2>&1 || true; }; \
+		trap cleanup EXIT INT TERM; \
+		run(){ name=$$1; shift; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 timeout 45 "'"$$BIN"'"; }; \
+		run clean delay 0ms; \
+		run lan-jitter delay 3ms 1ms distribution normal; \
+		run mild-loss delay 5ms 2ms loss 1%; \
+		run bad-wifi delay 12ms 5ms loss 3% reorder 5% 50%; \
+		run collapse delay 20ms 8ms loss 5% rate 2mbit; \
+		cleanup'
+	if command -v unshare >/dev/null 2>&1 && unshare -Urn sh -c 'ip link set lo up' >/dev/null 2>&1; then
+		unshare -Urn sh -ec "$$run_cases"
+	elif [ "$$(id -u)" -eq 0 ]; then
+		sh -ec "$$run_cases"
+	else
+		echo 'test-netem needs unprivileged user namespaces or root: sudo make test-netem' >&2
+		exit 2
+	fi
+
+# Fast HPI correctness gate. Hostile kernel networking and sanitizers stay
+# explicit because they are intentionally slower and environment-sensitive.
+test-hpi: test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-direct-video-stress test-direct-video-pipeline
+
+test-hpi-sanitize: test-hpi test-sanitize
+
+.PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize test-netem test-hpi test-hpi-sanitize
 test-sanitize: test-direct-media-sanitize test-thread-sanitize
 
 # The integration test validates networking/recovery in a headless process.
