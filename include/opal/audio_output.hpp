@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace opal {
 
@@ -16,6 +17,7 @@ public:
                 std::int64_t current_video_pts_us);
     void reset_to(std::int64_t video_pts_us);
     std::uint32_t queued_ms() const;
+    std::string backend_name() const;
     void close();
     ~AudioOutput();
 private:
