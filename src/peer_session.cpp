@@ -60,6 +60,26 @@ struct PeerSession::Impl {
     bool activate(const RendezvousEndpoint&endpoint,bool relay){active_endpoint=endpoint;relay_mode=relay;peer={};peer_len=0;return !endpoint.host.empty()&&endpoint.port>0&&resolve_udp_endpoint(endpoint.host,endpoint.port,peer,peer_len);}
     bool send_wire(std::span<const std::uint8_t>wire){if(options.socket.fd<0||wire.empty())return false;if(relay_mode){if(!options.relay)return false;const auto wrapped=wrap_relay_datagram(options.relay->allocation_id,options.relay->role,wire);return !wrapped.empty()&&send_datagram(options.socket.fd,peer,peer_len,wrapped);}return send_datagram(options.socket.fd,peer,peer_len,wire);}
     bool send_media_wire(std::span<const std::uint8_t>wire){if(options.socket.fd<0||wire.empty())return false;UdpSendResult result=UdpSendResult::Fatal;if(relay_mode){if(!options.relay)return false;const auto wrapped=wrap_relay_datagram(options.relay->allocation_id,options.relay->role,wire);if(wrapped.empty())return false;result=send_datagram_result(options.socket.fd,peer,peer_len,wrapped);}else result=send_datagram_result(options.socket.fd,peer,peer_len,wire);if(result==UdpSendResult::WouldBlock){media_send_backpressure_count.fetch_add(1,std::memory_order_relaxed);return true;}return result==UdpSendResult::Sent;}
+    UdpSendBatchResult send_media_batch(std::span<const std::span<const std::uint8_t>>wires){
+        if(options.socket.fd<0||wires.empty()||wires.size()>kUdpSendBatchMax)return{};
+        for(const auto wire:wires)if(wire.empty()||wire.size()>kRelayMaxInnerBytes)return{};
+        if(relay_mode){
+            std::size_t sent=0;
+            for(const auto wire:wires){
+                if(!options.relay)return{sent,UdpSendResult::Fatal};
+                const auto wrapped=wrap_relay_datagram(options.relay->allocation_id,options.relay->role,wire);
+                if(wrapped.empty())return{sent,UdpSendResult::Fatal};
+                const auto result=send_datagram_result(options.socket.fd,peer,peer_len,wrapped);
+                if(result==UdpSendResult::WouldBlock){media_send_backpressure_count.fetch_add(wires.size()-sent,std::memory_order_relaxed);return{sent,result};}
+                if(result!=UdpSendResult::Sent)return{sent,result};
+                ++sent;
+            }
+            return{sent,UdpSendResult::Sent};
+        }
+        auto result=send_datagrams_batch(options.socket.fd,peer,peer_len,wires);
+        if(result.result==UdpSendResult::WouldBlock&&result.sent<wires.size())media_send_backpressure_count.fetch_add(wires.size()-result.sent,std::memory_order_relaxed);
+        return result;
+    }
     bool receive_wire(std::span<std::uint8_t>buffer,std::span<const std::uint8_t>&wire,int timeout_ms){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(options.socket.fd,buffer,source,source_len,timeout_ms);if(n<=0||!same_source(source,peer))return false;wire=std::span<const std::uint8_t>(buffer.data(),static_cast<std::size_t>(n));return true;}
     bool send_plain(SessionPacketType type,std::string_view payload,std::uint64_t packet_sequence){SessionPacketHeader h;h.type=type;h.generation=options.handshake.generation;h.session_id=session_numeric;h.packet_sequence=packet_sequence;h.payload_length=static_cast<std::uint16_t>(payload.size());const auto header=serialize_session_header(h);if(header.empty()||payload.size()>kSessionPacketMaxPayload)return false;std::vector<std::uint8_t>wire=header;if(!payload.empty())wire.insert(wire.end(),reinterpret_cast<const std::uint8_t*>(payload.data()),reinterpret_cast<const std::uint8_t*>(payload.data()+payload.size()));return send_wire(wire);}
     bool install_keys(const std::string&client_ephemeral,const std::string&host_ephemeral){if(!derive_peer_session_keys(options.handshake,ephemeral,client_ephemeral,host_ephemeral,options.client_side,keys))return false;cipher=std::make_unique<VideoCipher>(channel_video_keys(keys.control));replay.reset();return cipher&&cipher->valid();}
@@ -118,6 +138,7 @@ bool PeerSession::start(PeerSessionOptions options,std::string&error){stop();imp
 bool PeerSession::send_input(std::string command){if(command.rfind("POINTER ",0)==0)return send_pointer(std::move(command));if(!impl_||!impl_->run.load()||command.empty()||command.size()>kReliableControlMaxPayload)return false;std::uint64_t sequence=0;{std::lock_guard<std::mutex>lock(impl_->reliable_mu);sequence=impl_->reliable_sender.enqueue(std::move(command),monotonic_ms());impl_->reliable_pending_count.store(impl_->reliable_sender.pending());}impl_->send_due();return sequence!=0&&impl_->run.load();}
 bool PeerSession::send_pointer(std::string command){if(!impl_||!impl_->run.load()||command.rfind("POINTER ",0)!=0||command.size()>kSessionPacketMaxPayload)return false;const auto sequence=impl_->pointer_send_sequence.fetch_add(1)+1;return impl_->send_encrypted(SessionPacketType::Pointer,sequence,command);}
 bool PeerSession::send_media_datagram(std::span<const std::uint8_t>wire){return impl_&&impl_->run.load()&&wire.size()<=kRelayMaxInnerBytes&&impl_->send_media_wire(wire);}
+UdpSendBatchResult PeerSession::send_media_datagrams(std::span<const std::span<const std::uint8_t>>wires){if(!impl_||!impl_->run.load()||wires.empty()||wires.size()>kUdpSendBatchMax)return{};for(const auto wire:wires)if(wire.empty()||wire.size()>kRelayMaxInnerBytes)return{};return impl_->send_media_batch(wires);}
 bool PeerSession::established()const{return impl_&&impl_->established.load();}
 bool PeerSession::running()const{return impl_&&impl_->run.load();}
 std::uint32_t PeerSession::generation()const{return impl_?impl_->options.handshake.generation:0;}
