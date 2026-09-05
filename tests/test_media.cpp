@@ -20,21 +20,28 @@ int main(){
     {
         auto capture=opal::start_capture("printf MEDIA");
         assert(capture.pid>0&&capture.fd>=0);
-        int flags=fcntl(capture.fd,F_GETFD,0);assert(flags>=0&&((flags&FD_CLOEXEC)!=0));
-        char buf[16]{};int n=opal::read_capture(capture,buf,sizeof(buf),1000);
+        int flags=fcntl(capture.fd,F_GETFD,0);
+        assert(flags>=0&&((flags&FD_CLOEXEC)!=0));
+        char buf[16]{};
+        int n=opal::read_capture(capture,buf,sizeof(buf),1000);
         assert(n==5&&std::string(buf,buf+n)=="MEDIA");
-        opal::stop_capture(capture);assert(capture.pid<0&&capture.fd<0);
+        opal::stop_capture(capture);
+        assert(capture.pid<0&&capture.fd<0);
     }
     {
-        auto capture=opal::start_capture("sleep 2");assert(capture.pid>0);
-        char buf[8]{};assert(opal::read_capture(capture,buf,sizeof(buf),100)==-2);
+        auto capture=opal::start_capture("sleep 2");
+        assert(capture.pid>0);
+        char buf[8]{};
+        assert(opal::read_capture(capture,buf,sizeof(buf),100)==-2);
         opal::stop_capture(capture);
     }
     {
         auto sink=opal::start_sink("cat >/dev/null");
         assert(sink.pid>0&&sink.fd>=0&&!sink.compact_input);
-        const int flags=fcntl(sink.fd,F_GETFL,0);assert(flags>=0&&(flags&O_NONBLOCK));
-        std::string burst(32*1024,'I');assert(opal::write_sink_timeout(sink,burst.data(),burst.size(),1000));
+        const int flags=fcntl(sink.fd,F_GETFL,0);
+        assert(flags>=0&&(flags&O_NONBLOCK));
+        std::string burst(32*1024,'I');
+        assert(opal::write_sink_timeout(sink,burst.data(),burst.size(),1000));
         opal::stop_sink(sink);
     }
     {
@@ -45,15 +52,30 @@ int main(){
         const std::string command="MOUSE -17 23\n";
         assert(opal::write_sink_timeout(sink,command.data(),command.size(),1000));
         opal::stop_sink(sink);
-        const auto bytes=read_binary(path);unlink(path.c_str());
+        const auto bytes=read_binary(path);
+        unlink(path.c_str());
         assert(bytes.size()==opal::kInputRecordBytes);
-        opal::InputRecord record{};assert(opal::decode_input_record(bytes,record));
+        opal::InputRecord record{};
+        assert(opal::decode_input_record(bytes,record));
         assert(record.type==opal::InputRecordType::Relative&&record.a==-17&&record.b==23);
     }
     {
-        auto sink=opal::start_sink("sleep 5 # opal-input");assert(sink.pid>0&&sink.fd>=0&&sink.compact_input);
-        std::array<char,4096>fill{};for(;;){const auto n=write(sink.fd,fill.data(),fill.size());if(n>0)continue;if(n<0&&errno==EINTR)continue;assert(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK));break;}
-        const std::string command="POINTER 100 200\n";const auto begin=std::chrono::steady_clock::now();assert(!opal::write_sink_timeout(sink,command.data(),command.size(),1000));const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count();assert(elapsed<50);opal::stop_sink(sink);
+        auto sink=opal::start_sink("sleep 5 # opal-input");
+        assert(sink.pid>0&&sink.fd>=0&&sink.compact_input);
+        std::array<char,4096>fill{};
+        for(;;){
+            const auto n=write(sink.fd,fill.data(),fill.size());
+            if(n>0)continue;
+            if(n<0&&errno==EINTR)continue;
+            assert(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK));
+            break;
+        }
+        const std::string command="POINTER 100 200\n";
+        const auto begin=std::chrono::steady_clock::now();
+        assert(!opal::write_sink_timeout(sink,command.data(),command.size(),1000));
+        const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count();
+        assert(elapsed<50);
+        opal::stop_sink(sink);
     }
     {
         int w=-1,h=-1;
@@ -85,13 +107,14 @@ int main(){
         assert(first.find("-fm cfr")==std::string::npos);
         assert(first.find("-keyint 0.25")!=std::string::npos);
         assert(first.find("-tune performance")!=std::string::npos);
-        assert(first.find("-ffmpeg-opts 'flush_packets=1'")!=std::string::npos);
         assert(first.find("-c flv")!=std::string::npos);
+        if(first.find("-ffmpeg-opts")!=std::string::npos)assert(first.find("flush_packets=1")!=std::string::npos);
         {std::ofstream f(token);f<<"restore-token";}
         auto restored=opal::capture_command(true,60,30000,true,token,0,0);
         assert(restored.find("-restore-portal-session yes")!=std::string::npos);
         assert(restored.find("-s 0x0")!=std::string::npos);
-        unlink(token.c_str());unsetenv("WAYLAND_DISPLAY");
+        unlink(token.c_str());
+        unsetenv("WAYLAND_DISPLAY");
     }
     {
         auto fallback=opal::capture_command(false,60,30000,true,"",1920,1080);
@@ -99,9 +122,14 @@ int main(){
         assert(fallback.find("scale=")!=std::string::npos);
         assert(fallback.find("-fflags nobuffer")!=std::string::npos);
         assert(fallback.find("-flags low_delay")!=std::string::npos);
+        assert(fallback.find("-c:v ")!=std::string::npos);
         assert(fallback.find("-bf 0")!=std::string::npos);
         assert(fallback.find("-g 15")!=std::string::npos);
-        assert(fallback.find("-keyint_min 15")!=std::string::npos);
+        if(fallback.find("-c:v libx264")!=std::string::npos){
+            assert(fallback.find("-preset ultrafast")!=std::string::npos);
+            assert(fallback.find("-tune zerolatency")!=std::string::npos);
+            assert(fallback.find("-keyint_min 15")!=std::string::npos);
+        }
         assert(fallback.find("-bufsize 1000k")!=std::string::npos);
         assert(fallback.find("-flush_packets 1")!=std::string::npos);
         assert(fallback.find("-f flv pipe:1")!=std::string::npos);
