@@ -24,10 +24,25 @@ VideoFragmentCursor::VideoFragmentCursor(
     valid_=count_<=65535&&valid_type(type_);
 }
 
-bool VideoFragmentCursor::valid() const{return valid_;}
+VideoFragmentCursor::VideoFragmentCursor(
+    VideoMediaType type,std::uint16_t flags,std::uint32_t generation,std::uint64_t session_id,
+    std::uint64_t frame_id,std::uint64_t capture_timestamp_us,std::span<const std::uint8_t> data,
+    std::atomic<std::uint64_t> &next_packet_sequence,bool fec)
+    :type_(type),flags_(flags),generation_(generation),session_id_(session_id),frame_id_(frame_id),
+     timestamp_(capture_timestamp_us),data_(data),atomic_sequence_(&next_packet_sequence),fec_(fec){
+    count_=std::max<std::size_t>(1,(data_.size()+kVideoDataFragmentBytes-1)/kVideoDataFragmentBytes);
+    valid_=count_<=65535&&valid_type(type_);
+}
+
+std::uint64_t VideoFragmentCursor::take_sequence(){
+    if(atomic_sequence_)return atomic_sequence_->fetch_add(1,std::memory_order_relaxed);
+    return sequence_?(*sequence_)++:0;
+}
+
+bool VideoFragmentCursor::valid() const{return valid_&&(sequence_||atomic_sequence_);}
 
 bool VideoFragmentCursor::next(VideoPacketHeader &header,std::span<const std::uint8_t> &payload){
-    payload={};if(!valid_||!sequence_)return false;
+    payload={};if(!valid())return false;
     if(emit_fec_){
         parity_.fill(0);
         const std::size_t group_count=std::min<std::size_t>(10,count_-fec_group_start_);
@@ -39,7 +54,7 @@ bool VideoFragmentCursor::next(VideoPacketHeader &header,std::span<const std::ui
             for(std::size_t k=0;k<length;++k)parity_[kVideoFecMetadataBytes+k]^=data_[offset+k];
         }
         header={};header.media_type=VideoMediaType::Fec;header.flags=flags_;header.generation=generation_;
-        header.session_id=session_id_;header.packet_sequence=(*sequence_)++;header.frame_id=frame_id_;
+        header.session_id=session_id_;header.packet_sequence=take_sequence();header.frame_id=frame_id_;
         header.capture_timestamp_us=timestamp_;header.fragment_index=static_cast<std::uint16_t>(fec_group_start_);
         header.fragment_count=static_cast<std::uint16_t>(count_);header.fec_group=static_cast<std::uint16_t>(fec_group_start_/10);
         header.payload_length=static_cast<std::uint16_t>(kVideoFecMetadataBytes+longest);
@@ -50,7 +65,7 @@ bool VideoFragmentCursor::next(VideoPacketHeader &header,std::span<const std::ui
     const std::size_t index=next_index_++,offset=index*kVideoDataFragmentBytes;
     const std::size_t length=offset<data_.size()?std::min(kVideoDataFragmentBytes,data_.size()-offset):0;
     header={};header.media_type=type_;header.flags=flags_|(index+1==count_?FrameEnd:0);
-    header.generation=generation_;header.session_id=session_id_;header.packet_sequence=(*sequence_)++;
+    header.generation=generation_;header.session_id=session_id_;header.packet_sequence=take_sequence();
     header.frame_id=frame_id_;header.capture_timestamp_us=timestamp_;header.fragment_index=static_cast<std::uint16_t>(index);
     header.fragment_count=static_cast<std::uint16_t>(count_);header.fec_group=static_cast<std::uint16_t>(index/10);
     header.payload_length=static_cast<std::uint16_t>(length);
