@@ -133,8 +133,8 @@ int client_connect(const std::string&target_in,const std::string&password_arg,co
     if(!first.frame){std::cerr<<"decoded video frame unavailable\n";session.stop();quit_sdl();return 1;}
     bool fullscreen=true;if(const char*w=std::getenv("OPAL_VIDEO_WINDOWED");w&&*w&&std::string(w)!="0")fullscreen=false;
     VideoPresenter presenter;if(!presenter.open(first.frame->width,first.frame->height,fullscreen)){std::cerr<<"OPAL presenter-open failed error="<<SDL_GetError()<<"\n";av_frame_free(&first.frame);session.stop();quit_sdl();return 1;}
-    if(debug_enabled())std::cerr<<"OPAL presenter=sdl3 video_driver="<<presenter.backend_name()<<" presentation="<<presenter.presentation_mode()<<"\n";
     if(!present_frame(session,presenter,first)){std::cerr<<"OPAL presenter failed error="<<SDL_GetError()<<"\n";presenter.close();session.stop();quit_sdl();return 1;}
+    if(debug_enabled())std::cerr<<"OPAL presenter=sdl3 video_driver="<<presenter.backend_name()<<" presentation="<<presenter.presentation_mode()<<"\n";
     std::cout<<"Connected. Ctrl+Alt+Shift+W releases input; click the OPAL screen to capture again. Ctrl+Alt+Shift+Q quits.\n"<<std::flush;if(debug_enabled())std::cerr<<"OPAL connection path="<<session.path_name()<<"\n";
     run_sdl_control(session,presenter,clipboard);presenter.close();session.stop();quit_sdl();return 0;
 }
