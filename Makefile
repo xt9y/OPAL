@@ -67,9 +67,9 @@ test-direct-video-pipeline: | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto -lpthread $(AVLIBS) $(AUDIOLIBS) $(GLLIBS) -o $(BUILD)/test-direct-video-pipeline
 	$(BUILD)/test-direct-video-pipeline
 
-# The core target used to be a dependency-only label. Target-specific variables
-# propagate to its prerequisites, so every direct-media test is now rebuilt and
-# linked with the actual sanitizers.
+# Sanitizer targets propagate their flags to their prerequisites. The wrapper
+# below forces clean rebuilds because make does not consider CXXFLAGS when it
+# decides whether an existing test binary is up to date.
 SAN_COMMON := -O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
 ASAN_UBSAN := -fsanitize=address,undefined
 TSAN := -fsanitize=thread
@@ -135,10 +135,17 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 # explicit because they are intentionally slower and environment-sensitive.
 test-hpi: test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
-test-hpi-sanitize: test-hpi test-sanitize
+# Always rebuild sanitizer binaries from scratch. ASan/UBSan and TSan are run
+# in separate clean trees because they are not link-compatible with each other.
+test-sanitize:
+	$(MAKE) clean
+	$(MAKE) -B test-direct-media-sanitize
+	$(MAKE) clean
+	$(MAKE) -B test-thread-sanitize
+
+test-hpi-sanitize: test-sanitize
 
 .PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
-test-sanitize: test-direct-media-sanitize test-thread-sanitize
 
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
