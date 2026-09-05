@@ -66,6 +66,8 @@ private:
     ClipboardSender sender_;ClipboardReceiver receiver_;std::mutex mu_;std::optional<std::string>pending_remote_;Clock::time_point next_poll_{};unsigned long generation_=0;bool primed_=false;
 };
 void run_sdl_control(SessionSupervisor&session,VideoPresenter&presenter,ClientClipboardBridge&clipboard){
+    // Restore the former 3200-DPI -> 1000-DPI normalization after the SDL3 migration.
+    (void)SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE,"0.3125");
     HeldInputState held;unsigned long generation=session.control_generation();bool run=true,captured=true;auto size=presenter.window_size();int virtual_x=std::max(0,size.first/2),virtual_y=std::max(0,size.second/2);(void)presenter.set_relative_mouse_mode(true);send_pointer(session,virtual_x,virtual_y,size.first,size.second);
     while(run&&session.running()){
         bool did_work=false;
