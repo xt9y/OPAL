@@ -67,7 +67,10 @@ inline bool capture_tests_available(bool audio=false){
 
 inline std::string lavfi_video_command(int width,int height,int fps,int frames,int gop,bool realtime=false,bool audio=false){
     const auto encoder=ffmpeg_h264_encoder();if(encoder.empty())return{};
-    std::string command="ffmpeg -nostdin -hide_banner -loglevel error ";
+    // These are test fixtures. Tests intentionally close capture pipes early in
+    // several cases, so keep FFmpeg silent rather than printing expected EPIPE
+    // diagnostics after OPAL has already consumed the required media.
+    std::string command="ffmpeg -nostdin -hide_banner -loglevel quiet ";
     if(realtime)command+="-re ";
     command+="-f lavfi -i testsrc=size="+std::to_string(width)+"x"+std::to_string(height)+":rate="+std::to_string(fps)+" ";
     if(audio)command+="-f lavfi -i sine=frequency=440:sample_rate=48000 ";
