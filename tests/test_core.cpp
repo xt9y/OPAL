@@ -1,6 +1,7 @@
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
 #include <opal/media.hpp>
+#include <opal/realtime.hpp>
 #include <opal/wake.hpp>
 #include <cassert>
 #include <cstdlib>
@@ -8,6 +9,14 @@
 #include <iostream>
 
 int main() {
+#if defined(__linux__)
+    const auto timer_slack_before=opal::timer_slack_ns();
+    assert(timer_slack_before>0);
+    assert(opal::set_low_latency_timer_slack(1000));
+    const auto timer_slack_after=opal::timer_slack_ns();
+    assert(timer_slack_after>0&&timer_slack_after<=1000);
+#endif
+
     char t[] = "/tmp/opal-test-XXXXXX";
     char *d = mkdtemp(t);
     assert(d);
