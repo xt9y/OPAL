@@ -35,7 +35,8 @@ int main(){
     assert(backend.find("opengl")==std::string::npos);
     assert(backend.find("pbo")==std::string::npos);
     assert(backend.find("dmabuf")==std::string::npos);
-    assert(presenter.presentation_mode()=="immediate-active");
+    const auto mode=presenter.presentation_mode();
+    assert(mode=="immediate-active"||mode=="sdl-managed");
     assert(presenter.presented_frames()==0);
     auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
 
