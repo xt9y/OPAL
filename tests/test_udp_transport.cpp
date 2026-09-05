@@ -2,12 +2,20 @@
 #include <arpa/inet.h>
 #include <array>
 #include <cassert>
+#include <cerrno>
 #include <cstring>
 #include <string>
 #include <unistd.h>
 #include <vector>
 
 int main(){
+    assert(opal::classify_udp_send_result(4,4,0)==opal::UdpSendResult::Sent);
+    assert(opal::classify_udp_send_result(-1,4,EAGAIN)==opal::UdpSendResult::WouldBlock);
+    assert(opal::classify_udp_send_result(-1,4,EWOULDBLOCK)==opal::UdpSendResult::WouldBlock);
+    assert(opal::classify_udp_send_result(-1,4,ENOBUFS)==opal::UdpSendResult::WouldBlock);
+    assert(opal::classify_udp_send_result(-1,4,ECONNREFUSED)==opal::UdpSendResult::Fatal);
+    assert(opal::classify_udp_send_result(3,4,0)==opal::UdpSendResult::Fatal);
+
     auto a=opal::open_udp_socket();auto b=opal::open_udp_socket();
     assert(a.fd>=0&&a.local_port>0&&b.fd>=0&&b.local_port>0);
 
@@ -25,9 +33,12 @@ int main(){
     sockaddr_storage dst_storage{};socklen_t dst_len=0;
     assert(opal::resolve_udp_endpoint("::1",b.local_port,dst_storage,dst_len));
     const std::vector<std::uint8_t> payload={'O','P','A','L'};
+    assert(opal::send_datagram_result(a.fd,dst_storage,dst_len,payload)==opal::UdpSendResult::Sent);
     assert(opal::send_datagram(a.fd,dst_storage,dst_len,payload));
     std::uint8_t receive[32]{};sockaddr_storage source{};socklen_t source_len=sizeof(source);
     int n=opal::recv_datagram(b.fd,receive,source,source_len,500);
+    assert(n==4&&std::memcmp(receive,payload.data(),4)==0);
+    n=opal::recv_datagram(b.fd,receive,source,source_len,500);
     assert(n==4&&std::memcmp(receive,payload.data(),4)==0);
 
     sockaddr_storage mapped_v4{};socklen_t mapped_v4_len=0;
@@ -52,6 +63,7 @@ int main(){
     }
 
     std::array<std::uint8_t,1> empty_buffer{};
+    assert(opal::send_datagram_result(a.fd,dst_storage,dst_len,std::span<const std::uint8_t>{})==opal::UdpSendResult::Fatal);
     assert(!opal::send_datagram(a.fd,dst_storage,dst_len,std::span<const std::uint8_t>{}));
     sockaddr_storage none{};socklen_t none_len=0;assert(!opal::resolve_udp_endpoint("",1234,none,none_len));assert(!opal::resolve_udp_endpoint("::1",0,none,none_len));
 
