@@ -178,14 +178,17 @@ void run_media_stall_detection(std::uint32_t generation){
 int main(){
     if(!opal_test::capture_tests_available())return 0;
     if(!opal_test::require_linked_h264_decoder())return 0;
+    setenv("OPAL_DECODER","software",1);
     const auto command=opal_test::lavfi_video_command(320,180,60,0,15,true,false);
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
-    run_case(1,false,9);
-    run_case(2,true,10);
-    run_capture_eof_recovery(11);
-    run_idle_keepalive(12);
-    run_media_stall_detection(13);
+    run_case(0,false,9);
+    run_case(1,true,10);
+    run_case(2,true,11);
+    run_capture_eof_recovery(12);
+    run_idle_keepalive(13);
+    run_media_stall_detection(14);
     unsetenv("OPAL_TEST_DROP_FRAGMENTS");
     unsetenv("OPAL_CAPTURE_CMD");
+    unsetenv("OPAL_DECODER");
     return 0;
 }
