@@ -1,4 +1,5 @@
 #include <opal/video_decoder.hpp>
+#include <opal/encoded_buffer_pool.hpp>
 
 #include <climits>
 #include <cstdlib>
@@ -22,7 +23,9 @@ namespace {
 constexpr std::size_t kOwnedPacketPaddingReserve=64;
 static_assert(AV_INPUT_BUFFER_PADDING_SIZE<=kOwnedPacketPaddingReserve);
 void release_owned_packet(void *opaque,std::uint8_t*){
-    delete static_cast<std::shared_ptr<std::vector<std::uint8_t>>*>(opaque);
+    auto *holder=static_cast<std::shared_ptr<std::vector<std::uint8_t>>*>(opaque);
+    auto storage=std::move(*holder);delete holder;
+    if(storage&&storage.use_count()==1)encoded_buffer_pool().release(std::move(*storage));
 }
 }
 
