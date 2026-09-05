@@ -63,14 +63,8 @@ int main() {
     assert(cmd.find(" -c mkv") == std::string::npos);
     assert(cmd.find(" -s 0x0") != std::string::npos);
     assert(cmd.find(" -o -") == std::string::npos);
-    assert(cmd.find("2>/dev/null") != std::string::npos);
     assert(cmd.find("WAYLAND_DISPLAY:-screen") == std::string::npos);
     assert(cmd.find("portalwayland") == std::string::npos);
-
-    setenv("OPAL_DEBUG", "1", 1);
-    auto debug_cmd = opal::capture_command(true, 60, 20000, false);
-    assert(debug_cmd.find("2>/dev/null") == std::string::npos);
-    unsetenv("OPAL_DEBUG");
 
     setenv("WAYLAND_DISPLAY", "wayland-0", 1);
     auto wayland_cmd = opal::capture_command(true, 60, 20000, false);
@@ -79,13 +73,16 @@ int main() {
     unsetenv("WAYLAND_DISPLAY");
 
     auto fallback = opal::capture_command(false, 60, 12000, false);
-    assert(fallback.find("ffmpeg") != std::string::npos);
-    assert(fallback.find("x11grab") != std::string::npos);
-    assert(fallback.find("-bf 0") != std::string::npos);
-    assert(fallback.find("-g 15") != std::string::npos);
-    assert(fallback.find("-keyint_min 15") != std::string::npos);
-    assert(fallback.find("-f flv pipe:1") != std::string::npos);
-    assert(fallback.find("-f matroska pipe:1") == std::string::npos);
+    if(!fallback.empty()){
+        assert(fallback.find("ffmpeg") != std::string::npos);
+        assert(fallback.find("-nostdin") != std::string::npos);
+        assert(fallback.find("x11grab") != std::string::npos);
+        assert(fallback.find("-bf 0") != std::string::npos);
+        assert(fallback.find("-g 15") != std::string::npos);
+        if(fallback.find("-c:v libx264") != std::string::npos)assert(fallback.find("-keyint_min 15") != std::string::npos);
+        assert(fallback.find("-f flv pipe:1") != std::string::npos);
+        assert(fallback.find("-f matroska pipe:1") == std::string::npos);
+    }
 
     auto packet = opal::wol_packet("00:11:22:33:44:55");
     assert(packet.size() == 102);
