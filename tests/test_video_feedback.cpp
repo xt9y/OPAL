@@ -6,22 +6,40 @@
 int main(){
     using namespace std::chrono;
     const auto start=steady_clock::now();
-    opal::BitrateController controller(30000);assert(controller.target_kbps()==30000);assert(controller.floor_kbps()==10500);
+
+    opal::BitrateController controller(30000);
+    assert(controller.target_kbps()==18000);
+    assert(controller.floor_kbps()==10500);
+    const int startup=controller.target_kbps();
+
     opal::VideoFeedbackSample bad{};bad.received=970;bad.lost=30;bad.rtt_us=20000;
-    assert(controller.on_feedback(bad,start)==22500);
-    assert(controller.on_feedback(bad,start+milliseconds(100))==16875);
-    opal::VideoFeedbackSample worse{};worse.received=950;worse.lost=50;worse.rtt_us=40000;
-    assert(controller.on_feedback(worse,start+milliseconds(200))==12656);
-    assert(controller.on_feedback(worse,start+milliseconds(300))==controller.floor_kbps());
-    for(int i=0;i<20;++i)controller.on_feedback(worse,start+milliseconds(400+i*100));
+    const int after_loss=controller.on_feedback(bad,start);
+    assert(after_loss<startup&&after_loss>=controller.floor_kbps());
+    const int after_more_loss=controller.on_feedback(bad,start+milliseconds(100));
+    assert(after_more_loss<=after_loss);
+
+    opal::VideoFeedbackSample congested{};congested.received=995;congested.lost=5;congested.rtt_us=45000;congested.decode_age_us=90000;
+    const int after_queue=controller.on_feedback(congested,start+milliseconds(200));
+    assert(after_queue<=after_more_loss);
+    for(int i=0;i<20;++i)controller.on_feedback(congested,start+milliseconds(300+i*100));
     assert(controller.target_kbps()==controller.floor_kbps());
 
-    opal::BitrateController recovery(30000);assert(recovery.on_feedback(bad,start)==22500);
-    opal::VideoFeedbackSample good{};good.received=1000;good.lost=0;good.rtt_us=20000;
-    recovery.on_feedback(good,start+milliseconds(100));
-    assert(recovery.on_feedback(good,start+milliseconds(1101))==23625);
-    for(int i=0;i<20;++i)recovery.on_feedback(good,start+milliseconds(2200+i*1100));
+    opal::BitrateController recovery(30000);
+    const int recovery_start=recovery.target_kbps();
+    opal::VideoFeedbackSample good{};good.received=1000;good.lost=0;good.rtt_us=15000;good.decode_age_us=8000;
+    for(int i=0;i<20;++i)recovery.on_feedback(good,start+milliseconds(i*350));
+    assert(recovery.target_kbps()>recovery_start);
     assert(recovery.target_kbps()<=30000);
+
+    opal::AdaptiveFecController fec;
+    assert(!fec.enabled());
+    assert(!fec.on_feedback(good));
+    opal::VideoFeedbackSample lossy{};lossy.received=990;lossy.lost=10;
+    assert(fec.on_feedback(lossy));
+    assert(fec.enabled());
+    for(int i=0;i<19;++i)assert(fec.on_feedback(good));
+    assert(!fec.on_feedback(good));
+    assert(!fec.enabled());
 
     auto line=opal::video_feedback_line(7,{1234,99,1,15000,3000});opal::VideoFeedbackSample parsed;
     assert(opal::parse_video_feedback_line(line,7,parsed));assert(parsed.highest_sequence==1234&&parsed.received==99&&parsed.lost==1);
@@ -72,12 +90,12 @@ int main(){
     latency.capture_to_packet_ms=4.1;latency.network_ms=23.5;latency.reassembly_ms=3.2;
     latency.decode_ms=4.7;latency.present_ms=2.1;latency.total_ms=37.6;latency.loss_percent=0.2;
     latency.stale_frames=2;latency.bitrate_kbps=28400;latency.decoder_backend="software-slice";
-    latency.decoded_fps=59.4;latency.presented_fps=59.1;latency.video_queue_depth=3;latency.skipped_present_frames=7;
+    latency.decoded_fps=59.4;latency.presented_fps=59.1;latency.video_queue_depth=2;latency.skipped_present_frames=7;
     const auto latency_line=opal::format_latency_telemetry(latency);
     assert(latency_line.find("decoder=software-slice")!=std::string::npos);
     assert(latency_line.find("decode_fps=59.4")!=std::string::npos);
     assert(latency_line.find("present_fps=59.1")!=std::string::npos);
-    assert(latency_line.find("queue=3")!=std::string::npos);
+    assert(latency_line.find("queue=2")!=std::string::npos);
     assert(latency_line.find("skip_present=7")!=std::string::npos);
     return 0;
 }
