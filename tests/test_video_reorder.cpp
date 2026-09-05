@@ -49,5 +49,12 @@ int main(){
     assert(!false_idr);
     assert(!future_complete);
     assert(reassembler.frames_in_flight()==2);
+
+    assert(reassembler.accept(delayed.back(),out)==opal::ReassemblyStatus::Complete);
+    assert(out.frame_id==201&&!out.keyframe);
+    assert(reassembler.drain(out)==opal::ReassemblyStatus::Complete);
+    assert(out.frame_id==202&&!out.keyframe);
+    assert(reassembler.drain(out)==opal::ReassemblyStatus::Incomplete);
+    assert(reassembler.frames_in_flight()==0);
     return 0;
 }
