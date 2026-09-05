@@ -19,6 +19,8 @@ public:
     bool next(EncodedMediaUnit &unit,int timeout_ms);
     bool ended() const;
     const std::vector<MediaConfig>& configs() const;
+    std::string backend_name() const;
+    bool capture_timestamp_estimated() const;
     void stop();
 private:struct Impl;std::unique_ptr<Impl> impl_;
 };
