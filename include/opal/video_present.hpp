@@ -23,6 +23,7 @@ public:
     std::size_t pending_frame_count() const;
     std::uint64_t presented_frames() const;
     std::string backend_name() const;
+    std::string presentation_mode() const;
     bool is_open() const;
     void close();
     ~VideoPresenter();
