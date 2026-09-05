@@ -4,11 +4,21 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
+#include <string_view>
 #include <sys/stat.h>
 #include <unistd.h>
 
-int main(){
+int main(int argc,char**argv){
+    if(argc==2&&std::string_view(argv[1])=="--check"){
+        const auto encoder=opal_test::ffmpeg_h264_encoder();
+        if(encoder.empty())return 1;
+        std::cout<<encoder<<"\n";
+        return 0;
+    }
+    if(argc!=1)return 2;
+
     char pattern[]="/tmp/opal-ffmpeg-probe-XXXXXX";
     char*dir=mkdtemp(pattern);
     assert(dir);
