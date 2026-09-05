@@ -16,6 +16,7 @@ int main() {
     assert(unit.find("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK")!=std::string::npos);
 
     const auto host=read_all("src/host.cpp");
+    const auto system=read_all("src/system.cpp");
     assert(host.find("Tailscale direct / direct UDP / encrypted relay")!=std::string::npos);
     assert(host.find("local_discovery_loop")!=std::string::npos);
     assert(host.find("local_tailnet_ipv4")!=std::string::npos);
@@ -36,5 +37,22 @@ int main() {
     assert(media_start.find("sender_start_thread=std::thread")!=std::string::npos);
     assert(media_start.find("start_native")!=std::string::npos);
     assert(host.find("if(sender_start_thread.joinable())sender_start_thread.join();sender.stop()")!=std::string::npos);
+
+    // The host service must inherit the interactive graphical session before
+    // restart/start, otherwise SDL clipboard initialization can silently fail
+    // even while PipeWire portal capture still works.
+    assert(system.find("systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XAUTHORITY")!=std::string::npos);
+    assert(system.find("import_graphical_environment()")!=std::string::npos);
+
+    // Clipboard initialization must be retryable at session time instead of a
+    // permanent one-shot decision made when the daemon first launches.
+    const auto clipboard_class=host.find("class HostClipboardBridge");
+    const auto peer_session=host.find("bool run_peer_session",clipboard_class);
+    assert(clipboard_class!=std::string::npos&&peer_session!=std::string::npos&&peer_session>clipboard_class);
+    const auto clipboard_source=host.substr(clipboard_class,peer_session-clipboard_class);
+    assert(clipboard_source.find("ensure_enabled()")!=std::string::npos);
+    assert(clipboard_source.find("SDL_InitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS)")!=std::string::npos);
+    assert(clipboard_source.find("next_init_")!=std::string::npos);
+    assert(host.find("clipboard_enabled=")==std::string::npos);
     return 0;
 }
