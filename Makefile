@@ -10,6 +10,7 @@ FFMPEG_H264_PROBE := (ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=si
 REAL_FFMPEG := $(shell command -v ffmpeg 2>/dev/null)
 INTEGRATION_FFMPEG_DIR := $(BUILD)/integration-bin
 INTEGRATION_FFMPEG := $(INTEGRATION_FFMPEG_DIR)/ffmpeg
+LINKED_CODEC_PROBE := $(BUILD)/test-linked-codec-probe
 
 $(INTEGRATION_FFMPEG): | $(BUILD)
 	mkdir -p "$(INTEGRATION_FFMPEG_DIR)"
@@ -28,6 +29,12 @@ $(INTEGRATION_FFMPEG): | $(BUILD)
 	esac
 	SH
 	chmod +x "$@"
+
+$(LINKED_CODEC_PROBE): tests/test_linked_codec_probe.cpp tests/linked_codec_support.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linked_codec_probe.cpp $(AVLIBS) -o $@
+
+test-linked-codec-probe: $(LINKED_CODEC_PROBE)
+	$(LINKED_CODEC_PROBE)
 
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
@@ -49,7 +56,7 @@ test-capture-probe: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_capture_probe.cpp -o $(BUILD)/test-capture-probe
 	$(BUILD)/test-capture-probe
 
-test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe
+test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe
 
 # Sanitizer targets propagate their flags to their prerequisites. The wrapper
 # below forces clean rebuilds because make does not consider CXXFLAGS when it
@@ -74,11 +81,12 @@ $(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS
 
 # Real kernel networking faults. Missing host tools are reported as an explicit
 # skip; ordinary HPI correctness does not depend on root/network-namespace setup.
-test-netem: $(NETEM_PIPELINE)
+test-netem: $(NETEM_PIPELINE) $(LINKED_CODEC_PROBE)
 	@if ! command -v tc >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/tc (Fedora: sudo dnf install iproute-tc)'; exit 0; fi
 	if ! command -v ip >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/ip'; exit 0; fi
 	if ! command -v timeout >/dev/null 2>&1; then echo 'SKIP test-netem: timeout command unavailable'; exit 0; fi
 	if ! $(FFMPEG_H264_PROBE); then echo 'SKIP test-netem: FFmpeg has no executable libx264/libopenh264 encoder'; exit 0; fi
+	if ! "$(LINKED_CODEC_PROBE)" --check; then echo 'SKIP test-netem: linked libavcodec has no H.264 decoder (Fedora: install RPM Fusion libavcodec-freeworld/ffmpeg-libs)'; exit 0; fi
 	export BIN='$(abspath $(NETEM_PIPELINE))'
 	run_cases='set -eu; \
 		ip link set lo up; \
@@ -100,13 +108,13 @@ test-netem: $(NETEM_PIPELINE)
 	fi
 
 # Repeated real threads, crypto, packetization, reassembly, decode and recovery.
-# If no H.264 encoder is usable, deterministic non-capture stress tests still run.
-test-soak: test-peer-session test-udp-transport test-direct-video-stress test-direct-video-pipeline
+# If encode/decode support is unavailable, deterministic non-capture stress tests still run.
+test-soak: test-peer-session test-udp-transport test-direct-video-stress test-direct-video-pipeline $(LINKED_CODEC_PROBE)
 	@case '$(OPAL_SOAK_SECONDS)' in ''|*[!0-9]*) echo 'OPAL_SOAK_SECONDS must be a positive integer' >&2; exit 2;; esac
 	[ '$(OPAL_SOAK_SECONDS)' -gt 0 ] || { echo 'OPAL_SOAK_SECONDS must be > 0' >&2; exit 2; }
 	start=$$(date +%s); deadline=$$((start + $(OPAL_SOAK_SECONDS))); iterations=0
 	have_pipeline=0
-	if $(FFMPEG_H264_PROBE); then have_pipeline=1; else echo 'SKIP pipeline portion of soak: FFmpeg has no executable libx264/libopenh264 encoder'; fi
+	if $(FFMPEG_H264_PROBE) && "$(LINKED_CODEC_PROBE)" --check; then have_pipeline=1; else echo 'SKIP pipeline portion of soak: usable FFmpeg H.264 encode + linked H.264 decode are required'; fi
 	while [ $$(date +%s) -lt $$deadline ]; do
 		$(BUILD)/test-peer-session
 		$(BUILD)/test-udp-transport
@@ -118,7 +126,7 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 
 # Fast HPI correctness gate. Hostile kernel networking and sanitizers stay
 # explicit because they are intentionally slower and environment-sensitive.
-test-hpi: test-capture-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
+test-hpi: test-capture-probe test-linked-codec-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
 # Always rebuild sanitizer binaries from scratch. ASan/UBSan and TSan are run
 # in separate clean trees because they are not link-compatible with each other.
@@ -130,7 +138,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-input-record test-latency-window test-capture-probe test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
