@@ -139,7 +139,9 @@ bool run_peer_session(UdpSocket socket,const RendezvousIntroduction&intro,const 
             if(sender_start_thread.joinable())sender_start_thread.join();
             const bool audio=host_cfg.get_bool("audio","enabled",true);const auto media_keys=peer_ptr->media_keys();const auto media_session_id=peer_ptr->session_id();
             sender_start_thread=std::thread([&,media_keys,media_session_id,media_generation,stream,audio,debug]{
-                if(!sender_ptr->start_native(media_keys,media_session_id,media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){
+                MediaDatagramBatchSend batch;
+                if(peer_ptr->path_name()!="relay")batch=[peer_ptr](std::span<const std::span<const std::uint8_t>>wires){return peer_ptr->send_media_datagrams(wires);};
+                if(!sender_ptr->start_native(media_keys,media_session_id,media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},std::move(batch),[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){
                     sender_starting.store(false);if(peer_ptr->running())peer_ptr->send_input("MEDIA_ERROR capture-startup");return;
                 }
                 sender_started.store(true);sender_starting.store(false);if(debug)sender_ptr->handle_control_line(debug_media_request_line(media_generation,true));
