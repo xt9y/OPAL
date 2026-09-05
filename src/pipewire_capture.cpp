@@ -1,0 +1,174 @@
+#include <opal/pipewire_capture.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#ifndef OPAL_HAVE_NATIVE_PIPEWIRE
+#define OPAL_HAVE_NATIVE_PIPEWIRE 0
+#endif
+
+#if OPAL_HAVE_NATIVE_PIPEWIRE
+#include <libportal/portal.h>
+#include <pipewire/pipewire.h>
+#include <spa/buffer/meta.h>
+#include <spa/param/video/format-utils.h>
+#include <spa/param/video/raw-utils.h>
+#include <sys/mman.h>
+#include <unistd.h>
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavutil/dict.h>
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+#include <libswscale/swscale.h>
+}
+#endif
+
+namespace opal {
+namespace {
+using Clock=std::chrono::steady_clock;
+std::uint64_t monotonic_us(){return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());}
+}
+
+struct NativePipeWireVideoCapture::Impl {
+    mutable std::mutex mu;
+    std::condition_variable encoded_cv;
+    std::deque<EncodedMediaUnit> encoded;
+    MediaConfig config;
+    std::uint64_t config_rev=0;
+    std::string backend="unavailable",error;
+    std::atomic<bool> run{false},terminal{false};
+    std::thread setup_thread;
+#if OPAL_HAVE_NATIVE_PIPEWIRE
+    struct RawFrame {std::vector<std::uint8_t> pixels;int width=0,height=0,stride=0;AVPixelFormat format=AV_PIX_FMT_NONE;std::uint64_t capture_us=0;};
+    std::condition_variable raw_cv;
+    std::deque<RawFrame> raw_frames;
+    std::thread encoder_thread;
+    std::mutex portal_mu;
+    GCancellable* cancellable=nullptr;
+    spa_video_info_raw raw_info{};
+    int bitrate_kbps=0,fps=60;
+    std::string token_file;
+    pw_stream* stream=nullptr;
+
+    struct PortalWait {GMainLoop* loop=nullptr;XdpSession* session=nullptr;GError* error=nullptr;bool ok=false;};
+    static void created_cb(GObject*source,GAsyncResult*result,gpointer data){auto*s=static_cast<PortalWait*>(data);s->session=xdp_portal_create_screencast_session_finish(XDP_PORTAL(source),result,&s->error);g_main_loop_quit(s->loop);}
+    static void started_cb(GObject*source,GAsyncResult*result,gpointer data){auto*s=static_cast<PortalWait*>(data);s->ok=xdp_session_start_finish(XDP_SESSION(source),result,&s->error);g_main_loop_quit(s->loop);}
+    static AVPixelFormat av_format(std::uint32_t format){switch(format){case SPA_VIDEO_FORMAT_BGRA:return AV_PIX_FMT_BGRA;case SPA_VIDEO_FORMAT_BGRx:return AV_PIX_FMT_BGR0;case SPA_VIDEO_FORMAT_RGBA:return AV_PIX_FMT_RGBA;case SPA_VIDEO_FORMAT_RGBx:return AV_PIX_FMT_RGB0;default:return AV_PIX_FMT_NONE;}}
+    static void stream_state_changed(void*data,pw_stream_state, pw_stream_state state,const char*error){auto*self=static_cast<Impl*>(data);if(state==PW_STREAM_STATE_ERROR||state==PW_STREAM_STATE_UNCONNECTED){std::lock_guard<std::mutex>lock(self->mu);if(self->run.load()){self->error=error&&*error?error:"PipeWire stream disconnected";self->terminal.store(true);self->encoded_cv.notify_all();self->raw_cv.notify_all();}}}
+    static void stream_param_changed(void*data,std::uint32_t id,const spa_pod*param){auto*self=static_cast<Impl*>(data);if(id!=SPA_PARAM_Format||!param)return;spa_video_info_raw info{};if(spa_format_video_raw_parse(param,&info)<0)return;self->raw_info=info;}
+    static void stream_process(void*data){static_cast<Impl*>(data)->capture_latest_buffer();}
+    static pw_stream_events stream_events(){pw_stream_events e{};e.version=PW_VERSION_STREAM_EVENTS;e.state_changed=&Impl::stream_state_changed;e.param_changed=&Impl::stream_param_changed;e.process=&Impl::stream_process;return e;}
+
+    void set_error(std::string text){std::lock_guard<std::mutex>lock(mu);error=std::move(text);terminal.store(true);encoded_cv.notify_all();raw_cv.notify_all();}
+    std::string read_token()const{std::ifstream in(token_file);std::string token;if(in)std::getline(in,token);return token;}
+    void save_token(XdpSession*session){char*token=xdp_session_get_restore_token(session);if(!token||!*token){g_free(token);return;}std::error_code ec;const auto path=std::filesystem::path(token_file);if(!path.parent_path().empty())std::filesystem::create_directories(path.parent_path(),ec);std::ofstream out(token_file,std::ios::trunc);if(out)out<<token<<'\n';g_free(token);}
+
+    void capture_latest_buffer(){
+        if(!stream||!run.load())return;
+        pw_buffer*selected=nullptr;
+        for(;;){pw_buffer*next=pw_stream_dequeue_buffer(stream);if(!next)break;if(selected)pw_stream_queue_buffer(stream,selected);selected=next;}
+        if(!selected)return;
+        spa_buffer*buffer=selected->buffer;
+        if(!buffer||buffer->n_datas==0||raw_info.size.width==0||raw_info.size.height==0){pw_stream_queue_buffer(stream,selected);return;}
+        spa_data&d=buffer->datas[0];if(!d.chunk||d.chunk->stride<=0){pw_stream_queue_buffer(stream,selected);return;}
+        const auto fmt=av_format(raw_info.format);if(fmt==AV_PIX_FMT_NONE){pw_stream_queue_buffer(stream,selected);return;}
+        void*mapping=nullptr;const std::uint8_t*base=nullptr;
+        if(d.data)base=static_cast<const std::uint8_t*>(d.data);
+        else if((d.type==SPA_DATA_MemFd||d.type==SPA_DATA_DmaBuf)&&d.fd>=0){mapping=mmap(nullptr,d.maxsize,PROT_READ,MAP_PRIVATE,static_cast<int>(d.fd),d.mapoffset);if(mapping!=MAP_FAILED)base=static_cast<const std::uint8_t*>(mapping);else mapping=nullptr;}
+        if(!base){pw_stream_queue_buffer(stream,selected);return;}
+        const int width=static_cast<int>(raw_info.size.width),height=static_cast<int>(raw_info.size.height),stride=d.chunk->stride;
+        const std::size_t row_bytes=static_cast<std::size_t>(width)*4u,needed=row_bytes*static_cast<std::size_t>(height);
+        RawFrame frame;{
+            std::lock_guard<std::mutex>lock(mu);
+            if(raw_frames.size()>=2){frame.pixels=std::move(raw_frames.front().pixels);raw_frames.pop_front();}
+        }
+        frame.pixels.resize(needed);frame.width=width;frame.height=height;frame.stride=static_cast<int>(row_bytes);frame.format=fmt;
+        const auto*src=base+d.chunk->offset;for(int y=0;y<height;++y)std::copy_n(src+static_cast<std::ptrdiff_t>(y)*stride,row_bytes,frame.pixels.data()+static_cast<std::size_t>(y)*row_bytes);
+        if(mapping)munmap(mapping,d.maxsize);
+        frame.capture_us=selected->time?selected->time/1000u:monotonic_us();
+        pw_stream_queue_buffer(stream,selected);
+        {std::lock_guard<std::mutex>lock(mu);if(raw_frames.size()>=2)raw_frames.pop_front();raw_frames.push_back(std::move(frame));}
+        raw_cv.notify_one();
+    }
+
+    bool configure_encoder(AVCodecContext*&ctx,AVFrame*&frame,AVPacket*&packet,SwsContext*&sws,const RawFrame&raw){
+        const AVCodec*codec=avcodec_find_encoder_by_name("libx264");if(!codec)codec=avcodec_find_encoder_by_name("libopenh264");if(!codec)codec=avcodec_find_encoder(AV_CODEC_ID_H264);if(!codec){set_error("no in-process H.264 encoder");return false;}
+        ctx=avcodec_alloc_context3(codec);frame=av_frame_alloc();packet=av_packet_alloc();if(!ctx||!frame||!packet){set_error("native encoder allocation failed");return false;}
+        ctx->width=raw.width;ctx->height=raw.height;ctx->pix_fmt=AV_PIX_FMT_YUV420P;ctx->time_base=AVRational{1,std::max(15,fps)};ctx->framerate=AVRational{std::max(15,fps),1};ctx->bit_rate=static_cast<std::int64_t>(std::max(1000,bitrate_kbps))*1000;ctx->gop_size=normal_gop_frames(fps);ctx->max_b_frames=0;ctx->thread_count=1;ctx->flags|=AV_CODEC_FLAG_LOW_DELAY|AV_CODEC_FLAG_GLOBAL_HEADER;
+        AVDictionary*options=nullptr;if(std::string(codec->name)=="libx264"){av_dict_set(&options,"preset","ultrafast",0);av_dict_set(&options,"tune","zerolatency",0);}const int open_rc=avcodec_open2(ctx,codec,&options);av_dict_free(&options);if(open_rc<0){set_error("in-process H.264 encoder open failed");return false;}
+        frame->format=ctx->pix_fmt;frame->width=ctx->width;frame->height=ctx->height;if(av_frame_get_buffer(frame,32)<0){set_error("native encoder frame allocation failed");return false;}
+        sws=sws_getContext(raw.width,raw.height,raw.format,raw.width,raw.height,AV_PIX_FMT_YUV420P,SWS_FAST_BILINEAR,nullptr,nullptr,nullptr);if(!sws){set_error("native colorspace conversion unavailable");return false;}
+        {std::lock_guard<std::mutex>lock(mu);backend=std::string("pipewire-native+")+codec->name;if(ctx->extradata&&ctx->extradata_size>0){config.kind=MediaKind::VideoH264;config.extradata.assign(ctx->extradata,ctx->extradata+ctx->extradata_size);++config_rev;}}
+        return true;
+    }
+
+    void encoder_loop(){
+        AVCodecContext*ctx=nullptr;AVFrame*frame=nullptr;AVPacket*packet=nullptr;SwsContext*sws=nullptr;std::uint64_t frame_index=0;int enc_w=0,enc_h=0;AVPixelFormat enc_input=AV_PIX_FMT_NONE;
+        while(run.load()){
+            RawFrame raw;{std::unique_lock<std::mutex>lock(mu);raw_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||!raw_frames.empty();});if(!run.load())break;if(raw_frames.empty())continue;raw=std::move(raw_frames.back());raw_frames.clear();}
+            if(!ctx||raw.width!=enc_w||raw.height!=enc_h||raw.format!=enc_input){if(sws)sws_freeContext(sws);sws=nullptr;if(ctx)avcodec_free_context(&ctx);if(frame)av_frame_free(&frame);if(packet)av_packet_free(&packet);if(!configure_encoder(ctx,frame,packet,sws,raw))break;enc_w=raw.width;enc_h=raw.height;enc_input=raw.format;frame_index=0;}
+            if(av_frame_make_writable(frame)<0){set_error("native encoder frame not writable");break;}const std::uint8_t*src[4]={raw.pixels.data(),nullptr,nullptr,nullptr};int src_stride[4]={raw.stride,0,0,0};sws_scale(sws,src,src_stride,0,raw.height,frame->data,frame->linesize);frame->pts=static_cast<std::int64_t>(frame_index++);
+            if(avcodec_send_frame(ctx,frame)<0){set_error("native encoder submit failed");break;}
+            for(;;){const int rc=avcodec_receive_packet(ctx,packet);if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF)break;if(rc<0){set_error("native encoder output failed");break;}EncodedMediaUnit unit;unit.kind=MediaKind::VideoH264;unit.data.assign(packet->data,packet->data+packet->size);unit.pts_us=static_cast<std::int64_t>(raw.capture_us);unit.capture_time_us=raw.capture_us;unit.keyframe=(packet->flags&AV_PKT_FLAG_KEY)!=0;av_packet_unref(packet);{std::lock_guard<std::mutex>lock(mu);if(config.extradata.empty()&&ctx->extradata&&ctx->extradata_size>0){config.kind=MediaKind::VideoH264;config.extradata.assign(ctx->extradata,ctx->extradata+ctx->extradata_size);++config_rev;}if(encoded.size()>=2)encoded.pop_front();encoded.push_back(std::move(unit));}encoded_cv.notify_one();}
+        }
+        if(sws)sws_freeContext(sws);if(ctx)avcodec_free_context(&ctx);if(frame)av_frame_free(&frame);if(packet)av_packet_free(&packet);
+    }
+
+    bool open_portal(XdpPortal*&portal,XdpSession*&session,int&remote_fd,std::uint32_t&node_id){
+        portal=xdp_portal_new();if(!portal){set_error("screencast portal unavailable");return false;}GMainLoop*loop=g_main_loop_new(nullptr,false);if(!loop){set_error("GLib main loop unavailable");return false;}GCancellable*cancel=g_cancellable_new();{std::lock_guard<std::mutex>lock(portal_mu);cancellable=cancel;}
+        PortalWait wait;wait.loop=loop;const auto restore=read_token();xdp_portal_create_screencast_session(portal,XDP_OUTPUT_MONITOR,XDP_SCREENCAST_FLAG_NONE,XDP_CURSOR_MODE_EMBEDDED,XDP_PERSIST_MODE_PERSISTENT,restore.empty()?nullptr:restore.c_str(),cancel,&Impl::created_cb,&wait);g_main_loop_run(loop);if(!wait.session){if(wait.error){set_error(wait.error->message);g_error_free(wait.error);}g_main_loop_unref(loop);g_object_unref(cancel);return false;}session=wait.session;wait={};wait.loop=loop;xdp_session_start(session,nullptr,cancel,&Impl::started_cb,&wait);g_main_loop_run(loop);if(!wait.ok){if(wait.error){set_error(wait.error->message);g_error_free(wait.error);}g_main_loop_unref(loop);g_object_unref(cancel);return false;}GVariant*streams=xdp_session_get_streams(session);if(!streams||g_variant_n_children(streams)==0){if(streams)g_variant_unref(streams);set_error("portal returned no PipeWire stream");g_main_loop_unref(loop);g_object_unref(cancel);return false;}GVariant*props=nullptr;g_variant_get_child(streams,0,"(u@a{sv})",&node_id,&props);if(props)g_variant_unref(props);g_variant_unref(streams);remote_fd=xdp_session_open_pipewire_remote(session);if(remote_fd<0){set_error("portal PipeWire remote unavailable");g_main_loop_unref(loop);g_object_unref(cancel);return false;}save_token(session);g_main_loop_unref(loop);{std::lock_guard<std::mutex>lock(portal_mu);cancellable=nullptr;}g_object_unref(cancel);return true;
+    }
+
+    void setup_loop(){
+        XdpPortal*portal=nullptr;XdpSession*session=nullptr;int remote_fd=-1;std::uint32_t node_id=PW_ID_ANY;if(!open_portal(portal,session,remote_fd,node_id)){if(session)g_object_unref(session);if(portal)g_object_unref(portal);return;}
+        pw_init(nullptr,nullptr);pw_thread_loop*loop=pw_thread_loop_new("opal-pipewire",nullptr);pw_context*context=loop?pw_context_new(pw_thread_loop_get_loop(loop),nullptr,0):nullptr;pw_core*core=context?pw_context_connect_fd(context,remote_fd,nullptr,0):nullptr;if(!loop||!context||!core){if(remote_fd>=0&&!core)close(remote_fd);set_error("PipeWire remote connection failed");if(core)pw_core_disconnect(core);if(context)pw_context_destroy(context);if(loop)pw_thread_loop_destroy(loop);xdp_session_close(session);g_object_unref(session);g_object_unref(portal);pw_deinit();return;}
+        stream=pw_stream_new(core,"OPAL native capture",pw_properties_new(PW_KEY_MEDIA_TYPE,"Video",PW_KEY_MEDIA_CATEGORY,"Capture",PW_KEY_MEDIA_ROLE,"Screen",nullptr));static const pw_stream_events events=stream_events();spa_hook listener{};pw_stream_add_listener(stream,&listener,&events,this);
+        std::array<std::uint8_t,1024>pod_buffer{};spa_pod_builder builder=SPA_POD_BUILDER_INIT(pod_buffer.data(),pod_buffer.size());const spa_pod*params[1];const int preferred_w=1920,preferred_h=1080;params[0]=spa_pod_builder_add_object(&builder,SPA_TYPE_OBJECT_Format,SPA_PARAM_EnumFormat,SPA_FORMAT_mediaType,SPA_POD_Id(SPA_MEDIA_TYPE_video),SPA_FORMAT_mediaSubtype,SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),SPA_FORMAT_VIDEO_format,SPA_POD_CHOICE_ENUM_Id(4,SPA_VIDEO_FORMAT_BGRA,SPA_VIDEO_FORMAT_BGRA,SPA_VIDEO_FORMAT_BGRx,SPA_VIDEO_FORMAT_RGBA),SPA_FORMAT_VIDEO_size,SPA_POD_CHOICE_RANGE_Rectangle(&SPA_RECTANGLE(preferred_w,preferred_h),&SPA_RECTANGLE(16,16),&SPA_RECTANGLE(7680,4320)),SPA_FORMAT_VIDEO_framerate,SPA_POD_CHOICE_RANGE_Fraction(&SPA_FRACTION(fps,1),&SPA_FRACTION(1,1),&SPA_FRACTION(240,1)));
+        const int connect_rc=pw_stream_connect(stream,PW_DIRECTION_INPUT,node_id,static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT|PW_STREAM_FLAG_MAP_BUFFERS),params,1);if(connect_rc<0||pw_thread_loop_start(loop)<0){set_error("PipeWire stream connect failed");pw_stream_destroy(stream);stream=nullptr;pw_core_disconnect(core);pw_context_destroy(context);pw_thread_loop_destroy(loop);xdp_session_close(session);g_object_unref(session);g_object_unref(portal);pw_deinit();return;}
+        {std::lock_guard<std::mutex>lock(mu);backend="pipewire-native+starting";}
+        encoder_thread=std::thread([this]{encoder_loop();});
+        while(run.load()&&!terminal.load())std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        run.store(false);raw_cv.notify_all();if(encoder_thread.joinable())encoder_thread.join();pw_thread_loop_stop(loop);pw_stream_destroy(stream);stream=nullptr;pw_core_disconnect(core);pw_context_destroy(context);pw_thread_loop_destroy(loop);xdp_session_close(session);g_object_unref(session);g_object_unref(portal);pw_deinit();terminal.store(true);encoded_cv.notify_all();
+    }
+#endif
+};
+
+NativePipeWireVideoCapture::NativePipeWireVideoCapture():impl_(std::make_unique<Impl>()){}
+NativePipeWireVideoCapture::~NativePipeWireVideoCapture(){stop();}
+
+bool NativePipeWireVideoCapture::compiled(){return OPAL_HAVE_NATIVE_PIPEWIRE!=0;}
+
+bool NativePipeWireVideoCapture::start(const StreamOptions&stream,int bitrate_kbps,const std::string&restore_token_file){
+    stop();impl_=std::make_unique<Impl>();
+#if OPAL_HAVE_NATIVE_PIPEWIRE
+    impl_->bitrate_kbps=std::max(1000,bitrate_kbps);impl_->fps=std::clamp(stream.fps,15,240);impl_->token_file=restore_token_file;impl_->run.store(true);impl_->terminal.store(false);impl_->backend="pipewire-native+initializing";impl_->setup_thread=std::thread([this]{impl_->setup_loop();});return true;
+#else
+    (void)stream;(void)bitrate_kbps;(void)restore_token_file;impl_->error="native PipeWire capture not compiled";impl_->terminal.store(true);return false;
+#endif
+}
+
+bool NativePipeWireVideoCapture::next(EncodedMediaUnit&unit,int timeout_ms){if(!impl_)return false;std::unique_lock<std::mutex>lock(impl_->mu);impl_->encoded_cv.wait_for(lock,std::chrono::milliseconds(std::max(0,timeout_ms)),[&]{return !impl_->encoded.empty()||impl_->terminal.load()||!impl_->run.load();});if(impl_->encoded.empty())return false;unit=std::move(impl_->encoded.back());impl_->encoded.clear();return !unit.data.empty();}
+bool NativePipeWireVideoCapture::ended()const{return !impl_||impl_->terminal.load();}
+std::uint64_t NativePipeWireVideoCapture::config_revision()const{if(!impl_)return 0;std::lock_guard<std::mutex>lock(impl_->mu);return impl_->config_rev;}
+MediaConfig NativePipeWireVideoCapture::config()const{if(!impl_)return{};std::lock_guard<std::mutex>lock(impl_->mu);return impl_->config;}
+std::string NativePipeWireVideoCapture::backend_name()const{if(!impl_)return"unavailable";std::lock_guard<std::mutex>lock(impl_->mu);return impl_->backend;}
+std::string NativePipeWireVideoCapture::last_error()const{if(!impl_)return"native capture unavailable";std::lock_guard<std::mutex>lock(impl_->mu);return impl_->error;}
+void NativePipeWireVideoCapture::stop(){if(!impl_)return;impl_->run.store(false);impl_->encoded_cv.notify_all();
+#if OPAL_HAVE_NATIVE_PIPEWIRE
+    impl_->raw_cv.notify_all();{std::lock_guard<std::mutex>lock(impl_->portal_mu);if(impl_->cancellable)g_cancellable_cancel(impl_->cancellable);}if(impl_->setup_thread.joinable())impl_->setup_thread.join();if(impl_->encoder_thread.joinable())impl_->encoder_thread.join();
+#endif
+    std::lock_guard<std::mutex>lock(impl_->mu);impl_->encoded.clear();impl_->config={};impl_->config_rev=0;impl_->terminal.store(false);impl_->backend="unavailable";impl_->error.clear();}
+
+}
