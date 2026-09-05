@@ -7,6 +7,8 @@
 
 namespace opal {
 
+constexpr std::uint64_t pacer_sleep_slice_us(std::uint64_t wait_us){return wait_us>250?250:wait_us;}
+
 class MediaTokenBucket {
 public:
     void reset(double capacity_bytes,std::uint64_t now_us){

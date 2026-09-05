@@ -4,6 +4,12 @@
 #include <cstdint>
 
 int main(){
+    assert(opal::pacer_sleep_slice_us(0)==0);
+    assert(opal::pacer_sleep_slice_us(1)==1);
+    assert(opal::pacer_sleep_slice_us(24)==24);
+    assert(opal::pacer_sleep_slice_us(250)==250);
+    assert(opal::pacer_sleep_slice_us(1000)==250);
+
     opal::MediaTokenBucket pacer;
     pacer.reset(1200.0,1000000);
     assert(pacer.reserve_or_delay_us(1200,1200.0,8000,1000000)==0);
