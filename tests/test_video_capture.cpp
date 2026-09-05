@@ -1,5 +1,6 @@
 #include <opal/video_capture.hpp>
 #include <opal/media.hpp>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
