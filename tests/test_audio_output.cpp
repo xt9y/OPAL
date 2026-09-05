@@ -6,10 +6,10 @@
 
 int main(){
     if(!opal_test::capture_tests_available(true))return 0;
-    const auto command=opal_test::lavfi_video_command(160,90,30,30,8,false,true);
+    const auto command=opal_test::lavfi_video_command(320,180,30,30,8,false,true);
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
     opal::VideoCapture capture;
-    assert(capture.start({160,90,30},4000,true,""));
+    assert(capture.start({320,180,30},4000,true,""));
 
     opal::EncodedMediaUnit unit,last_audio;
     const opal::MediaConfig*aac_config=nullptr;
