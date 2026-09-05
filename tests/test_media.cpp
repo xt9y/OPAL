@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cerrno>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <fcntl.h>
 #include <fstream>
