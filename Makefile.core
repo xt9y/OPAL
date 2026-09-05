@@ -8,13 +8,15 @@ PKG_CONFIG ?= pkg-config
 AV_PKGS := libavformat libavcodec libavutil
 FFMPEG_PKGS := $(AV_PKGS) libswresample
 FFMPEG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(FFMPEG_PKGS) 2>/dev/null)
+SDL3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3 2>/dev/null)
+SDL3_LIBS := $(shell $(PKG_CONFIG) --libs sdl3 2>/dev/null)
 AVLIBS := $(shell $(PKG_CONFIG) --libs $(AV_PKGS) 2>/dev/null)
 SWRLIBS := $(shell $(PKG_CONFIG) --libs libswresample 2>/dev/null)
-CPPFLAGS += -Iinclude $(FFMPEG_CFLAGS)
+CPPFLAGS += -Iinclude $(FFMPEG_CFLAGS) $(SDL3_CFLAGS)
 AUDIOLIBS := $(SWRLIBS) -lpulse-simple -lpulse
 GLLIBS := -lGL
 NATIVE_MEDIA_LIBS := $(AVLIBS) $(AUDIOLIBS) $(GLLIBS)
-LDLIBS += -lcrypto -lX11 -lXi -lpthread $(NATIVE_MEDIA_LIBS)
+LDLIBS += -lcrypto -lpthread $(NATIVE_MEDIA_LIBS) $(SDL3_LIBS)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 LIBEXECDIR ?= $(PREFIX)/libexec/opal
@@ -53,9 +55,10 @@ CORE_SRCS := src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp
 INPUT_SRCS := src/input.cpp
 DIRECT_MEDIA_BASE_SRCS := $(UDP_TRANSPORT_SRCS) $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS)
 DIRECT_MEDIA_COMMON_SRCS := $(VIDEO_FEEDBACK_SRCS)
-DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(VIDEO_PRESENT_SRCS) $(AUDIO_OUTPUT_SRCS)
+DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(AUDIO_OUTPUT_SRCS)
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
-DIRECT_MEDIA_SRCS := $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS)
+DIRECT_PRESENT_SRCS := $(VIDEO_PRESENT_SRCS)
+DIRECT_MEDIA_SRCS := $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) $(DIRECT_PRESENT_SRCS)
 NATIVE_CONTROL_SRCS := $(RENDEZVOUS_PROTOCOL_SRCS) $(RENDEZVOUS_CLIENT_SRCS) $(LOCAL_DISCOVERY_SRCS) $(RELAY_SRCS) $(PEER_HANDSHAKE_SRCS) $(SESSION_PACKET_SRCS) $(RELIABLE_CONTROL_SRCS) $(PEER_SESSION_SRCS)
 APP_SRCS := src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp $(CORE_SRCS) $(PROFILE_SRCS) $(DIRECT_MEDIA_SRCS) $(NATIVE_CONTROL_SRCS) $(INPUT_SRCS)
 MEDIA_TEST_TARGETS := test-video-capture test-video-decoder test-video-present test-audio-output test-direct-video-pipeline
@@ -67,7 +70,7 @@ $(BUILD):
 
 deps-check:
 	@PKG_CONFIG_BIN='$(PKG_CONFIG)'
-	REQUIRED_PKGS='openssl x11 xi gl libpulse-simple libavformat libavcodec libavutil libswresample'
+	REQUIRED_PKGS='openssl sdl3 gl libpulse-simple libavformat libavcodec libavutil libswresample'
 	if ! command -v "$$PKG_CONFIG_BIN" >/dev/null 2>&1; then
 		echo 'OPAL build dependency check failed: pkg-config is not installed.' >&2
 		missing=pkg-config
@@ -82,10 +85,10 @@ deps-check:
 		id=''; like=''
 		if [ -r /etc/os-release ]; then . /etc/os-release; id=$${ID:-}; like=$${ID_LIKE:-}; fi
 		case "$$id $$like" in
-			*fedora*|*rhel*) echo 'Install: sudo dnf install -y gcc-c++ make pkgconf-pkg-config openssl-devel libX11-devel libXi-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel' >&2 ;;
-			*debian*|*ubuntu*) echo 'Install: sudo apt-get install -y g++ make pkg-config libssl-dev libx11-dev libxi-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev' >&2 ;;
-			*arch*) echo 'Install: sudo pacman -S --needed base-devel pkgconf openssl libx11 libxi libglvnd libpulse ffmpeg' >&2 ;;
-			*) echo 'Install a C++20 compiler, pkg-config, OpenSSL/X11/XInput/GL/PulseAudio development files, and FFmpeg development files.' >&2 ;;
+			*fedora*|*rhel*) echo 'Install: sudo dnf install -y gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel' >&2 ;;
+			*debian*|*ubuntu*) echo 'Install: sudo apt-get install -y g++ make pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev' >&2 ;;
+			*arch*) echo 'Install: sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg' >&2 ;;
+			*) echo 'Install a C++20 compiler, pkg-config, SDL3, OpenSSL, OpenGL, PulseAudio client libraries, and FFmpeg development files.' >&2 ;;
 		esac
 		exit 1
 	fi
@@ -140,7 +143,7 @@ test-video-decoder: | $(BUILD)
 	$(BUILD)/test-video-decoder
 
 test-video-present: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil -lX11 $(GLLIBS) -o $(BUILD)/test-video-present
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
 	$(BUILD)/test-video-present
 
 test-audio-output: | $(BUILD)
@@ -156,7 +159,7 @@ test-video-receiver-architecture: | $(BUILD)
 	$(BUILD)/test-video-receiver-architecture
 
 test-direct-video-pipeline: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto -lX11 -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-direct-video-pipeline
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto -lpthread $(NATIVE_MEDIA_LIBS) -o $(BUILD)/test-direct-video-pipeline
 	$(BUILD)/test-direct-video-pipeline
 
 test-direct-video-stress: | $(BUILD)
@@ -411,7 +414,8 @@ test-smoke: all
 	echo 'smoke tests passed'
 
 test-integration: all rendezvous-server
-	@BIN='$(abspath $(PRODUCT))'; INPUT_BIN='$(abspath $(INPUT))'; RENDEZVOUS_BIN='$(abspath $(RENDEZVOUS_SERVER))'
+	@if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$$)'; then echo 'SKIP test-integration: FFmpeg libx264 encoder unavailable'; exit 0; fi
+	BIN='$(abspath $(PRODUCT))'; INPUT_BIN='$(abspath $(INPUT))'; RENDEZVOUS_BIN='$(abspath $(RENDEZVOUS_SERVER))'
 	base=$$(mktemp -d); hp=''; cp=''; rp=''
 	trap 'test -n "$$cp" && kill "$$cp" 2>/dev/null || true; test -n "$$hp" && kill "$$hp" 2>/dev/null || true; test -n "$$rp" && kill "$$rp" 2>/dev/null || true; rm -rf "$$base"' EXIT
 	server="$$base/server"; client="$$base/client"; mkdir -p "$$base/bin"
