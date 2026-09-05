@@ -6,6 +6,18 @@ int main() {
     assert(d.max_width==1920);
     assert(d.max_height==1080);
     assert(d.fps==60);
+    assert(d.automatic_fps);
+
+    assert(opal::automatic_stream_fps(0,0)==60);
+    assert(opal::automatic_stream_fps(60,240)==60);
+    assert(opal::automatic_stream_fps(75,240)==60);
+    assert(opal::automatic_stream_fps(90,240)==90);
+    assert(opal::automatic_stream_fps(120,240)==120);
+    assert(opal::automatic_stream_fps(144,240)==144);
+    assert(opal::automatic_stream_fps(165,240)==165);
+    assert(opal::automatic_stream_fps(240,240)==240);
+    assert(opal::automatic_stream_fps(165,120)==120);
+    assert(opal::automatic_stream_fps(144,90)==90);
 
     int w=-1,h=-1;
     assert(opal::stream_mode_limit("max",w,h)&&w==0&&h==0);
