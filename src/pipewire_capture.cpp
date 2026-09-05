@@ -1,6 +1,7 @@
 #include <opal/pipewire_capture.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -25,7 +26,6 @@
 #include <spa/buffer/buffer.h>
 #include <spa/buffer/meta.h>
 #include <spa/param/buffers.h>
-#include <spa/param/meta.h>
 #include <spa/param/video/format-utils.h>
 #include <spa/param/video/raw-utils.h>
 #include <sys/mman.h>
