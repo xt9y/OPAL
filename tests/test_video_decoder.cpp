@@ -21,13 +21,23 @@ int main(){
     assert(capture_started);
     opal::VideoDecoder decoder;
     bool configured=false;
-    for(const auto&config:capture.configs())if(config.kind==opal::MediaKind::VideoH264){assert(decoder.configure_h264(config.extradata));configured=true;}
+    opal::EncodedMediaUnit unit;
+    for(int attempt=0;attempt<20&&!configured;++attempt){
+        (void)capture.next(unit,500);
+        for(const auto&config:capture.configs()){
+            if(config.kind!=opal::MediaKind::VideoH264)continue;
+            assert(decoder.configure_h264(config.extradata));
+            configured=true;
+            break;
+        }
+        if(capture.ended())break;
+    }
     assert(configured);
+    assert(capture.config_revision()>0);
     assert(decoder.backend_name().rfind("software",0)==0);
 
     int encoded=0,decoded=0,owned_packets=0;
     std::size_t superseded_total=0;
-    opal::EncodedMediaUnit unit;
     while(encoded<6){
         if(!capture.next(unit,1000))break;
         if(unit.kind!=opal::MediaKind::VideoH264)continue;
