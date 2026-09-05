@@ -56,6 +56,26 @@ test-direct-video-pipeline: | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto -lpthread $(AVLIBS) $(AUDIOLIBS) $(GLLIBS) -o $(BUILD)/test-direct-video-pipeline
 	$(BUILD)/test-direct-video-pipeline
 
+# The core target used to be a dependency-only label. Target-specific variables
+# propagate to its prerequisites, so every direct-media test is now rebuilt and
+# linked with the actual sanitizers.
+SAN_COMMON := -O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
+ASAN_UBSAN := -fsanitize=address,undefined
+TSAN := -fsanitize=thread
+
+test-direct-media-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic $(SAN_COMMON) $(ASAN_UBSAN)
+test-direct-media-sanitize: LDFLAGS += $(ASAN_UBSAN)
+test-direct-media-sanitize: export ASAN_OPTIONS := detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+test-direct-media-sanitize: export UBSAN_OPTIONS := print_stacktrace=1:halt_on_error=1
+
+test-thread-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic $(SAN_COMMON) $(TSAN)
+test-thread-sanitize: LDFLAGS += $(TSAN)
+test-thread-sanitize: export TSAN_OPTIONS := halt_on_error=1:history_size=7
+test-thread-sanitize: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
+
+.PHONY: test-thread-sanitize test-sanitize
+test-sanitize: test-direct-media-sanitize test-thread-sanitize
+
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
 # acceptance on Wayland/X11.
