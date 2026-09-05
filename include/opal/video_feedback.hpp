@@ -54,7 +54,7 @@ struct HostMediaDebugSample {
     std::uint64_t frame_id=0,frame_bytes=0,stale_frames=0,idr_requests=0,restarts=0;
     std::uint32_t data_fragments=0,fec_fragments=0,send_span_us=0,capture_to_packet_us=0;
     int target_kbps=0,active_kbps=0;
-    bool chain_valid=false;
+    bool chain_valid=false,capture_timestamp_exact=false;
     std::string restart_reason="none";
 };
 std::string host_media_debug_line(std::uint32_t generation,const HostMediaDebugSample&);
@@ -68,6 +68,7 @@ struct LatencyTelemetry {
     std::uint64_t stale_frames=0,skipped_present_frames=0;
     std::uint32_t video_queue_depth=0;
     int bitrate_kbps=0;
+    bool capture_timestamp_exact=false;
     std::string decoder_backend="unconfigured";
 };
 std::string format_latency_telemetry(const LatencyTelemetry&);
