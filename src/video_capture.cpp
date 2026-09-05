@@ -100,7 +100,7 @@ bool VideoCapture::start(const StreamOptions&stream,int bitrate_kbps,bool audio,
 
     impl_->capture=start_capture(command);
     if(impl_->capture.pid<=0||impl_->capture.fd<0)return fail("capture process did not start");
-    if(debug_enabled())std::cerr<<"OPAL capture backend="<<impl_->backend<<" acquisition_timestamp=estimated demux=native-flv startup=async\n";
+    if(debug_enabled())std::cerr<<"OPAL capture backend="<<impl_->backend<<" acquisition_timestamp="<<capture_timestamp_quality_name(capture_timestamp_quality())<<" demux=native-flv startup=async\n";
     return true;
 }
 
@@ -154,7 +154,8 @@ const std::vector<MediaConfig>&VideoCapture::configs()const{static const std::ve
 std::uint64_t VideoCapture::config_revision()const{return impl_?impl_->config_revision:0;}
 std::string VideoCapture::backend_name()const{return impl_?impl_->backend:"unavailable";}
 std::string VideoCapture::last_error()const{return impl_?impl_->error:"capture unavailable";}
-bool VideoCapture::capture_timestamp_estimated()const{return !impl_||impl_->timestamp_estimated;}
+CaptureTimestampQuality VideoCapture::capture_timestamp_quality()const{return impl_&&!impl_->timestamp_estimated?CaptureTimestampQuality::Exact:CaptureTimestampQuality::Estimated;}
+bool VideoCapture::capture_timestamp_estimated()const{return capture_timestamp_quality()==CaptureTimestampQuality::Estimated;}
 
 void VideoCapture::stop(){
     if(!impl_)return;
