@@ -63,7 +63,9 @@ public:
     void detach(PeerSession*peer){attached_.store(false);{std::lock_guard<std::mutex>lock(peer_mu_);if(peer_==peer)peer_=nullptr;}{std::lock_guard<std::mutex>lock(receive_mu_);receiver_.reset();pending_remote_.reset();}}
     void receive_control(const std::string&line){if(!attached_.load())return;std::lock_guard<std::mutex>lock(receive_mu_);std::string completed;const auto status=receiver_.receive(line,completed);if(status==ClipboardReceiveStatus::Complete)pending_remote_=std::move(completed);}
     void pump(){
-        if(!ensure_enabled())return;const auto epoch=transport_epoch_.load();const auto now=Clock::now();
+        if(!ensure_enabled())return;
+        const auto epoch=transport_epoch_.load();
+        const auto now=Clock::now();
         if(wayland_native_)poll_wayland();else SDL_PumpEvents();
         if(!primed_){std::string local;if(read_local(local)){sender_.prime_local(local);primed_=true;seen_epoch_=epoch;}next_poll_=now+std::chrono::milliseconds(100);}
         else if(epoch!=seen_epoch_){sender_.restart_transport();seen_epoch_=epoch;}
@@ -75,12 +77,18 @@ public:
 private:
     bool wayland_available()const{const char*w=std::getenv("WAYLAND_DISPLAY");return w&&*w&&command_exists("wl-paste")&&command_exists("wl-copy");}
     bool ensure_watch(){
-        if(watch_.pid>0&&watch_.fd>=0)return true;const auto now=Clock::now();if(next_watch_retry_.time_since_epoch().count()!=0&&now<next_watch_retry_)return false;
+        if(watch_.pid>0&&watch_.fd>=0)return true;
+        const auto now=Clock::now();
+        if(next_watch_retry_.time_since_epoch().count()!=0&&now<next_watch_retry_)return false;
         watch_=start_capture("wl-paste --type text --watch sh -c 'cat; printf \\\"\\\\0\\\"'");
-        if(watch_.pid>0&&watch_.fd>=0)return true;next_watch_retry_=now+std::chrono::seconds(1);if(debug_enabled())std::cerr<<"OPAL clipboard Wayland watch failed\n";return false;
+        if(watch_.pid>0&&watch_.fd>=0)return true;
+        next_watch_retry_=now+std::chrono::seconds(1);
+        if(debug_enabled())std::cerr<<"OPAL clipboard Wayland watch failed\n";
+        return false;
     }
     void poll_wayland(){
-        if(!ensure_watch())return;char bytes[4096];
+        if(!ensure_watch())return;
+        char bytes[4096];
         for(int i=0;i<8;++i){
             const int n=read_capture(watch_,bytes,sizeof(bytes),0);if(n==-2)break;if(n<=0){stop_capture(watch_);next_watch_retry_=Clock::now()+std::chrono::seconds(1);break;}
             watch_buffer_.append(bytes,static_cast<std::size_t>(n));
@@ -92,12 +100,20 @@ private:
         FILE*f=popen("wl-paste -n --type text 2>/dev/null","r");if(!f)return false;std::string out;char bytes[4096];while(out.size()<=kClipboardMaxBytes){const auto n=fread(bytes,1,sizeof(bytes),f);if(n)out.append(bytes,n);if(n<sizeof(bytes))break;}const int rc=pclose(f);if(rc!=0||out.size()>kClipboardMaxBytes)return false;text=std::move(out);return true;
     }
     bool write_wayland(std::string_view text){
-        if(text.empty())return std::system("wl-copy --clear >/dev/null 2>&1")==0;FILE*f=popen("wl-copy --type text/plain;charset=utf-8","w");if(!f)return false;const auto n=fwrite(text.data(),1,text.size(),f);const int rc=pclose(f);return n==text.size()&&rc==0;
+        if(text.empty())return std::system("wl-copy --clear >/dev/null 2>&1")==0;
+        FILE*f=popen("wl-copy --type text/plain;charset=utf-8","w");
+        if(!f)return false;
+        const auto n=fwrite(text.data(),1,text.size(),f);
+        const int rc=pclose(f);
+        return n==text.size()&&rc==0;
     }
     bool read_local(std::string&text){return wayland_native_?read_wayland(text):read_sdl_clipboard(text);}
     bool write_local(std::string_view text){if(wayland_native_)return write_wayland(text);return SDL_SetClipboardText(std::string(text).c_str());}
     bool ensure_enabled(){
-        if(!allowed_)return false;if(enabled_)return true;const auto now=Clock::now();if(next_init_.time_since_epoch().count()!=0&&now<next_init_)return false;
+        if(!allowed_)return false;
+        if(enabled_)return true;
+        const auto now=Clock::now();
+        if(next_init_.time_since_epoch().count()!=0&&now<next_init_)return false;
         if(wayland_available()){
             wayland_native_=true;enabled_=true;init_error_logged_=false;ensure_watch();if(debug_enabled())std::cerr<<"OPAL clipboard backend=wayland-native\n";return true;
         }
