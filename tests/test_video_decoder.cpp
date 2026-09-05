@@ -34,7 +34,7 @@ int main(){
     }
     assert(configured);
     assert(capture.config_revision()>0);
-    assert(decoder.backend_name().rfind("software",0)==0);
+    assert(decoder.backend_name()=="software-slice2"||decoder.backend_name()=="software-lowdelay");
 
     int encoded=0,decoded=0,owned_packets=0;
     std::size_t superseded_total=0;
