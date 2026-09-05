@@ -35,6 +35,10 @@ int main() {
     assert(opal::normal_gop_frames(120)==30);
     assert(opal::normal_gop_frames(15)==4);
     assert(opal::normal_gop_frames(240)==60);
+    assert(opal::low_latency_h264_slices(640,360)==1);
+    assert(opal::low_latency_h264_slices(1280,720)==2);
+    assert(opal::low_latency_h264_slices(1920,1080)==2);
+    assert(opal::low_latency_h264_slices(3840,2160)==2);
 
     constexpr std::uint64_t eight_datagrams=8*1200;
     assert(opal::sender_burst_budget_bytes(30000,60,true)==eight_datagrams);
