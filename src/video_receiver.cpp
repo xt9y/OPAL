@@ -228,7 +228,8 @@ struct VideoReceiver::Impl{
     bool recover_stall(){
         const auto last=last_video_us.load();const auto now=monotonic_us();
         if(!media.load()||!last||now<=last+kMediaStallRecoveryUs)return true;
-        if(now>=last+kMediaStallFailureUs){fail(VideoReceiverFailure::MediaStall);return false;}
+        const auto last_media=last_media_us.load();
+        if(now>=last+kMediaStallFailureUs&&(!last_media||now>=last_media+kMediaStallFailureUs)){fail(VideoReceiverFailure::MediaStall);return false;}
         const auto previous_recovery=last_stall_recovery_us.load();
         if(previous_recovery&&now<previous_recovery+kMediaStallRecoveryUs)return true;
         const auto attempt=stall_recoveries.fetch_add(1)+1;
@@ -242,7 +243,8 @@ struct VideoReceiver::Impl{
         }
         stall_reset_requested.store(true);audio_reset_requested.store(true);last_stall_recovery_us.store(now);media_cv.notify_one();
         request_idr_control("reassembly-loss");
-        if(debug_enabled())std::cerr<<"OPAL media stall local-recovery attempt="<<attempt<<" silence="<<static_cast<double>(now-last)/1000.0<<"ms hard_fail="<<static_cast<double>(kMediaStallFailureUs)/1000.0<<"ms\n";
+        const double media_silence_ms=last_media&&now>last_media?static_cast<double>(now-last_media)/1000.0:0.0;
+        if(debug_enabled())std::cerr<<"OPAL media stall local-recovery attempt="<<attempt<<" video_silence="<<static_cast<double>(now-last)/1000.0<<"ms media_silence="<<media_silence_ms<<"ms hard_fail="<<static_cast<double>(kMediaStallFailureUs)/1000.0<<"ms\n";
         return true;
     }
 
