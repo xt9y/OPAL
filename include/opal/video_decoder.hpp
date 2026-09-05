@@ -30,6 +30,8 @@ public:
     bool configure_h264(std::span<const std::uint8_t> extradata);
     bool decode_latest(std::span<const std::uint8_t> unit,std::int64_t pts_us,
                        DecodedVideoView &out,std::size_t &superseded);
+    bool decode_latest_owned(std::vector<std::uint8_t> unit,std::int64_t pts_us,
+                             DecodedVideoView &out,std::size_t &superseded);
     bool take_latest(DecodedVideoFrame& out);
     bool decode(std::span<const std::uint8_t> unit,std::int64_t pts_us,
                 std::vector<DecodedVideoFrame>& out);
