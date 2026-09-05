@@ -10,6 +10,7 @@ constexpr std::size_t kMaxFlvTagBytes=16u*1024u*1024u;
 std::uint32_t be24(const std::uint8_t* p){return (std::uint32_t(p[0])<<16)|(std::uint32_t(p[1])<<8)|p[2];}
 std::uint32_t be32(const std::uint8_t* p){return (std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)|(std::uint32_t(p[2])<<8)|p[3];}
 std::int32_t signed24(const std::uint8_t* p){std::uint32_t value=be24(p);if(value&0x800000u)value|=0xff000000u;return static_cast<std::int32_t>(value);}
+bool fourcc(const std::uint8_t* p,char a,char b,char c,char d){return p[0]==static_cast<std::uint8_t>(a)&&p[1]==static_cast<std::uint8_t>(b)&&p[2]==static_cast<std::uint8_t>(c)&&p[3]==static_cast<std::uint8_t>(d);}
 
 class BitReader {
 public:
@@ -83,7 +84,7 @@ FlvEvent FlvStreamParser::next(){
     for(;;){
         if(buffer_.size()-offset_<11)return event;
         const auto* header=buffer_.data()+offset_;
-        const std::uint8_t tag_type=header[0];
+        const std::uint8_t tag_type=header[0]&0x1f;
         const std::uint32_t payload_size=be24(header+1);
         if(payload_size>kMaxFlvTagBytes){fail("FLV tag exceeds limit");event.type=FlvEventType::Invalid;return event;}
         const std::size_t total=11u+payload_size+4u;
@@ -94,9 +95,32 @@ FlvEvent FlvStreamParser::next(){
         offset_+=total;
 
         if(tag_type==9){
+            if(payload_size<1)continue;
+            const std::uint8_t flags=payload[0];
+            const int frame_type=(flags&0x70)>>4;
+            if((flags&0x80)!=0){
+                const std::uint8_t packet_type=flags&0x0f;
+                if(packet_type==6||payload_size<5||!fourcc(payload+1,'a','v','c','1'))continue;
+                std::size_t pos=5;
+                if(packet_type==0){
+                    const auto body=std::span<const std::uint8_t>(payload+pos,payload_size-pos);
+                    if(body.empty()){fail("empty enhanced AVC configuration");event.type=FlvEventType::Invalid;return event;}
+                    event.type=FlvEventType::VideoConfig;event.data=body;return event;
+                }
+                std::int64_t composition_us=0;
+                if(packet_type==1){
+                    if(payload_size<pos+3)continue;
+                    composition_us=static_cast<std::int64_t>(signed24(payload+pos))*1000;
+                    pos+=3;
+                }else if(packet_type!=3)continue;
+                const auto body=std::span<const std::uint8_t>(payload+pos,payload_size-pos);
+                if(body.empty())continue;
+                const std::int64_t dts=static_cast<std::int64_t>(timestamp)*1000;
+                event.type=FlvEventType::Video;event.data=body;event.dts_us=dts;event.pts_us=dts+composition_us;event.keyframe=frame_type==1;return event;
+            }
+
             if(payload_size<5)continue;
-            const int frame_type=payload[0]>>4;
-            const int codec=payload[0]&0x0f;
+            const int codec=flags&0x0f;
             if(codec!=7)continue;
             const std::uint8_t packet_type=payload[1];
             const auto body=std::span<const std::uint8_t>(payload+5,payload_size-5);
@@ -107,8 +131,17 @@ FlvEvent FlvStreamParser::next(){
         }
 
         if(tag_type==8){
-            if(payload_size<2)continue;
-            if((payload[0]>>4)!=10)continue;
+            if(payload_size<1)continue;
+            if((payload[0]&0xf0)==0x90){
+                const std::uint8_t packet_type=payload[0]&0x0f;
+                if(packet_type==5||payload_size<5||!fourcc(payload+1,'m','p','4','a'))continue;
+                const auto body=std::span<const std::uint8_t>(payload+5,payload_size-5);
+                if(packet_type==0){if(body.empty()||!parse_aac_config(body,event.sample_rate,event.channels)){fail("invalid enhanced AAC configuration");event.type=FlvEventType::Invalid;return event;}event.type=FlvEventType::AudioConfig;event.data=body;return event;}
+                if(packet_type!=1||body.empty())continue;
+                event.type=FlvEventType::Audio;event.data=body;event.pts_us=event.dts_us=static_cast<std::int64_t>(timestamp)*1000;return event;
+            }
+
+            if(payload_size<2||(payload[0]>>4)!=10)continue;
             const std::uint8_t packet_type=payload[1];
             const auto body=std::span<const std::uint8_t>(payload+2,payload_size-2);
             if(packet_type==0){if(body.empty()||!parse_aac_config(body,event.sample_rate,event.channels)){fail("invalid AAC configuration");event.type=FlvEventType::Invalid;return event;}event.type=FlvEventType::AudioConfig;event.data=body;return event;}
