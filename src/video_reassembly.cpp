@@ -81,6 +81,13 @@ struct VideoReassembler::Impl{
     std::size_t count()const{std::size_t result=0;for(const auto&frame:frames)if(frame.active)++result;return result;}
     Frame*free_slot(){for(auto&frame:frames)if(!frame.active)return &frame;return nullptr;}
     Frame*oldest(){Frame*victim=nullptr;for(auto&frame:frames)if(frame.active&&(!victim||frame.order<victim->order))victim=&frame;return victim;}
+    bool has_inflight_keyframe_before(std::uint64_t id)const{
+        for(const auto&frame:frames){
+            if(!frame.active||frame.id>=id||!frame.type_known||frame.type!=VideoMediaType::VideoH264)continue;
+            if((frame.flags&FrameKeyframe)!=0)return true;
+        }
+        return false;
+    }
 
     void release(Frame&frame){
         if(!frame.active)return;
@@ -186,7 +193,7 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
         if(frame->type_known&&frame->type!=header.media_type)return ReassemblyStatus::Ignored;
         frame->type=header.media_type;frame->type_known=true;frame->flags|=header.flags;
         if(frame->type==VideoMediaType::VideoH264&&impl.awaiting_idr&&(frame->flags&(FrameKeyframe|FrameConfig))==0){
-            impl.release(*frame);return ReassemblyStatus::NeedIdr;
+            if(!impl.has_inflight_keyframe_before(frame->id)){impl.release(*frame);return ReassemblyStatus::NeedIdr;}
         }
         const std::size_t index=header.fragment_index;
         if(!frame->fragment_present[index]){
@@ -249,7 +256,10 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
         impl.emit(*frame,output);
         return ReassemblyStatus::Complete;
     }
-    if(impl.awaiting_idr){impl.release(*frame);return ReassemblyStatus::NeedIdr;}
+    if(impl.awaiting_idr){
+        if(impl.has_inflight_keyframe_before(frame->id))return ReassemblyStatus::Incomplete;
+        impl.release(*frame);return ReassemblyStatus::NeedIdr;
+    }
 
     if(impl.last_video_id&&frame->id==impl.last_video_id+1){impl.emit(*frame,output);return ReassemblyStatus::Complete;}
 
