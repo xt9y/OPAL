@@ -25,6 +25,10 @@ static opal::DecodedVideoFrame make_nv12(int value){
 }
 
 int main(){
+    assert(opal::VideoPresenter::supports_cpu_upload_format(AV_PIX_FMT_YUV420P));
+    assert(opal::VideoPresenter::supports_cpu_upload_format(AV_PIX_FMT_NV12));
+    assert(!opal::VideoPresenter::supports_cpu_upload_format(AV_PIX_FMT_DRM_PRIME));
+    assert(opal::VideoPresenter::drm_prime_supported_format(AV_PIX_FMT_DRM_PRIME));
     if(!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS))return 0;
     opal::VideoPresenter presenter;if(!presenter.open(320,180,false)){SDL_Quit();return 0;}
     assert(presenter.is_open());const auto backend=presenter.backend_name();assert(backend.find("opengl")!=std::string::npos);assert(presenter.presented_frames()==0);
