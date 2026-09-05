@@ -1,4 +1,5 @@
 #include <opal/video_capture.hpp>
+#include <opal/config.hpp>
 #include <opal/flv_stream.hpp>
 #include <opal/media.hpp>
 
