@@ -29,7 +29,7 @@ int main(int argc,char**argv){
         out<<"#!/bin/sh\n"
               "case \" $* \" in\n"
               "  *' -c:v libx264 '*) exit 0 ;;\n"
-              "  *' -c:v libopenh264 '*) printf 'FLV\\001\\005\\000\\000\\000\\011\\000\\000\\000\\000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'; exit 0 ;;\n"
+              "  *' -c:v libopenh264 '*) case \" $* \" in *' -b:v 4000k '*) printf 'FLV\\001\\005\\000\\000\\000\\011\\000\\000\\000\\000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'; exit 0 ;; *) exit 1 ;; esac ;;\n"
               "  *) exit 1 ;;\n"
               "esac\n";
     }
