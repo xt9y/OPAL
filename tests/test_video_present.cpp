@@ -28,6 +28,7 @@ int main(){
     if(!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS))return 0;
     opal::VideoPresenter presenter;if(!presenter.open(320,180,false)){SDL_Quit();return 0;}
     assert(presenter.is_open());const auto backend=presenter.backend_name();assert(backend.find("opengl")!=std::string::npos);assert(presenter.presented_frames()==0);
+    const auto mode=presenter.presentation_mode();assert(mode=="immediate-active"||mode=="fallback");
     auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
 
     auto borrowed=make_yuv420(48);AVFrame*borrowed_ptr=borrowed.frame;assert(presenter.present_borrowed({borrowed.frame,borrowed.pts_us}));assert(borrowed.frame==borrowed_ptr);assert(presenter.presented_frames()==1);av_frame_free(&borrowed.frame);
