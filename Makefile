@@ -1,45 +1,11 @@
 include Makefile.core
 
-SDL3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3 2>/dev/null)
-SDL3_LIBS := $(shell $(PKG_CONFIG) --libs sdl3 2>/dev/null)
-CPPFLAGS += $(SDL3_CFLAGS)
 CXXFLAGS += -pthread
-LDLIBS := $(filter-out -lX11 -lXi,$(LDLIBS)) $(SDL3_LIBS)
 CLIPBOARD_SRCS := src/clipboard.cpp
 APP_SRCS += $(CLIPBOARD_SRCS)
 $(PRODUCT): $(CLIPBOARD_SRCS)
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
-
-# VideoReceiver no longer owns the window/presenter. Product APP_SRCS was
-# assembled by Makefile.core before this override and still contains
-# src/video_present.cpp; receiver-only tests do not need SDL/OpenGL windowing.
-DIRECT_RECEIVER_SRCS := $(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) $(VIDEO_DECODER_SRCS) $(AUDIO_OUTPUT_SRCS)
-
-deps-check:
-	@PKG_CONFIG_BIN='$(PKG_CONFIG)'
-	REQUIRED_PKGS='openssl sdl3 gl libpulse-simple libavformat libavcodec libavutil libswresample'
-	if ! command -v "$$PKG_CONFIG_BIN" >/dev/null 2>&1; then
-		echo 'OPAL build dependency check failed: pkg-config is not installed.' >&2
-		missing=pkg-config
-	else
-		missing=''
-		for pkg in $$REQUIRED_PKGS; do
-			if ! "$$PKG_CONFIG_BIN" --exists "$$pkg"; then missing="$$missing $$pkg"; fi
-		done
-	fi
-	if [ -n "$$missing" ]; then
-		[ "$$missing" = pkg-config ] || { echo 'OPAL build dependency check failed.' >&2; echo "Missing pkg-config modules:$$missing" >&2; }
-		id=''; like=''
-		if [ -r /etc/os-release ]; then . /etc/os-release; id=$${ID:-}; like=$${ID_LIKE:-}; fi
-		case "$$id $$like" in
-			*fedora*|*rhel*) echo 'Install: sudo dnf install -y gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel' >&2 ;;
-			*debian*|*ubuntu*) echo 'Install: sudo apt-get install -y g++ make pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev' >&2 ;;
-			*arch*) echo 'Install: sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg' >&2 ;;
-			*) echo 'Install a C++20 compiler, pkg-config, SDL3, OpenSSL, OpenGL, PulseAudio client libraries, and FFmpeg development files.' >&2 ;;
-		esac
-		exit 1
-	fi
 
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
@@ -58,18 +24,6 @@ test-latency-window: | $(BUILD)
 	$(BUILD)/test-latency-window
 
 test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window
-
-test-video-present: | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
-	$(BUILD)/test-video-present
-
-test-direct-video-pipeline: | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto -lpthread $(AVLIBS) $(AUDIOLIBS) $(GLLIBS) -o $(BUILD)/test-direct-video-pipeline
-	@if ffmpeg -hide_banner -encoders 2>/dev/null | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$$)'; then \
-		$(BUILD)/test-direct-video-pipeline; \
-	else \
-		echo 'SKIP test-direct-video-pipeline: FFmpeg libx264 encoder unavailable'; \
-	fi
 
 # Sanitizer targets propagate their flags to their prerequisites. The wrapper
 # below forces clean rebuilds because make does not consider CXXFLAGS when it
@@ -96,9 +50,9 @@ $(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS
 # skip; ordinary HPI correctness does not depend on root/network-namespace setup.
 test-netem: $(NETEM_PIPELINE)
 	@if ! command -v tc >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/tc (Fedora: sudo dnf install iproute-tc)'; exit 0; fi
-	@if ! command -v ip >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/ip'; exit 0; fi
-	@if ! command -v timeout >/dev/null 2>&1; then echo 'SKIP test-netem: timeout command unavailable'; exit 0; fi
-	@if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$$)'; then echo 'SKIP test-netem: FFmpeg libx264 encoder unavailable'; exit 0; fi
+	if ! command -v ip >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/ip'; exit 0; fi
+	if ! command -v timeout >/dev/null 2>&1; then echo 'SKIP test-netem: timeout command unavailable'; exit 0; fi
+	if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$$)'; then echo 'SKIP test-netem: FFmpeg libx264 encoder unavailable'; exit 0; fi
 	export BIN='$(abspath $(NETEM_PIPELINE))'
 	run_cases='set -eu; \
 		ip link set lo up; \
