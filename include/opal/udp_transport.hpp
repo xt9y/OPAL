@@ -8,7 +8,7 @@
 
 namespace opal {
 constexpr int kUdpQueueBufferBytes=64*1024;
-constexpr int kUdpReceiveQueueBufferBytes=4*1024*1024;
+constexpr int kUdpReceiveQueueBufferBytes=256*1024;
 constexpr int kUdpInteractiveTrafficClass=0xb8; // DSCP EF, ECN bits clear
 constexpr std::size_t kUdpReceiveBatchMax=32;
 constexpr std::size_t kUdpSendBatchMax=32;

@@ -24,11 +24,13 @@ int main(){
     assert(getsockopt(a.fd,SOL_SOCKET,SO_SNDBUF,&send_buffer,&option_len)==0);
     option_len=sizeof(int);assert(getsockopt(a.fd,SOL_SOCKET,SO_RCVBUF,&receive_buffer,&option_len)==0);
     option_len=sizeof(int);assert(getsockopt(a.fd,IPPROTO_IPV6,IPV6_TCLASS,&traffic_class,&option_len)==0);
-    assert(opal::kUdpReceiveQueueBufferBytes>=1024*1024);
+    assert(opal::kUdpReceiveQueueBufferBytes>=256*1024);
+    assert(opal::kUdpReceiveQueueBufferBytes<=512*1024);
     assert(opal::kUdpReceiveQueueBufferBytes>opal::kUdpQueueBufferBytes);
     assert(send_buffer>=opal::kUdpQueueBufferBytes&&send_buffer<=opal::kUdpQueueBufferBytes*4);
     assert(receive_buffer>=send_buffer);
     assert(receive_buffer>=256*1024);
+    assert(receive_buffer<=opal::kUdpReceiveQueueBufferBytes*4);
     assert((traffic_class&0xfc)==opal::kUdpInteractiveTrafficClass);
 
     sockaddr_storage dst_storage{};socklen_t dst_len=0;
