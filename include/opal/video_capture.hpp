@@ -20,6 +20,7 @@ public:
     bool ended() const;
     const std::vector<MediaConfig>& configs() const;
     std::string backend_name() const;
+    std::string last_error() const;
     bool capture_timestamp_estimated() const;
     void stop();
 private:struct Impl;std::unique_ptr<Impl> impl_;
