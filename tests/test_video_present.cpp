@@ -50,8 +50,9 @@ int main(){
 
     setenv("OPAL_PRESENTER","opengl",1);
     opal::VideoPresenter gl_presenter;if(gl_presenter.open(320,180,false,AV_PIX_FMT_YUV420P)){
-        assert(gl_presenter.backend_name().find("opengl")!=std::string::npos);
+        assert(gl_presenter.backend_name().find("opengl-ring2")!=std::string::npos);
         assert(gl_presenter.present(make_yuv420(80)));
+        assert(gl_presenter.present(make_yuv420(88)));
         gl_presenter.close();
     }
     unsetenv("OPAL_PRESENTER");
