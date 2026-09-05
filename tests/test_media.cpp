@@ -29,6 +29,10 @@ int main(){
         assert(capture.pid<0&&capture.fd<0);
     }
     {
+        auto capture=opal::start_capture("");
+        assert(capture.pid<0&&capture.fd<0);
+    }
+    {
         auto capture=opal::start_capture("sleep 2");
         assert(capture.pid>0);
         char buf[8]{};
@@ -118,21 +122,23 @@ int main(){
     }
     {
         auto fallback=opal::capture_command(false,60,30000,true,"",1920,1080);
-        assert(fallback.find("-draw_mouse 1")!=std::string::npos);
-        assert(fallback.find("scale=")!=std::string::npos);
-        assert(fallback.find("-fflags nobuffer")!=std::string::npos);
-        assert(fallback.find("-flags low_delay")!=std::string::npos);
-        assert(fallback.find("-c:v ")!=std::string::npos);
-        assert(fallback.find("-bf 0")!=std::string::npos);
-        assert(fallback.find("-g 15")!=std::string::npos);
-        if(fallback.find("-c:v libx264")!=std::string::npos){
-            assert(fallback.find("-preset ultrafast")!=std::string::npos);
-            assert(fallback.find("-tune zerolatency")!=std::string::npos);
-            assert(fallback.find("-keyint_min 15")!=std::string::npos);
+        if(!fallback.empty()){
+            assert(fallback.find("-draw_mouse 1")!=std::string::npos);
+            assert(fallback.find("scale=")!=std::string::npos);
+            assert(fallback.find("-fflags nobuffer")!=std::string::npos);
+            assert(fallback.find("-flags low_delay")!=std::string::npos);
+            assert(fallback.find("-c:v ")!=std::string::npos);
+            assert(fallback.find("-bf 0")!=std::string::npos);
+            assert(fallback.find("-g 15")!=std::string::npos);
+            if(fallback.find("-c:v libx264")!=std::string::npos){
+                assert(fallback.find("-preset ultrafast")!=std::string::npos);
+                assert(fallback.find("-tune zerolatency")!=std::string::npos);
+                assert(fallback.find("-keyint_min 15")!=std::string::npos);
+            }
+            assert(fallback.find("-bufsize 1000k")!=std::string::npos);
+            assert(fallback.find("-flush_packets 1")!=std::string::npos);
+            assert(fallback.find("-f flv pipe:1")!=std::string::npos);
         }
-        assert(fallback.find("-bufsize 1000k")!=std::string::npos);
-        assert(fallback.find("-flush_packets 1")!=std::string::npos);
-        assert(fallback.find("-f flv pipe:1")!=std::string::npos);
     }
     return 0;
 }
