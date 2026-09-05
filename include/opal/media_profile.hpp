@@ -7,10 +7,12 @@ struct StreamOptions {
     int max_width=1920;
     int max_height=1080;
     int fps=60;
+    bool automatic_fps=true;
 };
 
 StreamOptions default_stream_options();
 bool stream_mode_limit(const std::string &mode,int &max_width,int &max_height);
+int automatic_stream_fps(int display_refresh_hz,int capture_max_fps);
 int automatic_bitrate_kbps(int width,int height,int fps);
 std::uint64_t capture_stale_budget_us(int fps);
 int normal_gop_frames(int fps);
