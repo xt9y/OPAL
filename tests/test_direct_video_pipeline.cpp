@@ -1,3 +1,4 @@
+#include "capture_test_support.hpp"
 #include <opal/video_path.hpp>
 #include <opal/udp_transport.hpp>
 #include <opal/video_packet.hpp>
@@ -28,4 +29,10 @@ void run_idle_keepalive(std::uint32_t generation){setenv("OPAL_CAPTURE_CMD","ffm
 void run_media_stall_detection(std::uint32_t generation){setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();assert(sender_socket.fd>=0&&receiver_socket.fd>=0);auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));const auto start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);while(!receiver.media_started()&&std::chrono::steady_clock::now()<start_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.media_started());sender.stop();const auto recovery_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(900);while(idr_requests.load()==0&&!receiver.failed()&&std::chrono::steady_clock::now()<recovery_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(idr_requests.load()>=1);assert(!receiver.failed());const auto fail_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);while(!receiver.failed()&&std::chrono::steady_clock::now()<fail_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.failed());assert(receiver.failure_reason()==opal::VideoReceiverFailure::MediaStall);assert(idr_requests.load()>=2);receiver.stop();}
 }
 
-int main(){setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);run_case(1,false,9);run_case(2,true,10);run_capture_eof_recovery(11);run_idle_keepalive(12);run_media_stall_detection(13);unsetenv("OPAL_TEST_DROP_FRAGMENTS");unsetenv("OPAL_CAPTURE_CMD");return 0;}
+int main(){
+    if(opal_test::ffmpeg_h264_encoder()!="libx264"){
+        std::cerr<<"SKIP test-direct-video-pipeline: FFmpeg libx264 encoder unavailable\n";
+        return 0;
+    }
+    setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);run_case(1,false,9);run_case(2,true,10);run_capture_eof_recovery(11);run_idle_keepalive(12);run_media_stall_detection(13);unsetenv("OPAL_TEST_DROP_FRAGMENTS");unsetenv("OPAL_CAPTURE_CMD");return 0;
+}
