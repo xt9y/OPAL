@@ -115,8 +115,14 @@ struct VideoReassembler::Impl{
         if(awaiting_idr||last_video_id==0)return nullptr;
         auto*frame=find(last_video_id+1);
         if(!frame||!frame->complete||!frame->type_known||frame->type!=VideoMediaType::VideoH264)return nullptr;
-        if((frame->flags&(FrameKeyframe|FrameConfig))!=0)return frame;
         return frame;
+    }
+
+    ReassemblyStatus emit_ready_or(ReassembledFrame&output,ReassemblyStatus fallback){
+        auto*ready=next_ready_video();
+        if(!ready)return fallback;
+        emit(*ready,output);
+        return ReassemblyStatus::Complete;
     }
 };
 
@@ -223,7 +229,10 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
     }
 
     frame->complete=frame->type_known&&std::all_of(frame->fragment_present.begin(),frame->fragment_present.end(),[](std::uint8_t present){return present!=0;});
-    if(!frame->complete)return need_idr?ReassemblyStatus::NeedIdr:ReassemblyStatus::Incomplete;
+    if(!frame->complete){
+        if(need_idr)return ReassemblyStatus::NeedIdr;
+        return impl.emit_ready_or(output,ReassemblyStatus::Incomplete);
+    }
 
     if(frame->type!=VideoMediaType::VideoH264){impl.emit(*frame,output);return ReassemblyStatus::Complete;}
 
@@ -247,7 +256,8 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
     // A complete future frame is not proof that its predecessor was lost. Keep it
     // in the existing fixed three-frame window; a later overflow is the bounded
     // point at which the receiver asks for a new IDR.
-    return need_idr?ReassemblyStatus::NeedIdr:ReassemblyStatus::Incomplete;
+    if(need_idr)return ReassemblyStatus::NeedIdr;
+    return impl.emit_ready_or(output,ReassemblyStatus::Incomplete);
 }
 
 ReassemblyStatus VideoReassembler::drain(ReassembledFrame&output){
