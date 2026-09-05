@@ -130,6 +130,7 @@ struct VideoDecoder::Impl {
             const int rc=avcodec_receive_frame(ctx,scratch);
             if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF)break;
             if(rc<0)return false;
+            drm_export_active=false;
             if((scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||scratch->decode_error_flags!=0){av_frame_unref(scratch);clear_latest();return false;}
             AVFrame *ready=scratch;
             if(hw_pix_fmt!=AV_PIX_FMT_NONE&&scratch->format==hw_pix_fmt){
@@ -216,7 +217,7 @@ bool VideoDecoder::decode(std::span<const std::uint8_t> unit,std::int64_t pts_us
 }
 
 std::string VideoDecoder::backend_name() const{return impl_?impl_->backend+(impl_->drm_export_active?"+drmprime":""):"unavailable";}
-void VideoDecoder::flush(){if(!impl_)return;if(impl_->ctx)avcodec_flush_buffers(impl_->ctx);impl_->clear_latest();if(impl_->scratch)av_frame_unref(impl_->scratch);if(impl_->mapped)av_frame_unref(impl_->mapped);if(impl_->transfer)av_frame_unref(impl_->transfer);if(impl_->packet)av_packet_unref(impl_->packet);}
+void VideoDecoder::flush(){if(!impl_)return;if(impl_->ctx)avcodec_flush_buffers(impl_->ctx);impl_->clear_latest();if(impl_->scratch)av_frame_unref(impl_->scratch);if(impl_->mapped)av_frame_unref(impl_->mapped);if(impl_->transfer)av_frame_unref(impl_->transfer);if(impl_->packet)av_packet_unref(impl_->packet);impl_->drm_export_active=false;}
 VideoDecoder::~VideoDecoder(){if(impl_){impl_->reset_context();if(impl_->packet)av_packet_free(&impl_->packet);if(impl_->scratch)av_frame_free(&impl_->scratch);if(impl_->latest)av_frame_free(&impl_->latest);if(impl_->mapped)av_frame_free(&impl_->mapped);if(impl_->transfer)av_frame_free(&impl_->transfer);delete impl_;impl_=nullptr;}}
 
 }
