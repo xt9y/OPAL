@@ -13,10 +13,9 @@ SDL3_LIBS := $(shell $(PKG_CONFIG) --libs sdl3 2>/dev/null)
 AVLIBS := $(shell $(PKG_CONFIG) --libs $(AV_PKGS) 2>/dev/null)
 SWRLIBS := $(shell $(PKG_CONFIG) --libs libswresample 2>/dev/null)
 CPPFLAGS += -Iinclude $(FFMPEG_CFLAGS) $(SDL3_CFLAGS)
-AUDIOLIBS := $(SWRLIBS) -lpulse-simple -lpulse
-GLLIBS := -lGL
-NATIVE_MEDIA_LIBS := $(AVLIBS) $(AUDIOLIBS) $(GLLIBS)
-LDLIBS += -lcrypto -lpthread $(NATIVE_MEDIA_LIBS) $(SDL3_LIBS)
+AUDIOLIBS := $(SWRLIBS) $(SDL3_LIBS)
+NATIVE_MEDIA_LIBS := $(AVLIBS) $(AUDIOLIBS)
+LDLIBS += -lcrypto -lpthread $(NATIVE_MEDIA_LIBS)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 LIBEXECDIR ?= $(PREFIX)/libexec/opal
@@ -70,7 +69,7 @@ $(BUILD):
 
 deps-check:
 	@PKG_CONFIG_BIN='$(PKG_CONFIG)'
-	REQUIRED_PKGS='openssl sdl3 gl libpulse-simple libavformat libavcodec libavutil libswresample'
+	REQUIRED_PKGS='openssl sdl3 libavformat libavcodec libavutil libswresample'
 	if ! command -v "$$PKG_CONFIG_BIN" >/dev/null 2>&1; then
 		echo 'OPAL build dependency check failed: pkg-config is not installed.' >&2
 		missing=pkg-config
@@ -85,10 +84,10 @@ deps-check:
 		id=''; like=''
 		if [ -r /etc/os-release ]; then . /etc/os-release; id=$${ID:-}; like=$${ID_LIKE:-}; fi
 		case "$$id $$like" in
-			*fedora*|*rhel*) echo 'Install: sudo dnf install -y gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg-free ffmpeg-free-devel' >&2 ;;
-			*debian*|*ubuntu*) echo 'Install: sudo apt-get install -y g++ make pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev' >&2 ;;
-			*arch*) echo 'Install: sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg' >&2 ;;
-			*) echo 'Install a C++20 compiler, pkg-config, SDL3, OpenSSL, OpenGL, PulseAudio client libraries, and FFmpeg development files.' >&2 ;;
+			*fedora*|*rhel*) echo 'Install: sudo dnf install -y gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire-devel libportal-devel' >&2 ;;
+			*debian*|*ubuntu*) echo 'Install: sudo apt-get install -y g++ make pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev' >&2 ;;
+			*arch*) echo 'Install: sudo pacman -S --needed base-devel pkgconf sdl3 openssl ffmpeg pipewire libportal' >&2 ;;
+			*) echo 'Install a C++20 compiler, pkg-config, SDL3, OpenSSL, FFmpeg development files, PipeWire development files, and libportal.' >&2 ;;
 		esac
 		exit 1
 	fi
@@ -143,7 +142,7 @@ test-video-decoder: | $(BUILD)
 	$(BUILD)/test-video-decoder
 
 test-video-present: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(SDL3_LIBS) -o $(BUILD)/test-video-present
 	$(BUILD)/test-video-present
 
 test-audio-output: | $(BUILD)
