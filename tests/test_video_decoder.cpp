@@ -1,19 +1,24 @@
 #include "capture_test_support.hpp"
+#include "linked_codec_support.hpp"
 #include <opal/video_capture.hpp>
 #include <opal/video_decoder.hpp>
 #include <cassert>
 #include <cstdlib>
+#include <iostream>
 #include <utility>
 #include <vector>
 
 int main(){
     if(!opal_test::capture_tests_available())return 0;
+    if(!opal_test::require_linked_h264_decoder())return 0;
     setenv("OPAL_DECODER","software",1);
     const auto command=opal_test::lavfi_video_command(320,180,60,60,1,false,false);
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
 
     opal::VideoCapture capture;
-    assert(capture.start({320,180,60},8000,false,""));
+    const bool capture_started=capture.start({320,180,60},8000,false,"");
+    if(!capture_started)std::cerr<<"VideoCapture startup error: "<<capture.last_error()<<"\n";
+    assert(capture_started);
     opal::VideoDecoder decoder;
     bool configured=false;
     for(const auto&config:capture.configs())if(config.kind==opal::MediaKind::VideoH264){assert(decoder.configure_h264(config.extradata));configured=true;}
