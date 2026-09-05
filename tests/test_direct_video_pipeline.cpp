@@ -18,21 +18,172 @@
 #include <utility>
 
 namespace {
-opal::DirectVideoPath make_path(opal::UdpSocket socket,std::uint16_t peer_port,bool sender,std::uint32_t generation){opal::DirectVideoPath path;path.socket=socket;path.generation=generation;path.session_id=0x1122334455667788ULL+generation;assert(opal::resolve_udp_endpoint("::1",peer_port,path.peer,path.peer_len));for(std::size_t i=0;i<32;++i){if(sender)path.keys.send_key[i]=static_cast<std::uint8_t>(i+1);else path.keys.recv_key[i]=static_cast<std::uint8_t>(i+1);}for(std::size_t i=0;i<12;++i){if(sender)path.keys.send_nonce_base[i]=static_cast<std::uint8_t>(0x80+i);else path.keys.recv_nonce_base[i]=static_cast<std::uint8_t>(0x80+i);}return path;}
-void assert_receiver_ok(const opal::VideoReceiver&receiver,const char*where){const auto reason=receiver.failure_reason();if(reason!=opal::VideoReceiverFailure::NoFailure)std::cerr<<where<<" receiver failure="<<static_cast<int>(reason)<<"\n";assert(reason==opal::VideoReceiverFailure::NoFailure);assert(!receiver.failed());}
-void assert_latest_frame(opal::VideoReceiver&receiver){opal::DecodedVideoFrame frame{};const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);while(!receiver.take_latest_video(frame)&&std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));assert(frame.frame);assert(frame.frame->width==320&&frame.frame->height==180);av_frame_free(&frame.frame);}
-void wire_control(opal::VideoSender&sender,opal::VideoReceiver&receiver,std::atomic<int>&idr_requests,opal::DirectVideoPath sender_path,opal::DirectVideoPath receiver_path){auto sender_ready=std::make_shared<std::atomic<bool>>(false);auto pending_idr=std::make_shared<std::atomic<bool>>(false);assert(receiver.start(std::move(receiver_path),[&,sender_ready,pending_idr](const std::string&line){const bool idr=line.rfind("REQUEST_IDR ",0)==0;if(idr)++idr_requests;if(!sender_ready->load(std::memory_order_acquire)){if(idr)pending_idr->store(true,std::memory_order_release);return;}assert(sender.handle_control_line(line));}));assert(sender.start(std::move(sender_path),{320,180,60},false,[&](const std::string&line){assert(receiver.handle_control_line(line));}));sender_ready->store(true,std::memory_order_release);if(pending_idr->exchange(false,std::memory_order_acq_rel))sender.request_idr();}
-void run_case(int dropped_fragments,bool expect_idr,std::uint32_t generation){setenv("OPAL_TEST_DROP_FRAGMENTS",std::to_string(dropped_fragments).c_str(),1);auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();assert(sender_socket.fd>=0&&receiver_socket.fd>=0);auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(8);while(!receiver.media_started()&&std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.media_started());assert_receiver_ok(receiver,"run_case/start");assert_latest_frame(receiver);assert(sender.queued_frames()<=2&&sender.queued_bytes()<=16u*1024u*1024u);assert(opal::kVideoMaxDatagramBytes==1200);if(expect_idr){const auto idr_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);while(idr_requests.load()==0&&std::chrono::steady_clock::now()<idr_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(idr_requests.load()>=1);}else assert(idr_requests.load()==0);sender.stop();receiver.stop();}
-int line_count(const std::filesystem::path&path){std::ifstream in(path);int count=0;std::string line;while(std::getline(in,line))++count;return count;}
-void run_capture_eof_recovery(std::uint32_t generation){const auto marker=std::filesystem::temp_directory_path()/("opal-capture-restart-"+std::to_string(getpid())+".log");std::filesystem::remove(marker);const std::string command="sh -c 'if [ -s \""+marker.string()+"\" ]; then sleep 2; fi; echo start >> \""+marker.string()+"\"; exec ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 4 -keyint_min 4 -sc_threshold 0 -an -f flv pipe:1'";setenv("OPAL_CAPTURE_CMD",command.c_str(),1);setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();assert(sender_socket.fd>=0&&receiver_socket.fd>=0);auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));const auto media_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);while(!receiver.media_started()&&std::chrono::steady_clock::now()<media_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.media_started());assert_latest_frame(receiver);assert_receiver_ok(receiver,"capture-restart/start");const auto restart_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(7);while(line_count(marker)<2&&std::chrono::steady_clock::now()<restart_deadline){assert_receiver_ok(receiver,"capture-restart/gap");std::this_thread::sleep_for(std::chrono::milliseconds(20));}assert(line_count(marker)>=2);assert_receiver_ok(receiver,"capture-restart/resumed");assert_latest_frame(receiver);std::this_thread::sleep_for(std::chrono::milliseconds(500));assert_receiver_ok(receiver,"capture-restart/post");sender.stop();receiver.stop();std::filesystem::remove(marker);}
-void run_idle_keepalive(std::uint32_t generation){setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1; sleep 3",1);setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();assert(sender_socket.fd>=0&&receiver_socket.fd>=0);auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));const auto start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);while(!receiver.media_started()&&std::chrono::steady_clock::now()<start_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.media_started());std::this_thread::sleep_for(std::chrono::milliseconds(1500));assert_receiver_ok(receiver,"idle-keepalive");sender.stop();receiver.stop();}
-void run_media_stall_detection(std::uint32_t generation){setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();assert(sender_socket.fd>=0&&receiver_socket.fd>=0);auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));const auto start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);while(!receiver.media_started()&&std::chrono::steady_clock::now()<start_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.media_started());sender.stop();const auto recovery_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(900);while(idr_requests.load()==0&&!receiver.failed()&&std::chrono::steady_clock::now()<recovery_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(idr_requests.load()>=1);assert(!receiver.failed());const auto fail_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);while(!receiver.failed()&&std::chrono::steady_clock::now()<fail_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));assert(receiver.failed());assert(receiver.failure_reason()==opal::VideoReceiverFailure::MediaStall);assert(idr_requests.load()>=2);receiver.stop();}
+
+opal::DirectVideoPath make_path(opal::UdpSocket socket,std::uint16_t peer_port,bool sender,std::uint32_t generation){
+    opal::DirectVideoPath path;
+    path.socket=socket;
+    path.generation=generation;
+    path.session_id=0x1122334455667788ULL+generation;
+    assert(opal::resolve_udp_endpoint("::1",peer_port,path.peer,path.peer_len));
+    for(std::size_t i=0;i<32;++i){if(sender)path.keys.send_key[i]=static_cast<std::uint8_t>(i+1);else path.keys.recv_key[i]=static_cast<std::uint8_t>(i+1);}
+    for(std::size_t i=0;i<12;++i){if(sender)path.keys.send_nonce_base[i]=static_cast<std::uint8_t>(0x80+i);else path.keys.recv_nonce_base[i]=static_cast<std::uint8_t>(0x80+i);}
+    return path;
+}
+
+void assert_receiver_ok(const opal::VideoReceiver&receiver,const char*where){
+    const auto reason=receiver.failure_reason();
+    if(reason!=opal::VideoReceiverFailure::NoFailure)std::cerr<<where<<" receiver failure="<<static_cast<int>(reason)<<"\n";
+    assert(reason==opal::VideoReceiverFailure::NoFailure);
+    assert(!receiver.failed());
+}
+
+void assert_latest_frame(opal::VideoReceiver&receiver){
+    opal::DecodedVideoFrame frame{};
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+    while(!receiver.take_latest_video(frame)&&std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    assert(frame.frame);
+    assert(frame.frame->width==320&&frame.frame->height==180);
+    av_frame_free(&frame.frame);
+}
+
+void wire_control(opal::VideoSender&sender,opal::VideoReceiver&receiver,std::atomic<int>&idr_requests,opal::DirectVideoPath sender_path,opal::DirectVideoPath receiver_path){
+    auto sender_ready=std::make_shared<std::atomic<bool>>(false);
+    auto pending_idr=std::make_shared<std::atomic<bool>>(false);
+    assert(receiver.start(std::move(receiver_path),[&,sender_ready,pending_idr](const std::string&line){
+        const bool idr=line.rfind("REQUEST_IDR ",0)==0;
+        if(idr)++idr_requests;
+        if(!sender_ready->load(std::memory_order_acquire)){
+            if(idr)pending_idr->store(true,std::memory_order_release);
+            return;
+        }
+        assert(sender.handle_control_line(line));
+    }));
+    assert(sender.start(std::move(sender_path),{320,180,60},false,[&](const std::string&line){assert(receiver.handle_control_line(line));}));
+    sender_ready->store(true,std::memory_order_release);
+    if(pending_idr->exchange(false,std::memory_order_acq_rel))sender.request_idr();
+}
+
+void run_case(int dropped_fragments,bool expect_idr,std::uint32_t generation){
+    setenv("OPAL_TEST_DROP_FRAGMENTS",std::to_string(dropped_fragments).c_str(),1);
+    auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();
+    assert(sender_socket.fd>=0&&receiver_socket.fd>=0);
+    auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);
+    auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);
+    opal::VideoSender sender;
+    opal::VideoReceiver receiver;
+    std::atomic<int>idr_requests{0};
+    wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(8);
+    while(!receiver.media_started()&&std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.media_started());
+    assert_receiver_ok(receiver,"run_case/start");
+    assert_latest_frame(receiver);
+    assert(sender.queued_frames()<=2&&sender.queued_bytes()<=16u*1024u*1024u);
+    assert(opal::kVideoMaxDatagramBytes==1200);
+    if(expect_idr){
+        const auto idr_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        while(idr_requests.load()==0&&std::chrono::steady_clock::now()<idr_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        assert(idr_requests.load()>=1);
+    }else assert(idr_requests.load()==0);
+    sender.stop();
+    receiver.stop();
+}
+
+int line_count(const std::filesystem::path&path){
+    std::ifstream in(path);
+    int count=0;
+    std::string line;
+    while(std::getline(in,line))++count;
+    return count;
+}
+
+void run_capture_eof_recovery(std::uint32_t generation){
+    const auto marker=std::filesystem::temp_directory_path()/("opal-capture-restart-"+std::to_string(getpid())+".log");
+    std::filesystem::remove(marker);
+    const auto fixture=opal_test::lavfi_video_command(320,180,60,60,4,true,false);
+    const std::string command="if [ -s '"+marker.string()+"' ]; then sleep 2; fi; echo start >> '"+marker.string()+"'; exec "+fixture;
+    setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
+    setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);
+    auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();
+    assert(sender_socket.fd>=0&&receiver_socket.fd>=0);
+    auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);
+    auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);
+    opal::VideoSender sender;
+    opal::VideoReceiver receiver;
+    std::atomic<int>idr_requests{0};
+    wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));
+    const auto media_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!receiver.media_started()&&std::chrono::steady_clock::now()<media_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.media_started());
+    assert_latest_frame(receiver);
+    assert_receiver_ok(receiver,"capture-restart/start");
+    const auto restart_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(7);
+    while(line_count(marker)<2&&std::chrono::steady_clock::now()<restart_deadline){assert_receiver_ok(receiver,"capture-restart/gap");std::this_thread::sleep_for(std::chrono::milliseconds(20));}
+    assert(line_count(marker)>=2);
+    assert_receiver_ok(receiver,"capture-restart/resumed");
+    assert_latest_frame(receiver);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    assert_receiver_ok(receiver,"capture-restart/post");
+    sender.stop();receiver.stop();std::filesystem::remove(marker);
+}
+
+void run_idle_keepalive(std::uint32_t generation){
+    const auto fixture=opal_test::lavfi_video_command(320,180,60,60,15,true,false);
+    const auto command=fixture+"; sleep 3";
+    setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
+    setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);
+    auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();
+    assert(sender_socket.fd>=0&&receiver_socket.fd>=0);
+    auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);
+    auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);
+    opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};
+    wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));
+    const auto start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!receiver.media_started()&&std::chrono::steady_clock::now()<start_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.media_started());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    assert_receiver_ok(receiver,"idle-keepalive");
+    sender.stop();receiver.stop();
+}
+
+void run_media_stall_detection(std::uint32_t generation){
+    const auto command=opal_test::lavfi_video_command(320,180,60,0,15,true,false);
+    setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
+    setenv("OPAL_TEST_DROP_FRAGMENTS","0",1);
+    auto sender_socket=opal::open_udp_socket(),receiver_socket=opal::open_udp_socket();
+    assert(sender_socket.fd>=0&&receiver_socket.fd>=0);
+    auto sender_path=make_path(sender_socket,receiver_socket.local_port,true,generation);
+    auto receiver_path=make_path(receiver_socket,sender_socket.local_port,false,generation);
+    opal::VideoSender sender;opal::VideoReceiver receiver;std::atomic<int>idr_requests{0};
+    wire_control(sender,receiver,idr_requests,std::move(sender_path),std::move(receiver_path));
+    const auto start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!receiver.media_started()&&std::chrono::steady_clock::now()<start_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.media_started());
+    sender.stop();
+    const auto recovery_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(900);
+    while(idr_requests.load()==0&&!receiver.failed()&&std::chrono::steady_clock::now()<recovery_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(idr_requests.load()>=1);
+    assert(!receiver.failed());
+    const auto fail_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+    while(!receiver.failed()&&std::chrono::steady_clock::now()<fail_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(receiver.failed());
+    assert(receiver.failure_reason()==opal::VideoReceiverFailure::MediaStall);
+    assert(idr_requests.load()>=2);
+    receiver.stop();
+}
+
 }
 
 int main(){
-    if(opal_test::ffmpeg_h264_encoder()!="libx264"){
-        std::cerr<<"SKIP test-direct-video-pipeline: FFmpeg libx264 encoder unavailable\n";
-        return 0;
-    }
-    setenv("OPAL_CAPTURE_CMD","ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc=size=320x180:rate=60 -pix_fmt yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -keyint_min 15 -sc_threshold 0 -an -f flv pipe:1",1);run_case(1,false,9);run_case(2,true,10);run_capture_eof_recovery(11);run_idle_keepalive(12);run_media_stall_detection(13);unsetenv("OPAL_TEST_DROP_FRAGMENTS");unsetenv("OPAL_CAPTURE_CMD");return 0;
+    if(!opal_test::capture_tests_available())return 0;
+    const auto command=opal_test::lavfi_video_command(320,180,60,0,15,true,false);
+    setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
+    run_case(1,false,9);
+    run_case(2,true,10);
+    run_capture_eof_recovery(11);
+    run_idle_keepalive(12);
+    run_media_stall_detection(13);
+    unsetenv("OPAL_TEST_DROP_FRAGMENTS");
+    unsetenv("OPAL_CAPTURE_CMD");
+    return 0;
 }
