@@ -7,7 +7,7 @@
 
 namespace opal {
 struct CaptureProcess { pid_t pid=-1; int fd=-1; };
-struct SinkProcess { pid_t pid=-1; int fd=-1; };
+struct SinkProcess { pid_t pid=-1; int fd=-1; bool compact_input=false; };
 std::string capture_command(bool gpu_screen_recorder,int fps,int bitrate_kbps,bool audio,const std::string &portal_token_file="",int max_width=0,int max_height=0);
 CaptureProcess start_capture(const std::string &command);
 int read_capture(CaptureProcess &capture,void *buffer,size_t size,int timeout_ms);
