@@ -7,6 +7,7 @@ LDLIBS := $(filter-out -lX11 -lXi,$(LDLIBS)) $(SDL3_LIBS)
 CLIPBOARD_SRCS := src/clipboard.cpp
 APP_SRCS += $(CLIPBOARD_SRCS)
 $(PRODUCT): $(CLIPBOARD_SRCS)
+$(INPUT): include/opal/input_record.hpp
 
 # VideoReceiver no longer owns the window/presenter. Product APP_SRCS was
 # assembled by Makefile.core before this override and still contains
@@ -46,7 +47,11 @@ test-tailnet-discovery-lifecycle: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tailnet_discovery_lifecycle.cpp -o $(BUILD)/test-tailnet-discovery-lifecycle
 	$(BUILD)/test-tailnet-discovery-lifecycle
 
-test: test-clipboard test-tailnet-discovery-lifecycle
+test-input-record: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input_record.cpp -o $(BUILD)/test-input-record
+	$(BUILD)/test-input-record
+
+test: test-clipboard test-tailnet-discovery-lifecycle test-input-record
 
 test-video-present: | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
@@ -73,7 +78,7 @@ test-thread-sanitize: LDFLAGS += $(TSAN)
 test-thread-sanitize: export TSAN_OPTIONS := halt_on_error=1:history_size=7
 test-thread-sanitize: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
 
-.PHONY: test-thread-sanitize test-sanitize
+.PHONY: test-input-record test-thread-sanitize test-sanitize
 test-sanitize: test-direct-media-sanitize test-thread-sanitize
 
 # The integration test validates networking/recovery in a headless process.
