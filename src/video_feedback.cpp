@@ -114,7 +114,7 @@ bool parse_host_media_debug_line(const std::string &line,std::uint32_t generatio
     if(in>>reason){if(!valid_restart_reason(reason)||in>>extra)return false;}else{in.clear();reason="unknown";}
     s.frame_id=frame;s.frame_bytes=bytes;s.data_fragments=static_cast<std::uint32_t>(data);s.fec_fragments=static_cast<std::uint32_t>(fec);
     s.send_span_us=static_cast<std::uint32_t>(send);s.capture_to_packet_us=static_cast<std::uint32_t>(capture);
-    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=id r;s.restarts=restarts;s.chain_valid=chain==1;s.restart_reason=reason;return true;
+    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=idr;s.restarts=restarts;s.chain_valid=chain==1;s.restart_reason=reason;return true;
 }
 
 std::string format_host_media_debug(const HostMediaDebugSample &s){
