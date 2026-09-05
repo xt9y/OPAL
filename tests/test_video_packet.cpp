@@ -1,6 +1,9 @@
 #include <opal/video_packet.hpp>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <set>
+#include <thread>
 #include <vector>
 
 int main(){
@@ -60,14 +63,25 @@ int main(){
     std::size_t cursor_data=0,cursor_fec=0;opal::VideoPacketHeader cursor_header;std::span<const std::uint8_t> cursor_payload;
     while(cursor.next(cursor_header,cursor_payload)){
         assert(opal::kVideoHeaderBytes+cursor_payload.size()+opal::kVideoAeadTagBytes<=opal::kVideoMaxDatagramBytes);
-        if(cursor_header.media_type==opal::VideoMediaType::Fec){
-            ++cursor_fec;assert(cursor_payload.size()>=opal::kVideoFecMetadataBytes);
-        }else{
-            ++cursor_data;const auto offset=static_cast<std::size_t>(cursor_header.fragment_index)*opal::kVideoDataFragmentBytes;
-            assert(cursor_payload.data()==frame.data()+offset);
-        }
+        if(cursor_header.media_type==opal::VideoMediaType::Fec){++cursor_fec;assert(cursor_payload.size()>=opal::kVideoFecMetadataBytes);}
+        else{++cursor_data;const auto offset=static_cast<std::size_t>(cursor_header.fragment_index)*opal::kVideoDataFragmentBytes;assert(cursor_payload.data()==frame.data()+offset);}
     }
     assert(cursor_data==data_packets&&cursor_fec==fec_packets);
     assert(cursor_sequence==5000+cursor_data+cursor_fec);
+
+    std::atomic<std::uint64_t> concurrent_sequence{9000};
+    std::vector<std::uint64_t> sequence_a,sequence_b;
+    auto fragment_job=[&](std::uint64_t frame_id,std::vector<std::uint64_t>&out){
+        std::vector<std::uint8_t> small(8*opal::kVideoDataFragmentBytes,0x5a);
+        opal::VideoFragmentCursor c(opal::VideoMediaType::VideoH264,0,3,99,frame_id,999000,small,concurrent_sequence,false);
+        opal::VideoPacketHeader h;std::span<const std::uint8_t> p;
+        while(c.next(h,p))out.push_back(h.packet_sequence);
+    };
+    std::thread ta(fragment_job,21,std::ref(sequence_a));
+    std::thread tb(fragment_job,22,std::ref(sequence_b));
+    ta.join();tb.join();
+    std::set<std::uint64_t> unique;unique.insert(sequence_a.begin(),sequence_a.end());unique.insert(sequence_b.begin(),sequence_b.end());
+    assert(sequence_a.size()==8&&sequence_b.size()==8&&unique.size()==16);
+    assert(*unique.begin()==9000&&*unique.rbegin()==9015&&concurrent_sequence.load()==9016);
     return 0;
 }
