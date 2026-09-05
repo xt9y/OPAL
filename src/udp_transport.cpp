@@ -146,9 +146,14 @@ bool send_datagram(int fd,const sockaddr_storage &address,socklen_t address_leng
 
 int recv_datagram(int fd,std::span<std::uint8_t> data,sockaddr_storage &source,socklen_t &source_length,int timeout_ms){
     if(fd<0||data.empty())return -1;
-    pollfd descriptor{fd,POLLIN,0};int rc=0;do{rc=poll(&descriptor,1,std::max(0,timeout_ms));}while(rc<0&&errno==EINTR);
-    if(rc==0)return -2;if(rc<0||!(descriptor.revents&POLLIN))return -1;
-    source_length=sizeof(source);ssize_t received=0;do{received=recvfrom(fd,data.data(),data.size(),0,reinterpret_cast<sockaddr*>(&source),&source_length);}while(received<0&&errno==EINTR);
+    pollfd descriptor{fd,POLLIN,0};
+    int rc=0;
+    do{rc=poll(&descriptor,1,std::max(0,timeout_ms));}while(rc<0&&errno==EINTR);
+    if(rc==0)return -2;
+    if(rc<0||!(descriptor.revents&POLLIN))return -1;
+    source_length=sizeof(source);
+    ssize_t received=0;
+    do{received=recvfrom(fd,data.data(),data.size(),0,reinterpret_cast<sockaddr*>(&source),&source_length);}while(received<0&&errno==EINTR);
     if(received<0&&(errno==EAGAIN||errno==EWOULDBLOCK))return -2;
     return received<0?-1:static_cast<int>(received);
 }
@@ -157,8 +162,11 @@ int recv_datagrams_batch(int fd,std::span<UdpReceiveSlot> slots,int timeout_ms){
     if(fd<0||slots.empty())return -1;
     const std::size_t count=std::min(slots.size(),kUdpReceiveBatchMax);
     for(std::size_t i=0;i<count;++i){if(slots[i].buffer.empty())return -1;slots[i].size=0;slots[i].source_length=0;slots[i].kernel_drops=0;}
-    pollfd descriptor{fd,POLLIN,0};int rc=0;do{rc=poll(&descriptor,1,std::max(0,timeout_ms));}while(rc<0&&errno==EINTR);
-    if(rc==0)return 0;if(rc<0||!(descriptor.revents&POLLIN))return -1;
+    pollfd descriptor{fd,POLLIN,0};
+    int rc=0;
+    do{rc=poll(&descriptor,1,std::max(0,timeout_ms));}while(rc<0&&errno==EINTR);
+    if(rc==0)return 0;
+    if(rc<0||!(descriptor.revents&POLLIN))return -1;
 #if defined(__linux__)
     std::array<mmsghdr,kUdpReceiveBatchMax> messages{};std::array<iovec,kUdpReceiveBatchMax> vectors{};
 #ifdef SO_RXQ_OVFL
@@ -169,8 +177,10 @@ int recv_datagrams_batch(int fd,std::span<UdpReceiveSlot> slots,int timeout_ms){
         messages[i].msg_hdr.msg_control=controls[i].data();messages[i].msg_hdr.msg_controllen=controls[i].size();
 #endif
     }
-    int received=0;do{received=recvmmsg(fd,messages.data(),static_cast<unsigned int>(count),MSG_DONTWAIT,nullptr);}while(received<0&&errno==EINTR);
-    if(received<0&&(errno==EAGAIN||errno==EWOULDBLOCK))return 0;if(received<0)return -1;
+    int received=0;
+    do{received=recvmmsg(fd,messages.data(),static_cast<unsigned int>(count),MSG_DONTWAIT,nullptr);}while(received<0&&errno==EINTR);
+    if(received<0&&(errno==EAGAIN||errno==EWOULDBLOCK))return 0;
+    if(received<0)return -1;
     for(int i=0;i<received;++i){auto &slot=slots[static_cast<std::size_t>(i)];slot.size=messages[static_cast<std::size_t>(i)].msg_len;slot.source_length=messages[static_cast<std::size_t>(i)].msg_hdr.msg_namelen;
 #ifdef SO_RXQ_OVFL
         for(cmsghdr *cmsg=CMSG_FIRSTHDR(&messages[static_cast<std::size_t>(i)].msg_hdr);cmsg;cmsg=CMSG_NXTHDR(&messages[static_cast<std::size_t>(i)].msg_hdr,cmsg)){if(cmsg->cmsg_level==SOL_SOCKET&&cmsg->cmsg_type==SO_RXQ_OVFL&&cmsg->cmsg_len>=CMSG_LEN(sizeof(std::uint32_t))){std::uint32_t drops=0;std::memcpy(&drops,CMSG_DATA(cmsg),sizeof(drops));slot.kernel_drops=drops;break;}}
