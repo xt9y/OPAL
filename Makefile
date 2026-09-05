@@ -90,7 +90,7 @@ test-direct-media-sanitize: test-flv-stream test-video-reorder
 test-thread-sanitize-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
 test-thread-sanitize-run: LDFLAGS += $(TSAN)
 test-thread-sanitize-run: export TSAN_OPTIONS := halt_on_error=1:history_size=7
-test-thread-sanitize-run: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
+test-thread-sanitize-run: test-reliable-control test-video-crypto test-peer-handshake test-session-packet test-relay test-udp-transport test-peer-session test-peer-session-relay test-video-packet
 
 test-thread-sanitize:
 	mkdir -p "$(BUILD)"
