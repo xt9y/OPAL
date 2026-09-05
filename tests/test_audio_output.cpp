@@ -24,6 +24,7 @@ int main(){
     setenv("OPAL_AUDIO_TEST_SINK","hold",1);
     opal::AudioOutput output;
     assert(output.configure_aac(aac_config->extradata,aac_config->sample_rate,aac_config->channels));
+    assert(output.backend_name()=="sdl3");
     int submitted=0;
     for(int i=0;i<100&&submitted<4;++i){
         if(!capture.next(unit,1000))continue;
