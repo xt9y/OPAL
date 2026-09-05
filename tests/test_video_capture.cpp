@@ -30,6 +30,8 @@ int main(){
     assert(!capture.ended());
     assert(capture.backend_name()=="external-override-flv");
     assert(capture.capture_timestamp_estimated());
+    assert(capture.capture_timestamp_quality()==opal::CaptureTimestampQuality::Estimated);
+    assert(opal::capture_timestamp_quality_name(capture.capture_timestamp_quality())=="estimated");
     assert(capture.config_revision()==0);
 
     bool video=false,audio=false,keyframe=false;
@@ -62,6 +64,7 @@ int main(){
     setenv("OPAL_CAPTURE_CMD",timed_command.c_str(),1);
     require_started(capture,{320,180,60},8000,false);
     assert(capture.capture_timestamp_estimated());
+    assert(capture.capture_timestamp_quality()==opal::CaptureTimestampQuality::Estimated);
     opal::EncodedMediaUnit first,second;
     const auto timed_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
     while(std::chrono::steady_clock::now()<timed_deadline&&first.data.empty())if(capture.next(first,100)&&first.kind!=opal::MediaKind::VideoH264)first={};
