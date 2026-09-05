@@ -23,6 +23,17 @@ constexpr std::uint64_t kClipboardReliableWatermark=4;
 bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 bool env_enabled(const char*name){const char*v=std::getenv(name);return v&&*v&&std::string(v)!="0";}
 bool read_sdl_clipboard(std::string&text){SDL_ClearError();char*raw=SDL_GetClipboardText();if(!raw)return false;const bool ok=SDL_GetError()[0]=='\0';if(ok)text.assign(raw);SDL_free(raw);return ok;}
+StreamOptions resolve_stream_options(const StreamOptions&requested,bool headless){
+    StreamOptions resolved=requested;
+    if(headless||!resolved.automatic_fps||resolved.fps!=60){resolved.automatic_fps=false;return resolved;}
+    const SDL_DisplayID display=SDL_GetPrimaryDisplay();
+    const SDL_DisplayMode*mode=display?SDL_GetCurrentDisplayMode(display):nullptr;
+    if(!mode&&display)mode=SDL_GetDesktopDisplayMode(display);
+    const int refresh=mode&&mode->refresh_rate>0.f?static_cast<int>(std::lround(mode->refresh_rate)):0;
+    resolved.fps=automatic_stream_fps(refresh,240);resolved.automatic_fps=false;
+    if(debug_enabled())std::cerr<<"OPAL stream fps="<<resolved.fps<<" display_refresh="<<refresh<<"Hz mode=automatic\n";
+    return resolved;
+}
 void sync_generation(SessionSupervisor&session,HeldInputState&held,unsigned long&generation){auto current=session.control_generation();if(current==generation)return;for(const auto&command:held.release_commands())session.send_input(command);generation=current;}
 void release_held(SessionSupervisor&session,HeldInputState&held,unsigned long&generation){sync_generation(session,held,generation);for(const auto&command:held.release_commands())session.send_input(command);}
 int sdl_button_to_opal(std::uint8_t button){return button>=1&&button<=3?static_cast<int>(button):0;}
@@ -99,12 +110,13 @@ int hosts_list(){auto p=Paths::load();Ini h;if(!h.load(p.hosts)){std::cout<<"No 
 int client_connect(const std::string&target_in,const std::string&password_arg,const StreamOptions&stream){
     const bool headless_test=env_enabled("OPAL_TEST_HEADLESS");
     if(!headless_test&&!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)){std::cerr<<"SDL3 video initialization failed: "<<SDL_GetError()<<"\n";return 1;}
+    const StreamOptions resolved_stream=resolve_stream_options(stream,headless_test);
     auto quit_sdl=[&](){if(!headless_test)SDL_Quit();};
     ClientClipboardBridge clipboard;
     auto p=Paths::load();ensure_layout(p);if(!ensure_identity(p.identity_key,p.identity_pub)){std::cerr<<"client identity generation failed\n";quit_sdl();return 1;}Ini hosts;hosts.load(p.hosts);const bool saved=hosts.sections().count(target_in)>0;std::string rendezvous_id,expected_host_key,tailnet_address;
     if(saved){if(saved_legacy(hosts,target_in)){std::cerr<<"saved host uses an obsolete OPAL host format; remove it and pair again with its current OPAL connection code\n";quit_sdl();return 2;}rendezvous_id=hosts.get(target_in,"rendezvous_id");expected_host_key=hosts.get(target_in,"host_public_key");tailnet_address=hosts.get(target_in,"tailnet_address");}else if(!parse_connection_code(target_in,rendezvous_id)){std::cerr<<"invalid OPAL connection code; expected XXXX-XXXX-XXXX\n";quit_sdl();return 2;}
     if(rendezvous_id.empty()){std::cerr<<"saved OPAL host has no rendezvous identity\n";quit_sdl();return 2;}
-    SessionOptions options;options.rendezvous_id=rendezvous_id;options.expected_host_public_key=expected_host_key;options.tailnet_address=tailnet_address;options.client_public_key=public_key_hex(p.identity_pub);options.client_private_key_path=p.identity_key.string();options.paired=saved&&hosts.get(target_in,"paired")=="true"&&!expected_host_key.empty();options.pairing_password=password_arg;if(!headless_test)options.clipboard_control=[&clipboard](const std::string&line){clipboard.receive_control(line);};options.label=saved?target_in:"client";options.stream=stream;
+    SessionOptions options;options.rendezvous_id=rendezvous_id;options.expected_host_public_key=expected_host_key;options.tailnet_address=tailnet_address;options.client_public_key=public_key_hex(p.identity_pub);options.client_private_key_path=p.identity_key.string();options.paired=saved&&hosts.get(target_in,"paired")=="true"&&!expected_host_key.empty();options.pairing_password=password_arg;if(!headless_test)options.clipboard_control=[&clipboard](const std::string&line){clipboard.receive_control(line);};options.label=saved?target_in:"client";options.stream=resolved_stream;
     if(!options.paired&&options.pairing_password.empty())options.pairing_password_provider=[](){std::string password;std::cout<<"Pairing password: "<<std::flush;std::cin>>password;return password;};
     SessionSupervisor session(std::move(options));if(!session.start()){auto message=session.last_error();if(message.empty())message="cannot connect to OPAL host";std::cerr<<message<<"\n";quit_sdl();return error_code_for(message);}
     if(!headless_test)clipboard.start(session);
@@ -121,7 +133,7 @@ int client_connect(const std::string&target_in,const std::string&password_arg,co
     if(!first.frame){std::cerr<<"decoded video frame unavailable\n";session.stop();quit_sdl();return 1;}
     bool fullscreen=true;if(const char*w=std::getenv("OPAL_VIDEO_WINDOWED");w&&*w&&std::string(w)!="0")fullscreen=false;
     VideoPresenter presenter;if(!presenter.open(first.frame->width,first.frame->height,fullscreen)){std::cerr<<"OPAL presenter-open failed error="<<SDL_GetError()<<"\n";av_frame_free(&first.frame);session.stop();quit_sdl();return 1;}
-    if(debug_enabled())std::cerr<<"OPAL presenter=sdl3 video_driver="<<presenter.backend_name()<<"\n";
+    if(debug_enabled())std::cerr<<"OPAL presenter=sdl3 video_driver="<<presenter.backend_name()<<" presentation="<<presenter.presentation_mode()<<"\n";
     if(!present_frame(session,presenter,first)){std::cerr<<"OPAL presenter failed error="<<SDL_GetError()<<"\n";presenter.close();session.stop();quit_sdl();return 1;}
     std::cout<<"Connected. Ctrl+Alt+Shift+W releases input; click the OPAL screen to capture again. Ctrl+Alt+Shift+Q quits.\n"<<std::flush;if(debug_enabled())std::cerr<<"OPAL connection path="<<session.path_name()<<"\n";
     run_sdl_control(session,presenter,clipboard);presenter.close();session.stop();quit_sdl();return 0;
