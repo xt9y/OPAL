@@ -85,16 +85,13 @@ struct VideoReceiver::Impl{
     void clear_video_backlog(){video_frames.clear();sync_video_backlog_debug();}
     VideoBacklogPush push_video_backlog(MediaItem item,bool keyframe){const auto result=video_frames.push(std::move(item),keyframe);sync_video_backlog_debug();return result;}
     std::optional<MediaItem>pop_video_backlog(){auto item=video_frames.pop();sync_video_backlog_debug();return item;}
-    std::size_t video_backlog_size()const{return video_backlog_debug.load(std::memory_order_acquire);}
 
     void clear_latest_frame(){std::lock_guard<std::mutex>lock(frame_mu);if(latest_frame.frame)av_frame_free(&latest_frame.frame);latest_frame.pts_us=0;}
-    void publish_latest(DecodedVideoView view,std::int64_t pts_us){
-        if(!view.frame)return;
-        AVFrame*copy=av_frame_clone(view.frame);
-        if(!copy)return;
+    void publish_latest(DecodedVideoFrame owned){
+        if(!owned.frame)return;
         std::lock_guard<std::mutex>lock(frame_mu);
         if(latest_frame.frame){av_frame_free(&latest_frame.frame);stale.fetch_add(1);skipped_present_frames.fetch_add(1);}
-        latest_frame={copy,pts_us};
+        latest_frame=owned;
         media.store(true,std::memory_order_release);
     }
     bool take_latest(DecodedVideoFrame&out){std::lock_guard<std::mutex>lock(frame_mu);if(!latest_frame.frame)return false;if(out.frame)av_frame_free(&out.frame);out=latest_frame;latest_frame={};return true;}
@@ -131,7 +128,7 @@ struct VideoReceiver::Impl{
         const auto decode_end=monotonic_us();bool skip_publish=false;
         if(newest.frame){decoded_frames.fetch_add(static_cast<std::uint64_t>(superseded)+1);if(superseded)stale.fetch_add(superseded);{std::lock_guard<std::mutex>lock(media_mu);skip_publish=!video_frames.empty();}if(skip_publish){skipped_present_frames.fetch_add(1);stale.fetch_add(1);}}
         update_decode_telemetry(a,item.reassembly_ms,static_cast<double>(decode_end-decode_begin)/1000.0,item.first_arrival_us,decode_end);
-        if(newest.frame&&!skip_publish)publish_latest(newest,static_cast<std::int64_t>(a.capture_timestamp_us));
+        if(newest.frame&&!skip_publish){DecodedVideoFrame owned{};if(decoder.take_latest(owned))publish_latest(owned);}
         return true;
     }
 
