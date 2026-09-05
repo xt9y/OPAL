@@ -122,7 +122,7 @@ std::string format_host_media_debug(const HostMediaDebugSample &s){
         <<"OPAL host frame="<<s.frame_id<<" bytes="<<s.frame_bytes
         <<" packets="<<s.data_fragments<<"+"<<s.fec_fragments
         <<" send="<<(static_cast<double>(s.send_span_us)/1000.0)<<"ms"
-        <<" capture->packet="<<(static_cast<double>(s.capture_to_packet_us)/1000.0)<<"ms"
+        <<" encoded->packet-est="<<(static_cast<double>(s.capture_to_packet_us)/1000.0)<<"ms"
         <<" bitrate="<<s.active_kbps<<"kbps target="<<s.target_kbps<<"kbps"
         <<" stale="<<s.stale_frames<<" idr="<<s.idr_requests<<" restarts="<<s.restarts
         <<" chain="<<(s.chain_valid?"ok":"waiting-idr")<<" restart_reason="<<s.restart_reason;return out.str();
@@ -130,9 +130,9 @@ std::string format_host_media_debug(const HostMediaDebugSample &s){
 
 std::string format_latency_telemetry(const LatencyTelemetry &t){
     std::ostringstream out;out.setf(std::ios::fixed);out<<std::setprecision(1)
-        <<"OPAL latency capture->packet="<<t.capture_to_packet_ms<<"ms network="<<t.network_ms
+        <<"OPAL latency packet_age_est="<<t.capture_to_packet_ms<<"ms network_age_est="<<t.network_ms
         <<"ms reassembly="<<t.reassembly_ms<<"ms decode="<<t.decode_ms<<"ms present="<<t.present_ms
-        <<"ms total="<<t.total_ms<<"ms loss="<<t.loss_percent<<"% stale="<<t.stale_frames
+        <<"ms media_age_est="<<t.total_ms<<"ms loss="<<t.loss_percent<<"% stale="<<t.stale_frames
         <<" bitrate="<<t.bitrate_kbps<<"kbps decoder="<<t.decoder_backend
         <<" decode_fps="<<t.decoded_fps<<" present_fps="<<t.presented_fps
         <<" queue="<<t.video_queue_depth<<" skip_present="<<t.skipped_present_frames;return out.str();
