@@ -6,7 +6,7 @@ APP_SRCS += $(CLIPBOARD_SRCS)
 $(PRODUCT): $(CLIPBOARD_SRCS)
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
-FFMPEG_H264_PROBE := (ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -an -f flv - >/dev/null 2>&1 || ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v libopenh264 -an -f flv - >/dev/null 2>&1)
+FFMPEG_H264_PROBE := (ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 1 -preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 -an -f flv - >/dev/null 2>&1 || ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libopenh264 -bf 0 -g 1 -an -f flv - >/dev/null 2>&1)
 
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
