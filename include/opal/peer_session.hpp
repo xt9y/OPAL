@@ -36,6 +36,9 @@ struct PeerSessionOptions {
     std::function<void(const std::string&)> reliable_input;
     std::function<void(const std::string&)> pointer_input;
     std::function<void(std::span<const std::uint8_t>)> media_datagram;
+    // Only enable when media_datagram is strictly nonblocking and does not retain the span.
+    // This removes the intermediate PeerSession media queue/copy/thread from the hot path.
+    bool media_inline=false;
 };
 
 class PeerSession {
