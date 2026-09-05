@@ -8,6 +8,7 @@ namespace {
 constexpr std::size_t kMaxBytes=16u*1024u*1024u;
 constexpr std::size_t kMaxFragments=kMaxBytes/kVideoDataFragmentBytes+1;
 constexpr std::size_t kFrameSlots=3;
+constexpr std::size_t kDecoderPaddingReserve=64;
 std::uint16_t read16(const std::uint8_t*p){return static_cast<std::uint16_t>((p[0]<<8)|p[1]);}
 std::size_t storage_for(std::size_t count){if(count==0||count>kMaxFragments)return 0;const std::size_t groups=(count+9)/10;const std::size_t data=count*kVideoDataFragmentBytes;const std::size_t meta=count*(sizeof(std::uint16_t)+sizeof(std::uint8_t));const std::size_t fec=groups*kVideoPlaintextBytes+groups*(sizeof(std::uint16_t)+sizeof(std::uint8_t));if(data>kMaxBytes||meta>kMaxBytes-data||fec>kMaxBytes-data-meta)return 0;return data+meta+fec;}
 }
@@ -110,7 +111,7 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
     }
 
     output.media_type=frame->type;output.flags=frame->flags;output.frame_id=frame->id;output.capture_timestamp_us=frame->timestamp;output.keyframe=(frame->flags&FrameKeyframe)!=0;output.config=(frame->flags&FrameConfig)!=0;
-    std::size_t total=0;for(auto length:frame->fragment_lengths)total+=length;output.data.resize(total);std::size_t offset=0;for(std::size_t i=0;i<frame->count;++i){const auto length=frame->fragment_lengths[i];if(length)std::memcpy(output.data.data()+offset,frame->fragment_ptr(i),length);offset+=length;}
+    std::size_t total=0;for(auto length:frame->fragment_lengths)total+=length;output.data.clear();output.data.reserve(total+kDecoderPaddingReserve);output.data.resize(total);std::size_t offset=0;for(std::size_t i=0;i<frame->count;++i){const auto length=frame->fragment_lengths[i];if(length)std::memcpy(output.data.data()+offset,frame->fragment_ptr(i),length);offset+=length;}
     if(frame->type==VideoMediaType::VideoH264){impl.last_video_id=std::max(impl.last_video_id,frame->id);if(output.keyframe)impl.awaiting_idr=false;}
     impl.release(*frame);return ReassemblyStatus::Complete;
 }
