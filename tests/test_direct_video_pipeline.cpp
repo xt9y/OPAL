@@ -1,4 +1,5 @@
 #include "capture_test_support.hpp"
+#include "linked_codec_support.hpp"
 #include <opal/video_path.hpp>
 #include <opal/udp_transport.hpp>
 #include <opal/video_packet.hpp>
@@ -176,6 +177,7 @@ void run_media_stall_detection(std::uint32_t generation){
 
 int main(){
     if(!opal_test::capture_tests_available())return 0;
+    if(!opal_test::require_linked_h264_decoder())return 0;
     const auto command=opal_test::lavfi_video_command(320,180,60,0,15,true,false);
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
     run_case(1,false,9);
