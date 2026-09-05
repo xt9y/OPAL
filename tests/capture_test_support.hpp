@@ -15,7 +15,8 @@ inline std::string ffmpeg_h264_encoder(){
         std::string text;std::array<char,4096>buffer{};
         while(fgets(buffer.data(),static_cast<int>(buffer.size()),pipe))text+=buffer.data();
         pclose(pipe);
-        for(const char*name:{"libx264","libopenh264"})if(text.find(std::string(" ")+name+" ")!=std::string::npos)return std::string(name);
+        const char*candidates[]={"libx264","libopenh264"};
+        for(const char*name:candidates)if(text.find(std::string(" ")+name+" ")!=std::string::npos)return std::string(name);
         return std::string{};
     }();
     return encoder;
@@ -36,7 +37,7 @@ inline std::string lavfi_video_command(int width,int height,int fps,int frames,i
     if(frames>0)command+="-frames:v "+std::to_string(frames)+" ";
     command+="-pix_fmt yuv420p -c:v "+encoder+" -bf 0 -g "+std::to_string(gop)+" ";
     if(encoder=="libx264")command+="-preset ultrafast -tune zerolatency -keyint_min "+std::to_string(gop)+" -sc_threshold 0 ";
-    if(audio)command+="-c:a aac -b:a 96k ";else command+="-an ";
+    if(audio){command+="-c:a aac -b:a 96k ";if(frames>0)command+="-shortest ";}else command+="-an ";
     command+="-flush_packets 1 -f flv pipe:1";
     return command;
 }
