@@ -36,7 +36,7 @@ inline bool ffmpeg_h264_encoder_usable(const char*encoder){
     if(!encoder||!*encoder)return false;
     std::string command="ffmpeg -nostdin -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 8 -pix_fmt yuv420p -c:v "+std::string(encoder)+" -bf 0 -g 4 ";
     if(std::string(encoder)=="libx264")command+="-preset ultrafast -tune zerolatency -keyint_min 4 -sc_threshold 0 ";
-    command+="-an -flush_packets 1 -f flv pipe:1";
+    command+="-b:v 4000k -maxrate 4000k -bufsize 1000k -an -flush_packets 1 -f flv pipe:1";
     return command_emits_flv(command);
 }
 
@@ -74,6 +74,7 @@ inline std::string lavfi_video_command(int width,int height,int fps,int frames,i
     if(frames>0)command+="-frames:v "+std::to_string(frames)+" ";
     command+="-pix_fmt yuv420p -c:v "+encoder+" -bf 0 -g "+std::to_string(gop)+" ";
     if(encoder=="libx264")command+="-preset ultrafast -tune zerolatency -keyint_min "+std::to_string(gop)+" -sc_threshold 0 ";
+    command+="-b:v 4000k -maxrate 4000k -bufsize 1000k ";
     if(audio){command+="-c:a aac -b:a 96k ";if(frames>0)command+="-shortest ";}else command+="-an ";
     command+="-flush_packets 1 -f flv pipe:1";
     return command;
