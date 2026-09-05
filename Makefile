@@ -51,7 +51,11 @@ test-input-record: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input_record.cpp -o $(BUILD)/test-input-record
 	$(BUILD)/test-input-record
 
-test: test-clipboard test-tailnet-discovery-lifecycle test-input-record
+test-latency-window: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_latency_window.cpp -o $(BUILD)/test-latency-window
+	$(BUILD)/test-latency-window
+
+test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window
 
 test-video-present: | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_present.cpp $(VIDEO_PRESENT_SRCS) -lavutil $(GLLIBS) $(SDL3_LIBS) -o $(BUILD)/test-video-present
@@ -78,7 +82,7 @@ test-thread-sanitize: LDFLAGS += $(TSAN)
 test-thread-sanitize: export TSAN_OPTIONS := halt_on_error=1:history_size=7
 test-thread-sanitize: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
 
-.PHONY: test-input-record test-thread-sanitize test-sanitize
+.PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize
 test-sanitize: test-direct-media-sanitize test-thread-sanitize
 
 # The integration test validates networking/recovery in a headless process.
