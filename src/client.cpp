@@ -94,6 +94,8 @@ int client_connect(const std::string&target_in,const std::string&password_arg,co
     SessionSupervisor session(std::move(options));if(!session.start()){auto message=session.last_error();if(message.empty())message="cannot connect to OPAL host";std::cerr<<message<<"\n";quit_sdl();return error_code_for(message);}
     if(!headless_test)clipboard.start(session);
 
+    const std::string section=saved?target_in:format_connection_code(rendezvous_id);hosts.set(section,"rendezvous_id",rendezvous_id);hosts.set(section,"connection_code",format_connection_code(rendezvous_id));hosts.set(section,"host_public_key",session.host_public_key());hosts.set(section,"paired",session.paired()?"true":"false");auto learned_mac=session.remote_mac();if(!learned_mac.empty())hosts.set(section,"mac",learned_mac);auto learned_tailnet=session.remote_tailnet_address();if(!learned_tailnet.empty())hosts.set(section,"tailnet_address",learned_tailnet);if(hosts.get(section,"mouse_sensitivity").empty())hosts.set(section,"mouse_sensitivity","1.0");hosts.save(p.hosts);
+
     for(int i=0;i<1000&&!session.media_started()&&session.running();++i){if(!headless_test)clipboard.pump(session);std::this_thread::sleep_for(std::chrono::milliseconds(10));}
     if(!session.media_started()){auto message=session.last_error();std::cerr<<(message.empty()?"direct video did not start":message)<<"\n";session.stop();quit_sdl();return 1;}
     learned_tailnet=session.remote_tailnet_address();if(!learned_tailnet.empty()){hosts.set(section,"tailnet_address",learned_tailnet);hosts.save(p.hosts);}
