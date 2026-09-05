@@ -12,35 +12,48 @@ bool valid_restart_reason(const std::string &reason){
            reason=="decode-backlog"||reason=="bitrate-down"||reason=="bitrate-up"||
            reason=="capture-ended"||reason=="capture-stale"||reason=="send-failure";
 }
+std::uint32_t loss_per_mille(const VideoFeedbackSample&s){const std::uint64_t total=static_cast<std::uint64_t>(s.received)+s.lost;return total?static_cast<std::uint32_t>(std::min<std::uint64_t>(1000,static_cast<std::uint64_t>(s.lost)*1000/total)):0;}
 }
 
 BitrateController::BitrateController(int ceiling_kbps){
-    ceiling_=std::max(1000,ceiling_kbps);floor_=std::max(4000,ceiling_*35/100);floor_=std::min(floor_,ceiling_);target_=ceiling_;
+    ceiling_=std::max(1000,ceiling_kbps);
+    floor_=std::min(ceiling_,std::max(4000,ceiling_*35/100));
+    target_=std::clamp(ceiling_*60/100,floor_,ceiling_);
 }
 
 int BitrateController::on_feedback(const VideoFeedbackSample &sample,std::chrono::steady_clock::time_point now){
-    const std::uint64_t total=static_cast<std::uint64_t>(sample.received)+sample.lost;
-    const bool high_loss=total>0&&static_cast<std::uint64_t>(sample.lost)*100>total*2;
-    const bool low_loss=total==0||static_cast<std::uint64_t>(sample.lost)*1000<total*2;
-    if(sample.rtt_us>0&&(baseline_rtt_us_==0||sample.rtt_us<baseline_rtt_us_))baseline_rtt_us_=sample.rtt_us;
-    const bool high_rtt=sample.rtt_us>0&&baseline_rtt_us_>0&&sample.rtt_us>baseline_rtt_us_+15000;
-    const bool low_rtt=sample.rtt_us==0||baseline_rtt_us_==0||sample.rtt_us<baseline_rtt_us_+3000;
-    if(high_loss||high_rtt){
-        good_since_={};
-        target_=std::max(floor_,target_*75/100);
-        return target_;
+    if(sample.rtt_us){
+        if(!baseline_rtt_us_||sample.rtt_us<baseline_rtt_us_)baseline_rtt_us_=sample.rtt_us;
+        else baseline_rtt_us_=static_cast<std::uint32_t>((static_cast<std::uint64_t>(baseline_rtt_us_)*999+sample.rtt_us)/1000);
+        smoothed_rtt_us_=smoothed_rtt_us_?static_cast<std::uint32_t>((static_cast<std::uint64_t>(smoothed_rtt_us_)*7+sample.rtt_us)/8):sample.rtt_us;
     }
-    if(low_loss&&low_rtt){
-        if(good_since_.time_since_epoch().count()==0)good_since_=now;
-        if(now-good_since_>=std::chrono::seconds(1)){
-            target_=std::min(ceiling_,std::max(target_+1,target_*105/100));good_since_=now;last_raise_=now;
-        }
-    }else good_since_={};
+    const auto loss=loss_per_mille(sample);
+    const std::uint32_t queue_delay=(sample.rtt_us&&baseline_rtt_us_&&sample.rtt_us>baseline_rtt_us_)?sample.rtt_us-baseline_rtt_us_:0;
+    const bool severe=loss>=20||queue_delay>=15000||sample.decode_age_us>=80000;
+    const bool pressured=loss>=5||queue_delay>=8000||sample.decode_age_us>=45000;
+    if(severe){target_=std::max(floor_,target_*80/100);last_adjust_=now;return target_;}
+    if(pressured){target_=std::max(floor_,target_*90/100);last_adjust_=now;return target_;}
+    const bool clean=loss<=1&&queue_delay<=3000&&(sample.decode_age_us==0||sample.decode_age_us<=25000);
+    if(clean&&(last_adjust_.time_since_epoch().count()==0||now-last_adjust_>=std::chrono::milliseconds(300))){
+        const int startup_ceiling=ceiling_*85/100;
+        const int step=target_<startup_ceiling?std::max(500,target_/10):std::max(250,target_/20);
+        target_=std::min(ceiling_,target_+step);last_adjust_=now;
+    }
     return target_;
 }
 
 int BitrateController::target_kbps() const{return target_;}
 int BitrateController::floor_kbps() const{return floor_;}
+
+bool AdaptiveFecController::on_feedback(const VideoFeedbackSample&sample){
+    const auto loss=loss_per_mille(sample);
+    if(loss>=10){enabled_=true;clean_samples_=0;return true;}
+    if(!enabled_)return false;
+    if(loss<=1){if(++clean_samples_>=20){enabled_=false;clean_samples_=0;}}
+    else clean_samples_=0;
+    return enabled_;
+}
+bool AdaptiveFecController::enabled()const{return enabled_;}
 
 ClockEstimate estimate_clock_offset(std::int64_t t0,std::int64_t t1,std::int64_t t2,std::int64_t t3){
     ClockEstimate out;
@@ -101,7 +114,7 @@ bool parse_host_media_debug_line(const std::string &line,std::uint32_t generatio
     if(in>>reason){if(!valid_restart_reason(reason)||in>>extra)return false;}else{in.clear();reason="unknown";}
     s.frame_id=frame;s.frame_bytes=bytes;s.data_fragments=static_cast<std::uint32_t>(data);s.fec_fragments=static_cast<std::uint32_t>(fec);
     s.send_span_us=static_cast<std::uint32_t>(send);s.capture_to_packet_us=static_cast<std::uint32_t>(capture);
-    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=idr;s.restarts=restarts;s.chain_valid=chain==1;s.restart_reason=reason;return true;
+    s.target_kbps=static_cast<int>(target);s.active_kbps=static_cast<int>(active);s.stale_frames=stale;s.idr_requests=id r;s.restarts=restarts;s.chain_valid=chain==1;s.restart_reason=reason;return true;
 }
 
 std::string format_host_media_debug(const HostMediaDebugSample &s){
