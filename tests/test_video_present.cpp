@@ -1,6 +1,7 @@
 #include <opal/video_present.hpp>
 #include <SDL3/SDL.h>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 extern "C" {
@@ -29,9 +30,10 @@ int main(){
     assert(opal::VideoPresenter::supports_cpu_upload_format(AV_PIX_FMT_NV12));
     assert(!opal::VideoPresenter::supports_cpu_upload_format(AV_PIX_FMT_DRM_PRIME));
     assert(opal::VideoPresenter::drm_prime_supported_format(AV_PIX_FMT_DRM_PRIME));
+    unsetenv("OPAL_PBO");
     if(!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS))return 0;
     opal::VideoPresenter presenter;if(!presenter.open(320,180,false)){SDL_Quit();return 0;}
-    assert(presenter.is_open());const auto backend=presenter.backend_name();assert(backend.find("opengl")!=std::string::npos);assert(presenter.presented_frames()==0);
+    assert(presenter.is_open());const auto backend=presenter.backend_name();assert(backend.find("opengl")!=std::string::npos);assert(backend.find("pbo")==std::string::npos);assert(presenter.presented_frames()==0);
     const auto mode=presenter.presentation_mode();assert(mode=="immediate-active"||mode=="fallback");
     auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
 
