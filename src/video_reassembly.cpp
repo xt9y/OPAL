@@ -1,4 +1,5 @@
 #include <opal/video_reassembly.hpp>
+#include <opal/encoded_buffer_pool.hpp>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -27,8 +28,8 @@ struct VideoReassembler::Impl{
         bool init(std::uint64_t frame_id,std::uint64_t capture_timestamp,std::uint64_t insertion_order,std::uint16_t fragments){
             const auto planned=storage_for(fragments);if(!planned)return false;
             active=true;id=frame_id;timestamp=capture_timestamp;order=insertion_order;video_order=0;type=VideoMediaType::VideoH264;type_known=false;flags=0;count=fragments;storage_bytes=planned;
-            const std::size_t group_count=(count+9)/10;
-            fragment_data.clear();fragment_data.reserve(static_cast<std::size_t>(count)*kVideoDataFragmentBytes+kDecoderPaddingReserve);fragment_data.resize(static_cast<std::size_t>(count)*kVideoDataFragmentBytes);
+            const std::size_t group_count=(count+9)/10,data_bytes=static_cast<std::size_t>(count)*kVideoDataFragmentBytes,required_capacity=data_bytes+kDecoderPaddingReserve;
+            if(fragment_data.capacity()<required_capacity){if(fragment_data.capacity()<=EncodedBufferPool::kMaxRetainedBufferBytes)encoded_buffer_pool().release(std::move(fragment_data));else fragment_data={};fragment_data=encoded_buffer_pool().acquire(required_capacity,data_bytes);}else fragment_data.resize(data_bytes);
             fragment_present.resize(count);std::fill(fragment_present.begin(),fragment_present.end(),0);
             fragment_lengths.resize(count);std::fill(fragment_lengths.begin(),fragment_lengths.end(),0);
             parity_data.resize(group_count*kVideoPlaintextBytes);
@@ -36,7 +37,7 @@ struct VideoReassembler::Impl{
             parity_lengths.resize(group_count);std::fill(parity_lengths.begin(),parity_lengths.end(),0);
             return true;
         }
-        void deactivate(){active=false;id=timestamp=order=video_order=0;type=VideoMediaType::VideoH264;type_known=false;flags=0;count=0;storage_bytes=0;fragment_data.clear();fragment_present.clear();fragment_lengths.clear();parity_data.clear();parity_present.clear();parity_lengths.clear();}
+        void deactivate(){active=false;id=timestamp=order=video_order=0;type=VideoMediaType::VideoH264;type_known=false;flags=0;count=0;storage_bytes=0;if(fragment_data.capacity()>EncodedBufferPool::kMaxRetainedBufferBytes)fragment_data={};fragment_present.clear();fragment_lengths.clear();parity_data.clear();parity_present.clear();parity_lengths.clear();}
         std::size_t groups()const{return count?(static_cast<std::size_t>(count)+9)/10:0;}
         std::uint8_t*fragment_ptr(std::size_t index){return fragment_data.data()+index*kVideoDataFragmentBytes;}
         const std::uint8_t*fragment_ptr(std::size_t index)const{return fragment_data.data()+index*kVideoDataFragmentBytes;}

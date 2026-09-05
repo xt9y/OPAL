@@ -1,3 +1,4 @@
+#include <opal/encoded_buffer_pool.hpp>
 #include <opal/video_packet.hpp>
 #include <opal/video_reassembly.hpp>
 #include <atomic>
@@ -39,5 +40,7 @@ int main(){
     reassembler.reset(5,77);std::vector<std::uint8_t>aligned_expected(opal::kVideoDataFragmentBytes*3);for(std::size_t i=0;i<aligned_expected.size();++i)aligned_expected[i]=static_cast<std::uint8_t>((i*7u)&0xffu);sequence=900000;auto aligned=opal::fragment_media_unit(opal::VideoMediaType::VideoH264,opal::FrameKeyframe,5,77,900,15000000,aligned_expected,sequence,false);assert(aligned.size()==3);assert(reassembler.accept(aligned[0],complete)==opal::ReassemblyStatus::Incomplete);assert(reassembler.accept(aligned[1],complete)==opal::ReassemblyStatus::Incomplete);allocation_count.store(0,std::memory_order_relaxed);assert(reassembler.accept(aligned[2],complete)==opal::ReassemblyStatus::Complete);assert(complete.data==aligned_expected);assert(allocation_count.load(std::memory_order_relaxed)==0);assert(complete.data.capacity()>=complete.data.size()+64);
 
     reassembler.reset(5,77);auto malformed_fec=make_frame(950,opal::kVideoDataFragmentBytes+100,opal::FrameKeyframe);opal::VideoPlainPacket malformed_parity;opal::VideoPlainPacket final_data;for(const auto&packet:malformed_fec){if(packet.header.media_type==opal::VideoMediaType::Fec)malformed_parity=packet;else if(packet.header.fragment_index==1)final_data=packet;}assert(!malformed_parity.payload.empty()&&!final_data.payload.empty());malformed_parity.payload[1]=0;malformed_parity.payload[2]=100;malformed_parity.header.payload_length=static_cast<std::uint16_t>(malformed_parity.payload.size());assert(reassembler.accept(final_data,complete)==opal::ReassemblyStatus::Incomplete);assert(reassembler.accept(malformed_parity,complete)==opal::ReassemblyStatus::Ignored);
+
+    auto&pool=opal::encoded_buffer_pool();auto pooled=pool.acquire(300000,300000);auto*pooled_ptr=pooled.data();pool.release(std::move(pooled));allocation_count.store(0,std::memory_order_relaxed);auto reused=pool.acquire(200000,200000);assert(reused.data()==pooled_ptr);assert(allocation_count.load(std::memory_order_relaxed)==0);pool.release(std::move(reused));assert(pool.cached_buffers()>=1&&pool.cached_buffers()<=opal::EncodedBufferPool::kSlots);assert(pool.cached_bytes()<=opal::EncodedBufferPool::kMaxRetainedBytes);
     return 0;
 }
