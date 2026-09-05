@@ -89,9 +89,9 @@ struct VideoDecoder::Impl {
 
     bool open_software(const AVCodec *decoder,std::span<const std::uint8_t> extradata){
         reset_context();ctx=avcodec_alloc_context3(decoder);if(!ctx)return false;
-        configure_common();ctx->thread_count=0;ctx->thread_type=FF_THREAD_SLICE;
+        configure_common();ctx->thread_count=2;ctx->thread_type=FF_THREAD_SLICE;
         if(!copy_extradata(extradata)||avcodec_open2(ctx,decoder,nullptr)<0){reset_context();return false;}
-        backend=(ctx->active_thread_type&FF_THREAD_SLICE)?"software-slice":"software-lowdelay";
+        backend=(ctx->active_thread_type&FF_THREAD_SLICE)?"software-slice2":"software-lowdelay";
         return true;
     }
 
@@ -184,6 +184,7 @@ bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
     bool request_known=requested=="auto";
     for(int i=0;;++i){const AVCodecHWConfig *config=avcodec_get_hw_config(codec,i);if(!config)break;if(!(config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))continue;if(requested=="auto"&&config->device_type==AV_HWDEVICE_TYPE_VULKAN)continue;const char *name=av_hwdevice_get_type_name(config->device_type);if(!name)continue;if(requested!=std::string("auto")&&requested!=name)continue;request_known=true;if(impl_->open_hardware(codec,config,saved_extradata)){impl_->active_auto_hardware=requested=="auto";return true;}}
     if(requested!="auto")return false;
+    impl_->auto_hardware_disabled=true;
     return request_known&&impl_->open_software(codec,saved_extradata);
 }
 
