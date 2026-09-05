@@ -29,14 +29,25 @@ int sdl_button_to_opal(std::uint8_t button){return button>=1&&button<=3?static_c
 std::string pointer_command_for(SessionSupervisor&session,int x,int y,int width,int height){return video_pointer_command(x,y,width,height,session.remote_width(),session.remote_height());}
 bool send_pointer(SessionSupervisor&session,int x,int y,int width,int height){auto command=pointer_command_for(session,x,y,width,height);return command.empty()||session.send_input(command);}
 bool send_key_event(SessionSupervisor&session,HeldInputState&held,unsigned long&generation,int scancode,bool down,bool&run,bool&release_capture){
-    sync_generation(session,held,generation);const int code=linux_keycode_from_sdl_scancode(scancode);if(code<=0)return true;
-    if(down&&held.key_down(code))return true;if(!down&&!held.key_down(code))return true;
+    sync_generation(session,held,generation);
+    const int code=linux_keycode_from_sdl_scancode(scancode);
+    if(code<=0)return true;
+    if(down&&held.key_down(code))return true;
+    if(!down&&!held.key_down(code))return true;
     if(down){const auto chord=client_control_chord(held,code);if(chord==ClientControlChord::Quit){run=false;return true;}if(chord==ClientControlChord::ReleaseCapture){release_capture=true;return true;}}
     if(down)held.press_key(code);else held.release_key(code);
     return session.send_input("KEY "+std::to_string(code)+" "+(down?"1":"0"));
 }
 bool present_frame(SessionSupervisor&session,VideoPresenter&presenter,DecodedVideoFrame&frame){
-    if(!frame.frame)return true;const auto pts=frame.pts_us;const auto begin=Clock::now();const bool ok=presenter.present_borrowed({frame.frame,frame.pts_us});const auto end=Clock::now();av_frame_free(&frame.frame);frame.pts_us=0;if(ok){const double ms=std::chrono::duration<double,std::milli>(end-begin).count();session.note_presented_video(pts,ms);}return ok;
+    if(!frame.frame)return true;
+    const auto pts=frame.pts_us;
+    const auto begin=Clock::now();
+    const bool ok=presenter.present_borrowed({frame.frame,frame.pts_us});
+    const auto end=Clock::now();
+    av_frame_free(&frame.frame);
+    frame.pts_us=0;
+    if(ok){const double ms=std::chrono::duration<double,std::milli>(end-begin).count();session.note_presented_video(pts,ms);}
+    return ok;
 }
 class ClientClipboardBridge {
 public:
@@ -47,7 +58,9 @@ public:
         std::optional<std::string>remote;{std::lock_guard<std::mutex>lock(mu_);if(pending_remote_){remote=std::move(pending_remote_);pending_remote_.reset();}}
         if(remote){if(SDL_SetClipboardText(remote->c_str())){sender_.note_remote_applied(*remote);primed_=true;}else{std::lock_guard<std::mutex>lock(mu_);if(!pending_remote_)pending_remote_=std::move(*remote);}}
         const auto now=Clock::now();if(now>=next_poll_){std::string local;if(read_sdl_clipboard(local)){if(primed_)sender_.observe_local(local);else{sender_.prime_local(local);primed_=true;}}next_poll_=now+std::chrono::milliseconds(100);}
-        if(session.reliable_pending()>=kClipboardReliableWatermark)return;const auto*message=sender_.next_message();if(message&&session.send_input(*message))sender_.pop_message();
+        if(session.reliable_pending()>=kClipboardReliableWatermark)return;
+        const auto*message=sender_.next_message();
+        if(message&&session.send_input(*message))sender_.pop_message();
     }
 private:
     ClipboardSender sender_;ClipboardReceiver receiver_;std::mutex mu_;std::optional<std::string>pending_remote_;Clock::time_point next_poll_{};unsigned long generation_=0;bool primed_=false;
