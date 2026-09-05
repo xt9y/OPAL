@@ -10,14 +10,20 @@ int main(){
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
     opal::VideoCapture capture;
     assert(capture.start({160,90,30},4000,true,""));
+
+    opal::EncodedMediaUnit unit,last_audio;
     const opal::MediaConfig*aac_config=nullptr;
-    for(const auto&config:capture.configs())if(config.kind==opal::MediaKind::AudioAac)aac_config=&config;
+    for(int attempt=0;attempt<20&&!aac_config;++attempt){
+        (void)capture.next(unit,500);
+        for(const auto&config:capture.configs())if(config.kind==opal::MediaKind::AudioAac){aac_config=&config;break;}
+        if(capture.ended())break;
+    }
     assert(aac_config&&aac_config->sample_rate==48000&&aac_config->channels>0);
+    assert(capture.config_revision()>0);
 
     setenv("OPAL_AUDIO_TEST_SINK","hold",1);
     opal::AudioOutput output;
     assert(output.configure_aac(aac_config->extradata,aac_config->sample_rate,aac_config->channels));
-    opal::EncodedMediaUnit unit,last_audio;
     int submitted=0;
     for(int i=0;i<100&&submitted<4;++i){
         if(!capture.next(unit,1000))continue;
