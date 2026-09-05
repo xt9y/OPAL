@@ -9,6 +9,7 @@ CLIPBOARD_SRCS := src/clipboard.cpp
 APP_SRCS += $(CLIPBOARD_SRCS)
 $(PRODUCT): $(CLIPBOARD_SRCS)
 $(INPUT): include/opal/input_record.hpp
+OPAL_SOAK_SECONDS ?= 3600
 
 # VideoReceiver no longer owns the window/presenter. Product APP_SRCS was
 # assembled by Makefile.core before this override and still contains
@@ -94,13 +95,12 @@ test-netem: $(NETEM_PIPELINE)
 	@command -v tc >/dev/null 2>&1 || { echo 'test-netem requires iproute2/tc' >&2; exit 2; }
 	command -v ip >/dev/null 2>&1 || { echo 'test-netem requires iproute2/ip' >&2; exit 2; }
 	command -v timeout >/dev/null 2>&1 || { echo 'test-netem requires timeout' >&2; exit 2; }
-	BIN='$(abspath $(NETEM_PIPELINE))'
-	run_cases='\
-		set -eu; \
+	export BIN='$(abspath $(NETEM_PIPELINE))'
+	run_cases='set -eu; \
 		ip link set lo up; \
 		cleanup(){ tc qdisc del dev lo root >/dev/null 2>&1 || true; }; \
 		trap cleanup EXIT INT TERM; \
-		run(){ name=$$1; shift; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 timeout 45 "'"$$BIN"'"; }; \
+		run(){ name=$$1; shift; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 timeout 45 "$$BIN"; }; \
 		run clean delay 0ms; \
 		run lan-jitter delay 3ms 1ms distribution normal; \
 		run mild-loss delay 5ms 2ms loss 1%; \
@@ -116,13 +116,28 @@ test-netem: $(NETEM_PIPELINE)
 		exit 2
 	fi
 
+# Repeated real threads, crypto, packetization, reassembly, decode and recovery.
+# Individual tests retain their bounded queue/memory assertions on every loop.
+test-soak: test-peer-session test-udp-transport test-direct-video-stress test-direct-video-pipeline
+	@case '$(OPAL_SOAK_SECONDS)' in ''|*[!0-9]*) echo 'OPAL_SOAK_SECONDS must be a positive integer' >&2; exit 2;; esac
+	[ '$(OPAL_SOAK_SECONDS)' -gt 0 ] || { echo 'OPAL_SOAK_SECONDS must be > 0' >&2; exit 2; }
+	start=$$(date +%s); deadline=$$((start + $(OPAL_SOAK_SECONDS))); iterations=0
+	while [ $$(date +%s) -lt $$deadline ]; do
+		$(BUILD)/test-peer-session
+		$(BUILD)/test-udp-transport
+		$(BUILD)/test-direct-video-stress
+		OPAL_TEST_HEADLESS=1 $(BUILD)/test-direct-video-pipeline
+		iterations=$$((iterations + 1))
+	done
+	echo "HPI soak iterations=$$iterations seconds=$$(($$(date +%s) - start))"
+
 # Fast HPI correctness gate. Hostile kernel networking and sanitizers stay
 # explicit because they are intentionally slower and environment-sensitive.
-test-hpi: test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-direct-video-stress test-direct-video-pipeline
+test-hpi: test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
 test-hpi-sanitize: test-hpi test-sanitize
 
-.PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize test-netem test-hpi test-hpi-sanitize
+.PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 test-sanitize: test-direct-media-sanitize test-thread-sanitize
 
 # The integration test validates networking/recovery in a headless process.
