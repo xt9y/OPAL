@@ -11,11 +11,17 @@ constexpr int kUdpQueueBufferBytes=64*1024;
 constexpr int kUdpReceiveQueueBufferBytes=4*1024*1024;
 constexpr int kUdpInteractiveTrafficClass=0xb8; // DSCP EF, ECN bits clear
 constexpr std::size_t kUdpReceiveBatchMax=32;
+constexpr std::size_t kUdpSendBatchMax=32;
 
 enum class UdpSendResult : std::uint8_t {
     Sent=0,
     WouldBlock,
     Fatal
+};
+
+struct UdpSendBatchResult {
+    std::size_t sent=0;
+    UdpSendResult result=UdpSendResult::Fatal;
 };
 
 struct UdpCandidate {
@@ -42,6 +48,8 @@ std::vector<UdpCandidate> local_udp_candidates(const UdpSocket&);
 bool resolve_udp_endpoint(const std::string&,std::uint16_t,sockaddr_storage&,socklen_t&);
 UdpSendResult classify_udp_send_result(std::ptrdiff_t written,std::size_t expected,int error_number);
 UdpSendResult send_datagram_result(int,const sockaddr_storage&,socklen_t,std::span<const std::uint8_t>);
+UdpSendBatchResult send_datagrams_batch(int,const sockaddr_storage&,socklen_t,
+                                        std::span<const std::span<const std::uint8_t>>);
 bool send_datagram(int,const sockaddr_storage&,socklen_t,std::span<const std::uint8_t>);
 int recv_datagram(int,std::span<std::uint8_t>,sockaddr_storage&,socklen_t&,int timeout_ms);
 int recv_datagrams_batch(int,std::span<UdpReceiveSlot>,int timeout_ms);
