@@ -1,6 +1,7 @@
 #include <opal/video_receiver.hpp>
 
 #include <opal/audio_output.hpp>
+#include <opal/latency_window.hpp>
 #include <opal/udp_transport.hpp>
 #include <opal/video_backlog.hpp>
 #include <opal/video_decoder.hpp>
@@ -70,6 +71,7 @@ struct VideoReceiver::Impl{
     std::uint64_t interval_first=0,interval_highest=0,feedback_cursor=0,last_debug_decoded=0,last_debug_presented=0;
     std::uint32_t interval_received=0;
     LatencyTelemetry telemetry;
+    LatencyWindow<128>network_latency,reassembly_latency,decode_latency,present_latency,total_latency;
 
     bool initialize(VideoKeys video_keys,std::uint64_t sid,std::uint32_t gen,std::function<void(const std::string&)>send){
         if(sid==0||gen==0)return false;
@@ -104,21 +106,22 @@ struct VideoReceiver::Impl{
 
     void update_decode_telemetry(const ReassembledFrame&a,double reassembly_ms,double decode_ms,std::uint64_t first,std::uint64_t done){
         std::lock_guard<std::mutex>lock(telemetry_mu);
+        reassembly_latency.push(reassembly_ms);decode_latency.push(decode_ms);
         telemetry.reassembly_ms=ewma(telemetry.reassembly_ms,reassembly_ms);telemetry.decode_ms=ewma(telemetry.decode_ms,decode_ms);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();telemetry.decoder_backend=decoder_ready?decoder.backend_name():"unconfigured";
         if(clock_valid.load()){
             const auto offset=clock_offset_us.load();
             const double network=std::max(0.0,static_cast<double>(static_cast<std::int64_t>(first)-static_cast<std::int64_t>(a.capture_timestamp_us)+offset)/1000.0);
             const double decode_age=std::max(0.0,static_cast<double>(static_cast<std::int64_t>(done)-static_cast<std::int64_t>(a.capture_timestamp_us)+offset)/1000.0);
-            telemetry.network_ms=ewma(telemetry.network_ms,network);last_decode_age_us.store(static_cast<std::uint32_t>(std::min(4294967295.0,decode_age*1000.0)));
+            network_latency.push(network);telemetry.network_ms=ewma(telemetry.network_ms,network);last_decode_age_us.store(static_cast<std::uint32_t>(std::min(4294967295.0,decode_age*1000.0)));
         }else last_decode_age_us.store(0);
     }
     void update_present_telemetry(std::int64_t pts_us,double present_ms,std::uint64_t done){
         std::lock_guard<std::mutex>lock(telemetry_mu);
-        telemetry.present_ms=ewma(telemetry.present_ms,present_ms);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();
+        present_latency.push(present_ms);telemetry.present_ms=ewma(telemetry.present_ms,present_ms);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();
         if(clock_valid.load()){
             const auto offset=clock_offset_us.load();
             const double total=std::max(0.0,static_cast<double>(static_cast<std::int64_t>(done)-pts_us+offset)/1000.0);
-            telemetry.total_ms=ewma(telemetry.total_ms,total);
+            total_latency.push(total);telemetry.total_ms=ewma(telemetry.total_ms,total);
         }
     }
 
@@ -203,9 +206,15 @@ struct VideoReceiver::Impl{
         }
         if(last_clock.time_since_epoch().count()==0||now-last_clock>=std::chrono::seconds(1)){if(control_send)control_send(clock_sync_request_line(generation,static_cast<std::int64_t>(monotonic_us())));last_clock=now;}
         if(debug_enabled()&&(last_debug.time_since_epoch().count()==0||now-last_debug>=std::chrono::seconds(1))){
-            const auto decoded_now=decoded_frames.load(),presented_now=presented_frames.load();const double elapsed=last_debug.time_since_epoch().count()==0?0.0:std::chrono::duration<double>(now-last_debug).count();LatencyTelemetry snapshot;
-            {std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();if(elapsed>0.0){telemetry.decoded_fps=static_cast<double>(decoded_now-last_debug_decoded)/elapsed;telemetry.presented_fps=static_cast<double>(presented_now-last_debug_presented)/elapsed;}snapshot=telemetry;}
-            std::cerr<<format_latency_telemetry(snapshot)<<" audio="<<audio_queued_debug.load()<<"ms rtt="<<static_cast<double>(current_rtt_us.load())/1000.0<<"ms kernel_drop="<<kernel_drops.load()<<" encoded_drop="<<encoded_drops.load()<<" stall_recovery="<<stall_recoveries.load()<<"\n";
+            const auto decoded_now=decoded_frames.load(),presented_now=presented_frames.load();const double elapsed=last_debug.time_since_epoch().count()==0?0.0:std::chrono::duration<double>(now-last_debug).count();LatencyTelemetry snapshot;LatencyPercentiles net_tail,reassembly_tail,decode_tail,present_tail,total_tail;
+            {std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();if(elapsed>0.0){telemetry.decoded_fps=static_cast<double>(decoded_now-last_debug_decoded)/elapsed;telemetry.presented_fps=static_cast<double>(presented_now-last_debug_presented)/elapsed;}snapshot=telemetry;net_tail=network_latency.snapshot();reassembly_tail=reassembly_latency.snapshot();decode_tail=decode_latency.snapshot();present_tail=present_latency.snapshot();total_tail=total_latency.snapshot();}
+            std::cerr<<format_latency_telemetry(snapshot)
+                <<" tail_ms[p50/p95/p99] net="<<net_tail.p50<<"/"<<net_tail.p95<<"/"<<net_tail.p99
+                <<" reassembly="<<reassembly_tail.p50<<"/"<<reassembly_tail.p95<<"/"<<reassembly_tail.p99
+                <<" decode="<<decode_tail.p50<<"/"<<decode_tail.p95<<"/"<<decode_tail.p99
+                <<" present="<<present_tail.p50<<"/"<<present_tail.p95<<"/"<<present_tail.p99
+                <<" media_age="<<total_tail.p50<<"/"<<total_tail.p95<<"/"<<total_tail.p99
+                <<" audio="<<audio_queued_debug.load()<<"ms rtt="<<static_cast<double>(current_rtt_us.load())/1000.0<<"ms kernel_drop="<<kernel_drops.load()<<" encoded_drop="<<encoded_drops.load()<<" stall_recovery="<<stall_recoveries.load()<<"\n";
             last_debug_decoded=decoded_now;last_debug_presented=presented_now;last_debug=now;
         }
     }
