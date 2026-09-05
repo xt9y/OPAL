@@ -14,11 +14,12 @@ inline bool command_emits_flv(const std::string&command){
     if(!pipe)return false;
     std::array<unsigned char,8192> buffer{};
     std::array<unsigned char,13> prefix{};
-    std::size_t prefix_size=0;
+    std::size_t prefix_size=0,total_bytes=0;
     bool read_error=false;
     for(;;){
         const std::size_t n=fread(buffer.data(),1,buffer.size(),pipe);
         if(n){
+            total_bytes+=n;
             const std::size_t take=std::min<std::size_t>(prefix.size()-prefix_size,n);
             std::copy_n(buffer.data(),take,prefix.data()+prefix_size);
             prefix_size+=take;
@@ -28,7 +29,7 @@ inline bool command_emits_flv(const std::string&command){
         if(ferror(pipe)){read_error=true;break;}
     }
     const int rc=pclose(pipe);
-    return !read_error&&rc==0&&prefix_size>=13&&prefix[0]=='F'&&prefix[1]=='L'&&prefix[2]=='V'&&prefix[3]==1&&prefix[5]==0&&prefix[6]==0&&prefix[7]==0&&prefix[8]==9;
+    return !read_error&&rc==0&&total_bytes>=64&&prefix_size>=13&&prefix[0]=='F'&&prefix[1]=='L'&&prefix[2]=='V'&&prefix[3]==1&&prefix[5]==0&&prefix[6]==0&&prefix[7]==0&&prefix[8]==9;
 }
 
 inline bool ffmpeg_h264_encoder_usable(const char*encoder){
