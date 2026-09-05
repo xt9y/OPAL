@@ -90,7 +90,13 @@ test-direct-media-sanitize: test-flv-stream test-video-reorder
 test-thread-sanitize-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
 test-thread-sanitize-run: LDFLAGS += $(TSAN)
 test-thread-sanitize-run: export TSAN_OPTIONS := halt_on_error=1:history_size=7
-test-thread-sanitize-run: test-reliable-control test-video-crypto test-peer-handshake test-session-packet test-relay test-udp-transport test-peer-session test-peer-session-relay test-video-packet
+test-thread-sanitize-run: test-reliable-control test-video-crypto test-peer-handshake test-session-packet test-relay test-udp-transport test-video-packet
+
+test-thread-sanitize-session-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
+test-thread-sanitize-session-run: LDFLAGS += $(TSAN)
+test-thread-sanitize-session-run: export TSAN_OPTIONS := halt_on_error=1:history_size=7
+test-thread-sanitize-session-run: export OPAL_TEST_TRACE := 1
+test-thread-sanitize-session-run: test-peer-session test-peer-session-relay
 
 test-thread-sanitize:
 	mkdir -p "$(BUILD)"
@@ -113,6 +119,26 @@ test-thread-sanitize:
 	fi
 	rm -f "$$tmp" "$$tmp.cpp"
 	$(MAKE) -B test-thread-sanitize-run
+	tmp="$(BUILD)/.tsan-condvar-probe"
+	cat >"$$tmp.cpp" <<'CPP'
+	#include <chrono>
+	#include <condition_variable>
+	#include <mutex>
+	#include <thread>
+	int main(){std::mutex m;std::condition_variable cv;bool ready=false;std::thread t([&]{std::unique_lock<std::mutex>lock(m);cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return ready;});});{std::lock_guard<std::mutex>lock(m);ready=true;}cv.notify_one();t.join();return 0;}
+	CPP
+	if ! $(CXX) -std=c++20 -pthread "$$tmp.cpp" $(TSAN) -o "$$tmp" >/dev/null 2>&1; then
+		echo 'SKIP peer-session TSan: compiler cannot link condition-variable probe'
+		rm -f "$$tmp" "$$tmp.cpp"
+		exit 0
+	fi
+	if ! TSAN_OPTIONS=halt_on_error=1 "$$tmp" >/dev/null 2>&1; then
+		echo 'SKIP peer-session TSan: ThreadSanitizer condition-variable interceptor cannot execute on this system'
+		rm -f "$$tmp" "$$tmp.cpp"
+		exit 0
+	fi
+	rm -f "$$tmp" "$$tmp.cpp"
+	$(MAKE) -B test-thread-sanitize-session-run
 
 NETEM_PIPELINE := $(BUILD)/test-direct-video-pipeline-netem
 $(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp | $(BUILD) deps-check
@@ -129,7 +155,7 @@ test-netem: $(NETEM_PIPELINE) $(LINKED_CODEC_PROBE) $(CAPTURE_PROBE)
 		ip link set lo up; \
 		cleanup(){ tc qdisc del dev lo root >/dev/null 2>&1 || true; }; \
 		trap cleanup EXIT INT TERM; \
-		run(){ name=$$1; shift; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 timeout 45 "$$BIN"; }; \
+		run(){ name=$$1; shift; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 OPAL_TEST_NETEM=1 timeout 45 "$$BIN"; }; \
 		run clean delay 0ms; \
 		run lan-jitter delay 3ms 1ms distribution normal; \
 		run mild-loss delay 5ms 2ms loss 1%; \
@@ -169,7 +195,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-thread-sanitize-session-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
 test-integration: export OPAL_TEST_HEADLESS=1
