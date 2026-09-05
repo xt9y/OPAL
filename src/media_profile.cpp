@@ -41,6 +41,10 @@ int normal_gop_frames(int fps){
     return std::max(1,(fps+3)/4);
 }
 
+int low_latency_h264_slices(int width,int height){
+    return width>=1280&&height>=720?2:1;
+}
+
 std::uint64_t sender_burst_budget_bytes(int bitrate_kbps,int fps,bool keyframe){
     if(keyframe)return 8ULL*1200ULL;
     bitrate_kbps=std::clamp(bitrate_kbps,1000,100000);
