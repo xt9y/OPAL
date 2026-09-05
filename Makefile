@@ -1,9 +1,13 @@
 include Makefile.core
 
 CXXFLAGS += -pthread
+FLV_STREAM_SRCS := src/flv_stream.cpp
+VIDEO_CAPTURE_SRCS += $(FLV_STREAM_SRCS)
+DIRECT_SENDER_SRCS += $(FLV_STREAM_SRCS)
+APP_SRCS += $(FLV_STREAM_SRCS)
 CLIPBOARD_SRCS := src/clipboard.cpp
 APP_SRCS += $(CLIPBOARD_SRCS)
-$(PRODUCT): $(CLIPBOARD_SRCS)
+$(PRODUCT): $(CLIPBOARD_SRCS) $(FLV_STREAM_SRCS)
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
 FFMPEG_H264_PROBE := (ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 1 -preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 -an -f flv - >/dev/null 2>&1 || ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libopenh264 -bf 0 -g 1 -an -f flv - >/dev/null 2>&1)
@@ -37,6 +41,10 @@ $(INTEGRATION_FFMPEG): $(LINKED_CODEC_PROBE) | $(BUILD)
 test-linked-codec-probe: $(LINKED_CODEC_PROBE)
 	$(LINKED_CODEC_PROBE)
 
+test-flv-stream: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_flv_stream.cpp $(FLV_STREAM_SRCS) -o $(BUILD)/test-flv-stream
+	$(BUILD)/test-flv-stream
+
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
 	$(BUILD)/test-clipboard
@@ -57,7 +65,7 @@ test-capture-probe: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_capture_probe.cpp -o $(BUILD)/test-capture-probe
 	$(BUILD)/test-capture-probe
 
-test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe
+test: test-flv-stream test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe
 
 # Sanitizer targets propagate their flags to their prerequisites. The wrapper
 # below forces clean rebuilds because make does not consider CXXFLAGS when it
@@ -70,6 +78,7 @@ test-direct-media-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pth
 test-direct-media-sanitize: LDFLAGS += $(ASAN_UBSAN)
 test-direct-media-sanitize: export ASAN_OPTIONS := detect_leaks=1:strict_string_checks=1:check_initialization_order=1
 test-direct-media-sanitize: export UBSAN_OPTIONS := print_stacktrace=1:halt_on_error=1
+test-direct-media-sanitize: test-flv-stream
 
 test-thread-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
 test-thread-sanitize: LDFLAGS += $(TSAN)
@@ -127,7 +136,7 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 
 # Fast HPI correctness gate. Hostile kernel networking and sanitizers stay
 # explicit because they are intentionally slower and environment-sensitive.
-test-hpi: test-capture-probe test-linked-codec-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
+test-hpi: test-flv-stream test-capture-probe test-linked-codec-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
 # Always rebuild sanitizer binaries from scratch. ASan/UBSan and TSan are run
 # in separate clean trees because they are not link-compatible with each other.
@@ -139,7 +148,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: test-flv-stream test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
