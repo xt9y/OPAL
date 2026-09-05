@@ -2,6 +2,7 @@
 #include <opal/peer_session.hpp>
 #include <opal/udp_transport.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -44,6 +45,13 @@ int main(){
 
     const std::vector<std::uint8_t>slow_media={0x7f};assert(client.send_media_datagram(slow_media));
     const auto slow_start_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);while(!slow_media_started.load()&&std::chrono::steady_clock::now()<slow_start_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));assert(slow_media_started.load());
+
+    std::size_t flood_sent=0;
+    for(std::uint16_t i=0;i<160;++i){const std::array<std::uint8_t,3>burst={0x60,static_cast<std::uint8_t>(i>>8),static_cast<std::uint8_t>(i)};if(client.send_media_datagram(burst))++flood_sent;}
+    assert(flood_sent>40);
+    const auto overflow_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);while(host.media_ingress_drops()==0&&std::chrono::steady_clock::now()<overflow_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    assert(host.media_ingress_drops()>0);
+
     assert(client.send_input("KEY 31 1"));
     const auto control_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);bool delivered_while_media_busy=false;
     while(std::chrono::steady_clock::now()<control_deadline){{std::lock_guard<std::mutex>l(mu);delivered_while_media_busy=std::find(host_reliable.begin(),host_reliable.end(),"KEY 31 1")!=host_reliable.end();}if(delivered_while_media_busy)break;std::this_thread::sleep_for(std::chrono::milliseconds(10));}
