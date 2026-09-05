@@ -200,7 +200,7 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 	done
 	echo "HPI soak iterations=$$iterations seconds=$$(($$(date +%s) - start))"
 
-test-hpi: test-flv-stream test-video-reorder test-capture-probe test-linked-codec-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
+test-hpi: test-flv-stream test-video-reorder test-capture-probe test-linked-codec-probe test-video-capture test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
 test-sanitize:
 	$(MAKE) clean
