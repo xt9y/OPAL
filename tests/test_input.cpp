@@ -1,3 +1,4 @@
+#include <opal/client.hpp>
 #include <opal/input.hpp>
 #include <cassert>
 #include <cmath>
@@ -8,6 +9,7 @@
 static bool near(double a,double b,double eps=0.0001){return std::fabs(a-b)<=eps;}
 
 int main(){
+    static_assert(opal::kClientIdleWaitNs==200000);
     assert(opal::linux_keycode_from_sdl_scancode(4)==KEY_A);
     assert(opal::linux_keycode_from_sdl_scancode(20)==KEY_Q);
     assert(opal::linux_keycode_from_sdl_scancode(26)==KEY_W);

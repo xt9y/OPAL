@@ -70,7 +70,7 @@ void run_sdl_control(SessionSupervisor&session,VideoPresenter&presenter,ClientCl
         if(!run||!session.running())break;
         DecodedVideoFrame frame{};if(session.take_latest_video(frame)){did_work=true;if(!present_frame(session,presenter,frame)){std::cerr<<"OPAL presenter failed error="<<SDL_GetError()<<"\n";break;}}
         clipboard.pump(session);
-        if(!did_work)SDL_Delay(1);
+        if(!did_work)SDL_DelayNS(kClientIdleWaitNs);
     }
     release_held(session,held,generation);(void)presenter.set_relative_mouse_mode(false);
 }
