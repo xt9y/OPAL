@@ -55,6 +55,7 @@ public:
     std::uint64_t reliable_pending() const;
     std::uint64_t pointer_sequence() const;
     std::uint64_t media_ingress_drops() const;
+    std::uint64_t media_send_backpressure_drops() const;
     std::uint64_t control_dispatch_drops() const;
     std::uint64_t pointer_dispatch_overwrites() const;
     VideoKeys media_keys() const;
