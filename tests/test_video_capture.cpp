@@ -11,9 +11,12 @@
 
 namespace {
 void require_started(opal::VideoCapture&capture,const opal::StreamOptions&stream,int bitrate,bool audio){
+    const auto begin=std::chrono::steady_clock::now();
     const bool started=capture.start(stream,bitrate,audio,"");
+    const auto elapsed=std::chrono::steady_clock::now()-begin;
     if(!started)std::cerr<<"VideoCapture startup error: "<<capture.last_error()<<"\n";
     assert(started);
+    assert(elapsed<std::chrono::milliseconds(500));
 }
 }
 
@@ -27,12 +30,14 @@ int main(){
     assert(!capture.ended());
     assert(capture.backend_name()=="external-override-flv");
     assert(capture.capture_timestamp_estimated());
+    assert(capture.config_revision()==0);
 
     bool video=false,audio=false,keyframe=false;
     opal::EncodedMediaUnit unit;
     std::size_t observed_capacity=0;
-    for(int i=0;i<300&&!(video&&audio&&keyframe);++i){
-        if(!capture.next(unit,1000))continue;
+    const auto first_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while(std::chrono::steady_clock::now()<first_deadline&&!(video&&audio&&keyframe)){
+        if(!capture.next(unit,100))continue;
         video|=unit.kind==opal::MediaKind::VideoH264&&!unit.data.empty();
         audio|=unit.kind==opal::MediaKind::AudioAac&&!unit.data.empty();
         keyframe|=unit.kind==opal::MediaKind::VideoH264&&unit.keyframe;
@@ -44,12 +49,13 @@ int main(){
         video_config|=config.kind==opal::MediaKind::VideoH264&&!config.extradata.empty();
         audio_config|=config.kind==opal::MediaKind::AudioAac&&!config.extradata.empty()&&config.sample_rate==48000&&config.channels>0;
     }
-    assert(video_config&&audio_config);
+    assert(video_config&&audio_config&&capture.config_revision()>=2);
     for(int i=0;i<500&&!capture.ended();++i)(void)capture.next(unit,50);
     assert(capture.ended());
     capture.stop();
     assert(!capture.ended());
     assert(capture.backend_name()=="unconfigured");
+    assert(capture.config_revision()==0);
     unsetenv("OPAL_CAPTURE_CMD");
 
     const auto timed_command=opal_test::lavfi_video_command(320,180,60,60,15,true,false);
@@ -57,10 +63,11 @@ int main(){
     require_started(capture,{320,180,60},8000,false);
     assert(capture.capture_timestamp_estimated());
     opal::EncodedMediaUnit first,second;
-    for(int i=0;i<100;++i)if(capture.next(first,1000)&&first.kind==opal::MediaKind::VideoH264)break;
+    const auto timed_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while(std::chrono::steady_clock::now()<timed_deadline&&first.data.empty())if(capture.next(first,100)&&first.kind!=opal::MediaKind::VideoH264)first={};
     assert(!first.data.empty()&&first.capture_time_us>0);
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    for(int i=0;i<100;++i)if(capture.next(second,1000)&&second.kind==opal::MediaKind::VideoH264)break;
+    while(std::chrono::steady_clock::now()<timed_deadline&&second.data.empty())if(capture.next(second,100)&&second.kind!=opal::MediaKind::VideoH264)second={};
     assert(!second.data.empty()&&second.capture_time_us>first.capture_time_us);
     const auto capture_delta=second.capture_time_us-first.capture_time_us;
     assert(capture_delta<80000);
