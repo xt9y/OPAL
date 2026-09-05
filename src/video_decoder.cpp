@@ -164,7 +164,8 @@ bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
     if(requested=="software"||(requested=="auto"&&impl_->auto_hardware_disabled))return impl_->open_software(codec,saved_extradata);
     bool request_known=requested=="auto";
     for(int i=0;;++i){const AVCodecHWConfig *config=avcodec_get_hw_config(codec,i);if(!config)break;if(!(config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))continue;if(requested=="auto"&&config->device_type==AV_HWDEVICE_TYPE_VULKAN)continue;const char *name=av_hwdevice_get_type_name(config->device_type);if(!name)continue;if(requested!=std::string("auto")&&requested!=name)continue;request_known=true;if(impl_->open_hardware(codec,config,saved_extradata)){impl_->active_auto_hardware=requested=="auto";return true;}}
-    if(requested!="auto")return false;return request_known&&impl_->open_software(codec,saved_extradata);
+    if(requested!="auto")return false;
+    return request_known&&impl_->open_software(codec,saved_extradata);
 }
 
 bool VideoDecoder::decode_latest(std::span<const std::uint8_t> unit,std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
