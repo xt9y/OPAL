@@ -2,6 +2,7 @@
 
 #include <opal/media_profile.hpp>
 #include <opal/video_capture.hpp>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
