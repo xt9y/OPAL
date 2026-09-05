@@ -11,13 +11,17 @@ extern "C" {
 static opal::DecodedVideoFrame make_yuv420(int value){
     AVFrame *frame=av_frame_alloc();assert(frame);frame->format=AV_PIX_FMT_YUV420P;frame->width=320;frame->height=180;assert(av_frame_get_buffer(frame,32)==0);assert(av_frame_make_writable(frame)==0);
     for(int y=0;y<frame->height;++y)std::memset(frame->data[0]+y*frame->linesize[0],value,frame->width);
-    for(int y=0;y<frame->height/2;++y){std::memset(frame->data[1]+y*frame->linesize[1],128,frame->width/2);std::memset(frame->data[2]+y*frame->linesize[2],128,frame->width/2);}return{frame,value*1000};
+    for(int y=0;y<frame->height/2;++y){std::memset(frame->data[1]+y*frame->linesize[1],128,frame->width/2);std::memset(frame->data[2]+y*frame->linesize[2],128,frame->width/2);}
+    return{frame,value*1000};
 }
 
 static opal::DecodedVideoFrame make_nv12(int value){
     AVFrame *frame=av_frame_alloc();assert(frame);frame->format=AV_PIX_FMT_NV12;frame->width=320;frame->height=180;assert(av_frame_get_buffer(frame,32)==0);assert(av_frame_make_writable(frame)==0);
     for(int y=0;y<frame->height;++y)std::memset(frame->data[0]+y*frame->linesize[0],value,frame->width);
-    for(int y=0;y<frame->height/2;++y)for(int x=0;x<frame->width;x+=2){frame->data[1][y*frame->linesize[1]+x]=128;frame->data[1][y*frame->linesize[1]+x+1]=128;}return{frame,value*1000};
+    for(int y=0;y<frame->height/2;++y){
+        for(int x=0;x<frame->width;x+=2){frame->data[1][y*frame->linesize[1]+x]=128;frame->data[1][y*frame->linesize[1]+x+1]=128;}
+    }
+    return{frame,value*1000};
 }
 
 int main(){
