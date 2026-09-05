@@ -30,22 +30,27 @@ bool same_source(const sockaddr_storage&a,const sockaddr_storage&b){if(a.ss_fami
 bool retryable_path_error(const std::string&e){return e.find("timed out")!=std::string::npos||e.find("receive")!=std::string::npos||e.find("send failed")!=std::string::npos||e.find("confirmation")!=std::string::npos;}
 bool usable_endpoint(const RendezvousEndpoint&e){return !e.host.empty()&&e.port>0;}
 bool same_endpoint(const RendezvousEndpoint&a,const RendezvousEndpoint&b){return a.host==b.host&&a.port==b.port;}
-constexpr std::size_t kPeerMediaQueueCapacity=512;
+constexpr std::size_t kPeerMediaQueueCapacity=32;
+constexpr std::size_t kPeerControlQueueCapacity=64;
 }
 
 struct PeerSession::Impl {
     struct MediaSlot{std::array<std::uint8_t,kVideoMaxDatagramBytes+1>bytes{};std::size_t size=0;};
+    struct ControlSlot{SessionPacketType type=SessionPacketType::ControlAck;std::string payload;};
 
     PeerSessionOptions options;RendezvousEndpoint active_endpoint;sockaddr_storage peer{};socklen_t peer_len=0;std::uint64_t session_numeric=0;bool relay_mode=false;
     PeerEphemeralKey ephemeral;PeerSessionKeys keys;std::unique_ptr<VideoCipher>cipher;ReplayWindow1024 replay;
     ReliableControlSender reliable_sender;ReliableControlReceiver reliable_receiver;LatestPointerReceiver pointer_receiver;
-    std::thread thread,media_thread;mutable std::mutex send_mu,state_mu,reliable_mu,media_mu;std::condition_variable media_cv;
+    std::thread thread,media_thread,control_thread;mutable std::mutex send_mu,state_mu,reliable_mu,media_mu,control_mu;std::condition_variable media_cv,control_cv;
     std::array<MediaSlot,kPeerMediaQueueCapacity>media_queue{};std::size_t media_head=0,media_count=0;
-    std::atomic<bool>run{false},established{false};std::atomic<std::uint64_t>pointer_send_sequence{0},reliable_pending_count{0};std::uint64_t packet_send_sequence=1;std::string error,path="none";bool dropped_test_reliable=false;
+    std::array<ControlSlot,kPeerControlQueueCapacity>control_queue{};std::size_t control_head=0,control_count=0;
+    std::atomic<bool>run{false},established{false};std::atomic<std::uint64_t>pointer_send_sequence{0},reliable_pending_count{0},media_drop_count{0},control_drop_count{0},pointer_overwrite_count{0};std::uint64_t packet_send_sequence=1;std::string error,path="none";bool dropped_test_reliable=false;
 
+    void wake_workers(){media_cv.notify_all();control_cv.notify_all();}
     void set_error(std::string text){std::lock_guard<std::mutex>lock(state_mu);error=std::move(text);}
     void clear_media_queue(){std::lock_guard<std::mutex>lock(media_mu);for(auto&slot:media_queue)slot.size=0;media_head=0;media_count=0;}
-    void reset_attempt(){clear_peer_ephemeral(ephemeral);clear_peer_session_keys(keys);cipher.reset();replay.reset();reliable_sender.reset();reliable_receiver.reset();pointer_receiver.reset();clear_media_queue();packet_send_sequence=1;pointer_send_sequence.store(0);reliable_pending_count.store(0);established.store(false);dropped_test_reliable=false;}
+    void clear_control_queue(){std::lock_guard<std::mutex>lock(control_mu);for(auto&slot:control_queue)slot.payload.clear();control_head=0;control_count=0;}
+    void reset_attempt(){clear_peer_ephemeral(ephemeral);clear_peer_session_keys(keys);cipher.reset();replay.reset();reliable_sender.reset();reliable_receiver.reset();pointer_receiver.reset();clear_media_queue();clear_control_queue();packet_send_sequence=1;pointer_send_sequence.store(0);reliable_pending_count.store(0);media_drop_count.store(0);control_drop_count.store(0);pointer_overwrite_count.store(0);established.store(false);dropped_test_reliable=false;}
     bool activate(const RendezvousEndpoint&endpoint,bool relay){active_endpoint=endpoint;relay_mode=relay;peer={};peer_len=0;return !endpoint.host.empty()&&endpoint.port>0&&resolve_udp_endpoint(endpoint.host,endpoint.port,peer,peer_len);}
     bool send_wire(std::span<const std::uint8_t>wire){if(options.socket.fd<0||wire.empty())return false;if(relay_mode){if(!options.relay)return false;const auto wrapped=wrap_relay_datagram(options.relay->allocation_id,options.relay->role,wire);return !wrapped.empty()&&send_datagram(options.socket.fd,peer,peer_len,wrapped);}return send_datagram(options.socket.fd,peer,peer_len,wire);}
     bool receive_wire(std::span<std::uint8_t>buffer,std::span<const std::uint8_t>&wire,int timeout_ms){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(options.socket.fd,buffer,source,source_len,timeout_ms);if(n<=0||!same_source(source,peer))return false;wire=std::span<const std::uint8_t>(buffer.data(),static_cast<std::size_t>(n));return true;}
@@ -66,12 +71,51 @@ struct PeerSession::Impl {
 
     bool attempt(const RendezvousEndpoint&endpoint,bool relay,int timeout_ms,std::string&err){reset_attempt();if(!activate(endpoint,relay)){err=relay?"relay endpoint resolution failed":"peer endpoint resolution failed";return false;}return options.client_side?client_handshake(timeout_ms,err):host_handshake(timeout_ms,err);}
     void apply_ack(const SessionPacketHeader&h){{std::lock_guard<std::mutex>lock(reliable_mu);reliable_sender.acknowledge({h.ack_sequence,h.ack_bits});reliable_pending_count.store(reliable_sender.pending());}}
-    void process_control(const SessionPacketHeader&h,std::string payload){apply_ack(h);if(h.type==SessionPacketType::ReliableControl){std::vector<std::string>delivered;{std::lock_guard<std::mutex>lock(reliable_mu);reliable_receiver.receive(h.reliable_sequence,std::move(payload),delivered);}for(const auto&command:delivered)if(options.reliable_input)options.reliable_input(command);(void)send_encrypted(SessionPacketType::ControlAck,0,"");}else if(h.type==SessionPacketType::Pointer){bool accepted=false;std::string latest;{std::lock_guard<std::mutex>lock(reliable_mu);accepted=pointer_receiver.accept(h.reliable_sequence,std::move(payload));latest=pointer_receiver.latest();}if(accepted&&options.pointer_input)options.pointer_input(latest);}}
-    void send_due(){std::vector<ReliableTransmission>due;{std::lock_guard<std::mutex>lock(reliable_mu);due=reliable_sender.due(monotonic_ms());reliable_pending_count.store(reliable_sender.pending());if(reliable_sender.failed()){set_error("reliable control delivery failed");run.store(false);media_cv.notify_all();return;}}for(const auto&tx:due)if(!send_encrypted(SessionPacketType::ReliableControl,tx.sequence,tx.payload)){set_error("peer control send failed");run.store(false);media_cv.notify_all();return;}}
 
-    bool enqueue_media(std::span<const std::uint8_t>wire){if(!options.media_datagram||wire.empty()||wire.size()>kVideoMaxDatagramBytes+1)return false;{std::lock_guard<std::mutex>lock(media_mu);if(media_count>=media_queue.size())return false;const auto tail=(media_head+media_count)%media_queue.size();auto&slot=media_queue[tail];std::copy(wire.begin(),wire.end(),slot.bytes.begin());slot.size=wire.size();++media_count;}media_cv.notify_one();return true;}
-    void media_loop(){std::array<std::uint8_t,kVideoMaxDatagramBytes+1>local{};for(;;){std::size_t size=0;{std::unique_lock<std::mutex>lock(media_mu);media_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||media_count>0;});if(!run.load())break;if(media_count==0)continue;auto&slot=media_queue[media_head];size=slot.size;if(size)std::copy_n(slot.bytes.begin(),size,local.begin());slot.size=0;media_head=(media_head+1)%media_queue.size();--media_count;}if(size&&options.media_datagram)options.media_datagram(std::span<const std::uint8_t>(local.data(),size));}}
-    void loop(){auto next_keepalive=Clock::now()+std::chrono::milliseconds(500),last_authenticated=Clock::now();std::array<std::array<std::uint8_t,kVideoMaxDatagramBytes+1>,kUdpReceiveBatchMax>buffers{};std::array<UdpReceiveSlot,kUdpReceiveBatchMax>slots{};for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=buffers[i];while(run.load()){const int count=recv_datagrams_batch(options.socket.fd,slots,10);if(count>0){for(int i=0;i<count&&run.load();++i){auto&s=slots[static_cast<std::size_t>(i)];if(!same_source(s.source,peer)||s.size==0)continue;const std::span<const std::uint8_t>wire(s.buffer.data(),s.size);if(read_magic(wire)!=kSessionPacketMagic)continue;SessionPacketHeader h;std::string payload;if(open_encrypted(wire,&h,&payload)){last_authenticated=Clock::now();process_control(h,std::move(payload));}}for(int i=0;i<count&&run.load();++i){auto&s=slots[static_cast<std::size_t>(i)];if(!same_source(s.source,peer)||s.size==0)continue;const std::span<const std::uint8_t>wire(s.buffer.data(),s.size);if(read_magic(wire)==kSessionPacketMagic)continue;(void)enqueue_media(wire);}}send_due();const auto now=Clock::now();if(!run.load())break;if(now>=next_keepalive){if(!send_encrypted(SessionPacketType::Keepalive,0,"")){set_error("peer keepalive send failed");run.store(false);media_cv.notify_all();break;}next_keepalive=now+std::chrono::milliseconds(500);}if(now-last_authenticated>=std::chrono::seconds(3)){set_error("peer control timed out");run.store(false);media_cv.notify_all();break;}}established.store(false);media_cv.notify_all();}
+    bool enqueue_control(SessionPacketType type,std::string payload){
+        if(type!=SessionPacketType::ReliableControl&&type!=SessionPacketType::Pointer)return true;
+        {
+            std::lock_guard<std::mutex>lock(control_mu);
+            if(type==SessionPacketType::Pointer){
+                for(std::size_t i=0;i<control_count;++i){const auto index=(control_head+i)%control_queue.size();if(control_queue[index].type==SessionPacketType::Pointer){control_queue[index].payload=std::move(payload);pointer_overwrite_count.fetch_add(1);control_cv.notify_one();return true;}}
+            }
+            if(control_count>=control_queue.size()){control_drop_count.fetch_add(1);return false;}
+            const auto tail=(control_head+control_count)%control_queue.size();control_queue[tail].type=type;control_queue[tail].payload=std::move(payload);++control_count;
+        }
+        control_cv.notify_one();return true;
+    }
+
+    void process_control(const SessionPacketHeader&h,std::string payload){
+        apply_ack(h);
+        if(h.type==SessionPacketType::ReliableControl){
+            std::vector<std::string>delivered;{std::lock_guard<std::mutex>lock(reliable_mu);reliable_receiver.receive(h.reliable_sequence,std::move(payload),delivered);}
+            for(auto&command:delivered){if(!enqueue_control(SessionPacketType::ReliableControl,std::move(command))){set_error("control dispatch queue overflow");run.store(false);wake_workers();return;}}
+            (void)send_encrypted(SessionPacketType::ControlAck,0,"");
+        }else if(h.type==SessionPacketType::Pointer){
+            bool accepted=false;std::string latest;{std::lock_guard<std::mutex>lock(reliable_mu);accepted=pointer_receiver.accept(h.reliable_sequence,std::move(payload));if(accepted)latest=pointer_receiver.latest();}
+            if(accepted)(void)enqueue_control(SessionPacketType::Pointer,std::move(latest));
+        }
+    }
+
+    void send_due(){std::vector<ReliableTransmission>due;{std::lock_guard<std::mutex>lock(reliable_mu);due=reliable_sender.due(monotonic_ms());reliable_pending_count.store(reliable_sender.pending());if(reliable_sender.failed()){set_error("reliable control delivery failed");run.store(false);wake_workers();return;}}for(const auto&tx:due)if(!send_encrypted(SessionPacketType::ReliableControl,tx.sequence,tx.payload)){set_error("peer control send failed");run.store(false);wake_workers();return;}}
+
+    bool enqueue_media(std::span<const std::uint8_t>wire){
+        if(!options.media_datagram||wire.empty()||wire.size()>kVideoMaxDatagramBytes+1)return false;
+        {
+            std::lock_guard<std::mutex>lock(media_mu);
+            if(media_count>=media_queue.size()){
+                media_queue[media_head].size=0;media_head=(media_head+1)%media_queue.size();--media_count;media_drop_count.fetch_add(1);
+            }
+            const auto tail=(media_head+media_count)%media_queue.size();auto&slot=media_queue[tail];std::copy(wire.begin(),wire.end(),slot.bytes.begin());slot.size=wire.size();++media_count;
+        }
+        media_cv.notify_one();return true;
+    }
+
+    void media_loop(){std::array<std::uint8_t,kVideoMaxDatagramBytes+1>local{};for(;;){std::size_t size=0;{std::unique_lock<std::mutex>lock(media_mu);media_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||media_count>0;});if(!run.load()&&media_count==0)break;if(media_count==0)continue;auto&slot=media_queue[media_head];size=slot.size;if(size)std::copy_n(slot.bytes.begin(),size,local.begin());slot.size=0;media_head=(media_head+1)%media_queue.size();--media_count;}if(size&&options.media_datagram)options.media_datagram(std::span<const std::uint8_t>(local.data(),size));}}
+
+    void control_loop(){for(;;){ControlSlot work;bool have=false;{std::unique_lock<std::mutex>lock(control_mu);control_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||control_count>0;});if(!run.load()&&control_count==0)break;if(control_count==0)continue;auto&slot=control_queue[control_head];work.type=slot.type;work.payload=std::move(slot.payload);slot.payload.clear();control_head=(control_head+1)%control_queue.size();--control_count;have=true;}if(!have)continue;if(work.type==SessionPacketType::ReliableControl){if(options.reliable_input)options.reliable_input(work.payload);}else if(work.type==SessionPacketType::Pointer){if(options.pointer_input)options.pointer_input(work.payload);}}}
+
+    void loop(){auto next_keepalive=Clock::now()+std::chrono::milliseconds(500),last_authenticated=Clock::now();std::array<std::array<std::uint8_t,kVideoMaxDatagramBytes+1>,kUdpReceiveBatchMax>buffers{};std::array<UdpReceiveSlot,kUdpReceiveBatchMax>slots{};for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=buffers[i];while(run.load()){const int count=recv_datagrams_batch(options.socket.fd,slots,10);if(count>0){for(int i=0;i<count&&run.load();++i){auto&s=slots[static_cast<std::size_t>(i)];if(!same_source(s.source,peer)||s.size==0)continue;const std::span<const std::uint8_t>wire(s.buffer.data(),s.size);if(read_magic(wire)!=kSessionPacketMagic)continue;SessionPacketHeader h;std::string payload;if(open_encrypted(wire,&h,&payload)){last_authenticated=Clock::now();process_control(h,std::move(payload));}}for(int i=0;i<count&&run.load();++i){auto&s=slots[static_cast<std::size_t>(i)];if(!same_source(s.source,peer)||s.size==0)continue;const std::span<const std::uint8_t>wire(s.buffer.data(),s.size);if(read_magic(wire)==kSessionPacketMagic)continue;(void)enqueue_media(wire);}}send_due();const auto now=Clock::now();if(!run.load())break;if(now>=next_keepalive){if(!send_encrypted(SessionPacketType::Keepalive,0,"")){set_error("peer keepalive send failed");run.store(false);wake_workers();break;}next_keepalive=now+std::chrono::milliseconds(500);}if(now-last_authenticated>=std::chrono::seconds(3)){set_error("peer control timed out");run.store(false);wake_workers();break;}}established.store(false);wake_workers();}
 };
 
 PeerSession::PeerSession():impl_(std::make_unique<Impl>()){}PeerSession::~PeerSession(){stop();}
@@ -81,12 +125,24 @@ bool PeerSession::start(PeerSessionOptions options,std::string&error){
     bool connected=false;std::string lan_error,direct_error;
     if(impl_->options.lan_peer&&usable_endpoint(*impl_->options.lan_peer)&&!same_endpoint(*impl_->options.lan_peer,impl_->options.peer)){if(impl_->attempt(*impl_->options.lan_peer,false,impl_->options.lan_handshake_timeout_ms,lan_error)){impl_->path="lan";connected=true;}}
     if(!connected){if(impl_->attempt(impl_->options.peer,false,impl_->options.direct_handshake_timeout_ms,direct_error)){impl_->path="direct";connected=true;}else{if(!impl_->options.relay||!retryable_path_error(direct_error)){error=direct_error;if(!lan_error.empty())error="lan: "+lan_error+"; direct: "+direct_error;impl_->set_error(error);return false;}std::string relay_error;if(!impl_->attempt(impl_->options.relay->endpoint,true,impl_->options.relay_handshake_timeout_ms,relay_error)){error="direct: "+direct_error+"; relay: "+relay_error;if(!lan_error.empty())error="lan: "+lan_error+"; "+error;impl_->set_error(error);return false;}impl_->path="relay";connected=true;}}
-    impl_->run.store(true);if(impl_->options.media_datagram)impl_->media_thread=std::thread([this]{impl_->media_loop();});impl_->thread=std::thread([this]{impl_->loop();});error.clear();return true;
+    impl_->run.store(true);if(impl_->options.reliable_input||impl_->options.pointer_input)impl_->control_thread=std::thread([this]{impl_->control_loop();});if(impl_->options.media_datagram)impl_->media_thread=std::thread([this]{impl_->media_loop();});impl_->thread=std::thread([this]{impl_->loop();});error.clear();return true;
 }
 bool PeerSession::send_input(std::string command){if(command.rfind("POINTER ",0)==0)return send_pointer(std::move(command));if(!impl_||!impl_->run.load()||command.empty()||command.size()>kReliableControlMaxPayload)return false;std::uint64_t sequence=0;{std::lock_guard<std::mutex>lock(impl_->reliable_mu);sequence=impl_->reliable_sender.enqueue(std::move(command),monotonic_ms());impl_->reliable_pending_count.store(impl_->reliable_sender.pending());}impl_->send_due();return sequence!=0&&impl_->run.load();}
 bool PeerSession::send_pointer(std::string command){if(!impl_||!impl_->run.load()||command.rfind("POINTER ",0)!=0||command.size()>kSessionPacketMaxPayload)return false;const auto sequence=impl_->pointer_send_sequence.fetch_add(1)+1;return impl_->send_encrypted(SessionPacketType::Pointer,sequence,command);}
 bool PeerSession::send_media_datagram(std::span<const std::uint8_t>wire){return impl_&&impl_->run.load()&&wire.size()<=kRelayMaxInnerBytes&&impl_->send_wire(wire);}
-bool PeerSession::established()const{return impl_&&impl_->established.load();}bool PeerSession::running()const{return impl_&&impl_->run.load();}std::uint32_t PeerSession::generation()const{return impl_?impl_->options.handshake.generation:0;}std::uint16_t PeerSession::local_port()const{return impl_?impl_->options.socket.local_port:0;}std::uint64_t PeerSession::session_id()const{return impl_?impl_->session_numeric:0;}std::uint64_t PeerSession::reliable_pending()const{return impl_?impl_->reliable_pending_count.load():0;}std::uint64_t PeerSession::pointer_sequence()const{return impl_?impl_->pointer_send_sequence.load():0;}VideoKeys PeerSession::media_keys()const{return impl_?channel_video_keys(impl_->keys.media):VideoKeys{};}std::string PeerSession::path_name()const{return impl_?impl_->path:"none";}std::string PeerSession::last_error()const{if(!impl_)return{};std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->error;}
-void PeerSession::stop(){if(!impl_)return;impl_->run.store(false);impl_->media_cv.notify_all();if(impl_->thread.joinable())impl_->thread.join();if(impl_->media_thread.joinable())impl_->media_thread.join();impl_->clear_media_queue();impl_->established.store(false);close_udp_socket(impl_->options.socket);impl_->cipher.reset();clear_peer_ephemeral(impl_->ephemeral);clear_peer_session_keys(impl_->keys);}
+bool PeerSession::established()const{return impl_&&impl_->established.load();}
+bool PeerSession::running()const{return impl_&&impl_->run.load();}
+std::uint32_t PeerSession::generation()const{return impl_?impl_->options.handshake.generation:0;}
+std::uint16_t PeerSession::local_port()const{return impl_?impl_->options.socket.local_port:0;}
+std::uint64_t PeerSession::session_id()const{return impl_?impl_->session_numeric:0;}
+std::uint64_t PeerSession::reliable_pending()const{return impl_?impl_->reliable_pending_count.load():0;}
+std::uint64_t PeerSession::pointer_sequence()const{return impl_?impl_->pointer_send_sequence.load():0;}
+std::uint64_t PeerSession::media_ingress_drops()const{return impl_?impl_->media_drop_count.load():0;}
+std::uint64_t PeerSession::control_dispatch_drops()const{return impl_?impl_->control_drop_count.load():0;}
+std::uint64_t PeerSession::pointer_dispatch_overwrites()const{return impl_?impl_->pointer_overwrite_count.load():0;}
+VideoKeys PeerSession::media_keys()const{return impl_?channel_video_keys(impl_->keys.media):VideoKeys{};}
+std::string PeerSession::path_name()const{return impl_?impl_->path:"none";}
+std::string PeerSession::last_error()const{if(!impl_)return{};std::lock_guard<std::mutex>lock(impl_->state_mu);return impl_->error;}
+void PeerSession::stop(){if(!impl_)return;impl_->run.store(false);impl_->wake_workers();if(impl_->thread.joinable())impl_->thread.join();if(impl_->media_thread.joinable())impl_->media_thread.join();if(impl_->control_thread.joinable())impl_->control_thread.join();impl_->clear_media_queue();impl_->clear_control_queue();impl_->established.store(false);close_udp_socket(impl_->options.socket);impl_->cipher.reset();clear_peer_ephemeral(impl_->ephemeral);clear_peer_session_keys(impl_->keys);}
 
 }
