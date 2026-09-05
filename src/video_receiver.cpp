@@ -24,6 +24,8 @@
 
 namespace opal { namespace {
 using Clock=std::chrono::steady_clock;
+constexpr std::uint64_t kMediaStallRecoveryUs=500000;
+constexpr std::uint32_t kMediaStallRecoveryAttempts=4;
 std::uint64_t monotonic_us(){return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());}
 bool debug_enabled(){const char *v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 std::uint32_t read32(std::span<const std::uint8_t>b){return b.size()<4?0:(static_cast<std::uint32_t>(b[0])<<24)|(static_cast<std::uint32_t>(b[1])<<16)|(static_cast<std::uint32_t>(b[2])<<8)|b[3];}
@@ -57,11 +59,11 @@ struct VideoReceiver::Impl{
     std::optional<MediaItem>video_config,audio_frame,audio_config;
     DecodedVideoFrame latest_frame{};
 
-    std::atomic<bool>run{false},media{false},clock_valid{false},force_reassembly_idr{false},audio_reset_requested{false};
+    std::atomic<bool>run{false},media{false},clock_valid{false},force_reassembly_idr{false},audio_reset_requested{false},stall_reset_requested{false};
     std::atomic<VideoReceiverFailure>failure{VideoReceiverFailure::NoFailure};
-    std::atomic<std::uint64_t>stale{0},highest{0},kernel_drops{0},decoded_frames{0},presented_frames{0},skipped_present_frames{0},encoded_drops{0},last_media_us{0};
+    std::atomic<std::uint64_t>stale{0},highest{0},kernel_drops{0},decoded_frames{0},presented_frames{0},skipped_present_frames{0},encoded_drops{0},last_media_us{0},last_video_us{0};
     std::atomic<std::int64_t>latest_video_ts{0},clock_offset_us{0};
-    std::atomic<std::uint32_t>current_rtt_us{0},last_decode_age_us{0},host_capture_to_packet_us{0},audio_queued_debug{0},video_backlog_debug{0};
+    std::atomic<std::uint32_t>current_rtt_us{0},last_decode_age_us{0},host_capture_to_packet_us{0},audio_queued_debug{0},video_backlog_debug{0},stall_recoveries{0};
     std::atomic<int>host_active_kbps{0};
     bool decoder_ready=false,audio_ready=false;
     Clock::time_point last_idr_request{},last_feedback{},last_clock{},last_debug{};
@@ -162,9 +164,10 @@ struct VideoReceiver::Impl{
 
     void media_loop(){
         while(run.load()){
+            if(stall_reset_requested.exchange(false)){decoder.flush();clear_latest_frame();latest_video_ts.store(0);}
             if(audio_reset_requested.exchange(false)){audio_output.reset_to(latest_video_ts.load());audio_queued_debug.store(audio_output.queued_ms());}
             std::optional<MediaItem>item;
-            {std::unique_lock<std::mutex>lock(media_mu);media_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||video_config||!video_frames.empty()||audio_config||audio_frame||audio_reset_requested.load();});if(!run.load())break;if(video_config){item=std::move(video_config);video_config.reset();}else if(!video_frames.empty())item=pop_video_backlog();else if(audio_config){item=std::move(audio_config);audio_config.reset();}else if(audio_frame){item=std::move(audio_frame);audio_frame.reset();}}
+            {std::unique_lock<std::mutex>lock(media_mu);media_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||video_config||!video_frames.empty()||audio_config||audio_frame||audio_reset_requested.load()||stall_reset_requested.load();});if(!run.load())break;if(video_config){item=std::move(video_config);video_config.reset();}else if(!video_frames.empty())item=pop_video_backlog();else if(audio_config){item=std::move(audio_config);audio_config.reset();}else if(audio_frame){item=std::move(audio_frame);audio_frame.reset();}}
             if(item)handle_media_complete(*item);
         }
         audio_output.close();clear_latest_frame();decoder.flush();
@@ -180,10 +183,12 @@ struct VideoReceiver::Impl{
         if(!parse_video_header(bytes,header)||header.generation!=generation||header.session_id!=session_id||header.media_type==VideoMediaType::Probe||header.media_type==VideoMediaType::ProbeAck||bytes.size()!=kVideoHeaderBytes+static_cast<std::size_t>(header.payload_length)+kVideoAeadTagBytes)return false;
         std::size_t plaintext_size=0;
         if(!cipher||!cipher->open(header.packet_sequence,bytes.first(kVideoHeaderBytes),bytes.subspan(kVideoHeaderBytes),plaintext_buffer,plaintext_size)||plaintext_size!=header.payload_length||!replay.accept(header.packet_sequence))return false;
-        last_media_us.store(arrival);note_sequence(header.packet_sequence);if(header.media_type==VideoMediaType::Keepalive)return true;note_arrival(header.frame_id,arrival);
+        last_media_us.store(arrival);note_sequence(header.packet_sequence);if(header.media_type==VideoMediaType::Keepalive)return true;
+        if(header.media_type==VideoMediaType::VideoH264||header.media_type==VideoMediaType::Fec)last_video_us.store(arrival);
+        note_arrival(header.frame_id,arrival);
         const std::span<const std::uint8_t>plaintext(plaintext_buffer.data(),plaintext_size);const auto status=reassembler.accept(header,plaintext,assembled);
         if(status==ReassemblyStatus::NeedIdr)request_idr_rx("reassembly-loss");
-        else if(status==ReassemblyStatus::Complete){const auto first=take_arrival(assembled.frame_id,arrival);MediaItem item{std::move(assembled),static_cast<double>(arrival-first)/1000.0,first};assembled={};enqueue_media(std::move(item));}
+        else if(status==ReassemblyStatus::Complete){if(assembled.media_type==VideoMediaType::VideoH264)stall_recoveries.store(0);const auto first=take_arrival(assembled.frame_id,arrival);MediaItem item{std::move(assembled),static_cast<double>(arrival-first)/1000.0,first};assembled={};enqueue_media(std::move(item));}
         return true;
     }
 
@@ -200,7 +205,7 @@ struct VideoReceiver::Impl{
         if(debug_enabled()&&(last_debug.time_since_epoch().count()==0||now-last_debug>=std::chrono::seconds(1))){
             const auto decoded_now=decoded_frames.load(),presented_now=presented_frames.load();const double elapsed=last_debug.time_since_epoch().count()==0?0.0:std::chrono::duration<double>(now-last_debug).count();LatencyTelemetry snapshot;
             {std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();if(elapsed>0.0){telemetry.decoded_fps=static_cast<double>(decoded_now-last_debug_decoded)/elapsed;telemetry.presented_fps=static_cast<double>(presented_now-last_debug_presented)/elapsed;}snapshot=telemetry;}
-            std::cerr<<format_latency_telemetry(snapshot)<<" audio="<<audio_queued_debug.load()<<"ms rtt="<<static_cast<double>(current_rtt_us.load())/1000.0<<"ms kernel_drop="<<kernel_drops.load()<<" encoded_drop="<<encoded_drops.load()<<"\n";
+            std::cerr<<format_latency_telemetry(snapshot)<<" audio="<<audio_queued_debug.load()<<"ms rtt="<<static_cast<double>(current_rtt_us.load())/1000.0<<"ms kernel_drop="<<kernel_drops.load()<<" encoded_drop="<<encoded_drops.load()<<" stall_recovery="<<stall_recoveries.load()<<"\n";
             last_debug_decoded=decoded_now;last_debug_presented=presented_now;last_debug=now;
         }
     }
@@ -211,9 +216,27 @@ struct VideoReceiver::Impl{
         std::int64_t t0=0,t1=0,t2=0;if(!parse_clock_sync_line(line,generation,t0,t1,t2)||t1==0||t2==0)return false;auto e=estimate_clock_offset(t0,t1,t2,static_cast<std::int64_t>(monotonic_us()));if(!e.valid)return true;clock_offset_us.store(e.offset_us);current_rtt_us.store(e.rtt_us);clock_valid.store(true);return true;
     }
 
-    bool stalled()const{const auto last=last_media_us.load();return media.load()&&last&&monotonic_us()>last+1000000ULL;}
-    void direct_loop(){std::array<std::array<std::uint8_t,kVideoMaxDatagramBytes+1>,kUdpReceiveBatchMax>wire{};std::array<UdpReceiveSlot,kUdpReceiveBatchMax>slots{};for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=wire[i];while(run.load()){const int batch=recv_datagrams_batch(owned_path->socket.fd,slots,20);if(batch>0)for(int index=0;index<batch&&run.load();++index){auto&slot=slots[static_cast<std::size_t>(index)];kernel_drops.store(std::max<std::uint64_t>(kernel_drops.load(),slot.kernel_drops));if(slot.size)accept_wire(std::span<const std::uint8_t>(slot.buffer.data(),slot.size));}control_tick();if(stalled()){fail(VideoReceiverFailure::MediaStall);break;}}media_cv.notify_all();}
-    void native_control_loop(){while(run.load()){control_tick();if(stalled()){fail(VideoReceiverFailure::MediaStall);break;}std::this_thread::sleep_for(std::chrono::milliseconds(20));}media_cv.notify_all();}
+    bool recover_stall(){
+        const auto last=last_video_us.load();const auto now=monotonic_us();
+        if(!media.load()||!last||now<=last+kMediaStallRecoveryUs)return true;
+        const auto attempt=stall_recoveries.fetch_add(1)+1;
+        if(attempt>kMediaStallRecoveryAttempts){fail(VideoReceiverFailure::MediaStall);return false;}
+        {
+            std::lock_guard<std::mutex>lock(rx_mu);
+            reassembler.require_idr();assembled={};arrivals.fill({});arrival_cursor=0;
+        }
+        {
+            std::lock_guard<std::mutex>lock(media_mu);
+            clear_video_backlog();audio_frame.reset();
+        }
+        stall_reset_requested.store(true);audio_reset_requested.store(true);last_video_us.store(now);media_cv.notify_one();
+        request_idr_control("reassembly-loss");
+        if(debug_enabled())std::cerr<<"OPAL media stall local-recovery attempt="<<attempt<<"/"<<kMediaStallRecoveryAttempts<<"\n";
+        return true;
+    }
+
+    void direct_loop(){std::array<std::array<std::uint8_t,kVideoMaxDatagramBytes+1>,kUdpReceiveBatchMax>wire{};std::array<UdpReceiveSlot,kUdpReceiveBatchMax>slots{};for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=wire[i];while(run.load()){const int batch=recv_datagrams_batch(owned_path->socket.fd,slots,20);if(batch>0)for(int index=0;index<batch&&run.load();++index){auto&slot=slots[static_cast<std::size_t>(index)];kernel_drops.store(std::max<std::uint64_t>(kernel_drops.load(),slot.kernel_drops));if(slot.size)accept_wire(std::span<const std::uint8_t>(slot.buffer.data(),slot.size));}control_tick();if(!recover_stall())break;}media_cv.notify_all();}
+    void native_control_loop(){while(run.load()){control_tick();if(!recover_stall())break;std::this_thread::sleep_for(std::chrono::milliseconds(20));}media_cv.notify_all();}
 };
 
 VideoReceiver::VideoReceiver():impl_(std::make_unique<Impl>()){}
