@@ -1,8 +1,16 @@
 #include <opal/video_packet.hpp>
 #include <opal/video_reassembly.hpp>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
+#include <new>
 #include <vector>
+
+static std::atomic<std::size_t> allocation_count{0};
+void* operator new(std::size_t size){allocation_count.fetch_add(1,std::memory_order_relaxed);if(void*ptr=std::malloc(size))return ptr;throw std::bad_alloc();}
+void operator delete(void*ptr) noexcept{std::free(ptr);}
+void operator delete(void*ptr,std::size_t) noexcept{std::free(ptr);}
 
 static std::vector<opal::VideoPlainPacket> make_frame(std::uint64_t id,std::size_t bytes,std::uint16_t flags=0){std::vector<std::uint8_t> data(bytes);for(std::size_t i=0;i<data.size();++i)data[i]=static_cast<std::uint8_t>((i+id*13u)&0xffu);std::uint64_t sequence=id*1000;return opal::fragment_media_unit(opal::VideoMediaType::VideoH264,flags,5,77,id,id*16667,data,sequence,true);}
 static bool feed_complete(opal::VideoReassembler&r,const std::vector<opal::VideoPlainPacket>&packets,opal::ReassembledFrame&complete){bool delivered=false;for(const auto&packet:packets)if(r.accept(packet,complete)==opal::ReassemblyStatus::Complete)delivered=true;return delivered;}
@@ -26,5 +34,10 @@ int main(){
 
     reassembler.reset(5,77);auto reset_key=make_frame(29,500,opal::FrameKeyframe);assert(feed_complete(reassembler,reset_key,complete));auto old=make_frame(30,opal::kVideoDataFragmentBytes+10);for(const auto &packet:old){if(packet.header.media_type!=opal::VideoMediaType::Fec){reassembler.accept(packet,complete);break;}}assert(reassembler.frames_in_flight()==1);reassembler.reset(6,88);assert(reassembler.frames_in_flight()==0&&reassembler.bytes_in_flight()==0);assert(reassembler.accept(old.front(),complete)==opal::ReassemblyStatus::Ignored);
 
-    reassembler.reset(5,77);for(std::uint64_t cycle=1;cycle<=128;++cycle){auto frame=make_frame(1000+cycle,700,opal::FrameKeyframe);assert(feed_complete(reassembler,frame,complete));assert(reassembler.frames_in_flight()==0);assert(reassembler.bytes_in_flight()==0);}return 0;
+    reassembler.reset(5,77);for(std::uint64_t cycle=1;cycle<=128;++cycle){auto frame=make_frame(1000+cycle,700,opal::FrameKeyframe);assert(feed_complete(reassembler,frame,complete));assert(reassembler.frames_in_flight()==0);assert(reassembler.bytes_in_flight()==0);}
+
+    reassembler.reset(5,77);std::vector<std::uint8_t>aligned_expected(opal::kVideoDataFragmentBytes*3);for(std::size_t i=0;i<aligned_expected.size();++i)aligned_expected[i]=static_cast<std::uint8_t>((i*7u)&0xffu);sequence=900000;auto aligned=opal::fragment_media_unit(opal::VideoMediaType::VideoH264,opal::FrameKeyframe,5,77,900,15000000,aligned_expected,sequence,false);assert(aligned.size()==3);assert(reassembler.accept(aligned[0],complete)==opal::ReassemblyStatus::Incomplete);assert(reassembler.accept(aligned[1],complete)==opal::ReassemblyStatus::Incomplete);allocation_count.store(0,std::memory_order_relaxed);assert(reassembler.accept(aligned[2],complete)==opal::ReassemblyStatus::Complete);assert(complete.data==aligned_expected);assert(allocation_count.load(std::memory_order_relaxed)==0);assert(complete.data.capacity()>=complete.data.size()+64);
+
+    reassembler.reset(5,77);auto malformed_fec=make_frame(950,opal::kVideoDataFragmentBytes+100,opal::FrameKeyframe);opal::VideoPlainPacket malformed_parity;opal::VideoPlainPacket final_data;for(const auto&packet:malformed_fec){if(packet.header.media_type==opal::VideoMediaType::Fec)malformed_parity=packet;else if(packet.header.fragment_index==1)final_data=packet;}assert(!malformed_parity.payload.empty()&&!final_data.payload.empty());malformed_parity.payload[1]=0;malformed_parity.payload[2]=100;malformed_parity.header.payload_length=static_cast<std::uint16_t>(malformed_parity.payload.size());assert(reassembler.accept(final_data,complete)==opal::ReassemblyStatus::Incomplete);assert(reassembler.accept(malformed_parity,complete)==opal::ReassemblyStatus::Ignored);
+    return 0;
 }

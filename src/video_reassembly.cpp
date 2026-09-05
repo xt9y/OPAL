@@ -10,7 +10,7 @@ constexpr std::size_t kMaxFragments=kMaxBytes/kVideoDataFragmentBytes+1;
 constexpr std::size_t kFrameSlots=3;
 constexpr std::size_t kDecoderPaddingReserve=64;
 std::uint16_t read16(const std::uint8_t*p){return static_cast<std::uint16_t>((p[0]<<8)|p[1]);}
-std::size_t storage_for(std::size_t count){if(count==0||count>kMaxFragments)return 0;const std::size_t groups=(count+9)/10;const std::size_t data=count*kVideoDataFragmentBytes;const std::size_t meta=count*(sizeof(std::uint16_t)+sizeof(std::uint8_t));const std::size_t fec=groups*kVideoPlaintextBytes+groups*(sizeof(std::uint16_t)+sizeof(std::uint8_t));if(data>kMaxBytes||meta>kMaxBytes-data||fec>kMaxBytes-data-meta)return 0;return data+meta+fec;}
+std::size_t storage_for(std::size_t count){if(count==0||count>kMaxFragments)return 0;const std::size_t groups=(count+9)/10;const std::size_t data=count*kVideoDataFragmentBytes+kDecoderPaddingReserve;const std::size_t meta=count*(sizeof(std::uint16_t)+sizeof(std::uint8_t));const std::size_t fec=groups*kVideoPlaintextBytes+groups*(sizeof(std::uint16_t)+sizeof(std::uint8_t));if(data>kMaxBytes||meta>kMaxBytes-data||fec>kMaxBytes-data-meta)return 0;return data+meta+fec;}
 }
 
 struct VideoReassembler::Impl{
@@ -28,7 +28,7 @@ struct VideoReassembler::Impl{
             const auto planned=storage_for(fragments);if(!planned)return false;
             active=true;id=frame_id;timestamp=capture_timestamp;order=insertion_order;video_order=0;type=VideoMediaType::VideoH264;type_known=false;flags=0;count=fragments;storage_bytes=planned;
             const std::size_t group_count=(count+9)/10;
-            fragment_data.resize(static_cast<std::size_t>(count)*kVideoDataFragmentBytes);
+            fragment_data.clear();fragment_data.reserve(static_cast<std::size_t>(count)*kVideoDataFragmentBytes+kDecoderPaddingReserve);fragment_data.resize(static_cast<std::size_t>(count)*kVideoDataFragmentBytes);
             fragment_present.resize(count);std::fill(fragment_present.begin(),fragment_present.end(),0);
             fragment_lengths.resize(count);std::fill(fragment_lengths.begin(),fragment_lengths.end(),0);
             parity_data.resize(group_count*kVideoPlaintextBytes);
@@ -86,6 +86,8 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
         if(!frame->parity_present[header.fec_group]){std::memcpy(frame->parity_ptr(header.fec_group),payload.data(),payload.size());frame->parity_lengths[header.fec_group]=static_cast<std::uint16_t>(payload.size());frame->parity_present[header.fec_group]=1;}
     }else{
         if(header.fragment_index>=frame->count||payload.size()>kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;
+        const bool final_fragment=static_cast<std::size_t>(header.fragment_index)+1==frame->count;
+        if(!final_fragment&&payload.size()!=kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;
         if(frame->type_known&&frame->type!=header.media_type)return ReassemblyStatus::Ignored;
         frame->type=header.media_type;frame->type_known=true;frame->flags|=header.flags;
         if(frame->type==VideoMediaType::VideoH264&&(frame->flags&FrameConfig)==0&&frame->video_order==0){
@@ -96,7 +98,7 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
         const std::size_t index=header.fragment_index;if(!frame->fragment_present[index]){if(!payload.empty())std::memcpy(frame->fragment_ptr(index),payload.data(),payload.size());frame->fragment_lengths[index]=static_cast<std::uint16_t>(payload.size());frame->fragment_present[index]=1;}
     }
 
-    for(std::size_t group=0;group<frame->groups();++group){if(!frame->parity_present[group])continue;const auto*parity=frame->parity_ptr(group);const std::size_t parity_size=frame->parity_lengths[group],start=group*10,count=parity[0];std::size_t missing=0,missing_index=0,longest=0;for(std::size_t j=0;j<count;++j){const std::size_t length=read16(parity+1+j*2);if(length>kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;longest=std::max(longest,length);if(!frame->fragment_present[start+j]){++missing;missing_index=start+j;}}if(kVideoFecMetadataBytes+longest>parity_size)return ReassemblyStatus::Ignored;if(missing==1){const std::size_t expected=read16(parity+1+(missing_index-start)*2);auto*dst=frame->fragment_ptr(missing_index);for(std::size_t k=0;k<expected;++k){std::uint8_t value=parity[kVideoFecMetadataBytes+k];for(std::size_t j=0;j<count;++j){const std::size_t index=start+j;if(index==missing_index||!frame->fragment_present[index]||k>=frame->fragment_lengths[index])continue;value^=frame->fragment_ptr(index)[k];}dst[k]=value;}frame->fragment_lengths[missing_index]=static_cast<std::uint16_t>(expected);frame->fragment_present[missing_index]=1;}}
+    for(std::size_t group=0;group<frame->groups();++group){if(!frame->parity_present[group])continue;const auto*parity=frame->parity_ptr(group);const std::size_t parity_size=frame->parity_lengths[group],start=group*10,count=parity[0];std::size_t missing=0,missing_index=0,longest=0;for(std::size_t j=0;j<count;++j){const std::size_t index=start+j;const std::size_t length=read16(parity+1+j*2);if(length>kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;const bool final_fragment=index+1==frame->count;if(!final_fragment&&length!=kVideoDataFragmentBytes)return ReassemblyStatus::Ignored;longest=std::max(longest,length);if(!frame->fragment_present[index]){++missing;missing_index=index;}}if(kVideoFecMetadataBytes+longest>parity_size)return ReassemblyStatus::Ignored;if(missing==1){const std::size_t expected=read16(parity+1+(missing_index-start)*2);auto*dst=frame->fragment_ptr(missing_index);for(std::size_t k=0;k<expected;++k){std::uint8_t value=parity[kVideoFecMetadataBytes+k];for(std::size_t j=0;j<count;++j){const std::size_t index=start+j;if(index==missing_index||!frame->fragment_present[index]||k>=frame->fragment_lengths[index])continue;value^=frame->fragment_ptr(index)[k];}dst[k]=value;}frame->fragment_lengths[missing_index]=static_cast<std::uint16_t>(expected);frame->fragment_present[missing_index]=1;}}
 
     const bool complete=frame->type_known&&std::all_of(frame->fragment_present.begin(),frame->fragment_present.end(),[](std::uint8_t present){return present!=0;});if(!complete)return need_idr?ReassemblyStatus::NeedIdr:ReassemblyStatus::Incomplete;
     if(frame->type==VideoMediaType::VideoH264&&(frame->flags&FrameConfig)==0&&impl.last_video_id&&frame->id>impl.last_video_id&&frame->id-impl.last_video_id>1&&(frame->flags&FrameKeyframe)==0){impl.awaiting_idr=true;impl.release(*frame);return ReassemblyStatus::NeedIdr;}
@@ -111,7 +113,8 @@ ReassemblyStatus VideoReassembler::accept(const VideoPacketHeader&header,std::sp
     }
 
     output.media_type=frame->type;output.flags=frame->flags;output.frame_id=frame->id;output.capture_timestamp_us=frame->timestamp;output.keyframe=(frame->flags&FrameKeyframe)!=0;output.config=(frame->flags&FrameConfig)!=0;
-    std::size_t total=0;for(auto length:frame->fragment_lengths)total+=length;output.data.clear();output.data.reserve(total+kDecoderPaddingReserve);output.data.resize(total);std::size_t offset=0;for(std::size_t i=0;i<frame->count;++i){const auto length=frame->fragment_lengths[i];if(length)std::memcpy(output.data.data()+offset,frame->fragment_ptr(i),length);offset+=length;}
+    const std::size_t total=frame->count?((static_cast<std::size_t>(frame->count)-1)*kVideoDataFragmentBytes+frame->fragment_lengths.back()):0;
+    output.data=std::move(frame->fragment_data);output.data.resize(total);
     if(frame->type==VideoMediaType::VideoH264){impl.last_video_id=std::max(impl.last_video_id,frame->id);if(output.keyframe)impl.awaiting_idr=false;}
     impl.release(*frame);return ReassemblyStatus::Complete;
 }
