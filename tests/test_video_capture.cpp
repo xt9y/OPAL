@@ -80,7 +80,7 @@ int main(){
     unsetenv("OPAL_CAPTURE_CMD");
 
     auto gsr=opal::capture_command(true,60,30000,true,"",1920,1080);
-    assert(gsr.find("-keyint 0.25")!=std::string::npos);
+    assert(gsr.find("-keyint 0.5")!=std::string::npos);
     assert(gsr.find("-tune performance")!=std::string::npos);
     assert(gsr.find("-bm cbr")!=std::string::npos);
     auto ffmpeg=opal::capture_command(false,60,30000,true,"",1920,1080);
