@@ -17,8 +17,9 @@ int main(){
     {
         std::ofstream out(ffmpeg);
         out<<"#!/bin/sh\n"
-              "case \"$*\" in\n"
-              "  *-encoders*) printf ' V..... libx264 H.264 encoder\\n'; exit 0 ;;\n"
+              "case \" $* \" in\n"
+              "  *' -c:v libx264 '*) exit 0 ;;\n"
+              "  *' -c:v libopenh264 '*) printf 'FLV\\001\\005\\000\\000\\000\\011\\000\\000\\000\\000'; exit 0 ;;\n"
               "  *) exit 1 ;;\n"
               "esac\n";
     }
@@ -27,7 +28,7 @@ int main(){
     const std::string path=root.string()+":"+(old_path?old_path:"");
     assert(setenv("PATH",path.c_str(),1)==0);
 
-    assert(opal_test::ffmpeg_h264_encoder().empty());
+    assert(opal_test::ffmpeg_h264_encoder()=="libopenh264");
 
     std::filesystem::remove_all(root);
     return 0;
