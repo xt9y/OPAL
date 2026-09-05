@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opal/media_profile.hpp>
+#include <opal/udp_transport.hpp>
 #include <opal/video_crypto.hpp>
 #include <opal/video_path.hpp>
 #include <atomic>
@@ -14,6 +15,7 @@
 namespace opal {
 
 using MediaDatagramSend=std::function<bool(std::span<const std::uint8_t>)>;
+using MediaDatagramBatchSend=std::function<UdpSendBatchResult(std::span<const std::span<const std::uint8_t>>)>;
 
 class VideoSender {
 public:
@@ -24,6 +26,7 @@ public:
                std::function<void(const std::string&)> control_send);
     bool start_native(const VideoKeys &keys,std::uint64_t session_id,std::uint32_t generation,
                       const StreamOptions& stream,bool audio,MediaDatagramSend datagram_send,
+                      MediaDatagramBatchSend batch_send,
                       std::function<void(const std::string&)> control_send);
     void request_idr();
     bool handle_control_line(const std::string& line);
