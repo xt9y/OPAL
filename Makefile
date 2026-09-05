@@ -7,6 +7,27 @@ $(PRODUCT): $(CLIPBOARD_SRCS)
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
 FFMPEG_H264_PROBE := (ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 1 -preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 -an -f flv - >/dev/null 2>&1 || ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libopenh264 -bf 0 -g 1 -an -f flv - >/dev/null 2>&1)
+REAL_FFMPEG := $(shell command -v ffmpeg 2>/dev/null)
+INTEGRATION_FFMPEG_DIR := $(BUILD)/integration-bin
+INTEGRATION_FFMPEG := $(INTEGRATION_FFMPEG_DIR)/ffmpeg
+
+$(INTEGRATION_FFMPEG): | $(BUILD)
+	mkdir -p "$(INTEGRATION_FFMPEG_DIR)"
+	cat >"$@" <<'SH'
+	#!/bin/sh
+	real='$(REAL_FFMPEG)'
+	if [ -z "$$real" ] || [ ! -x "$$real" ]; then exit 127; fi
+	case " $$* " in
+	  *' -encoders '*)
+		if "$$real" -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 1 -preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 -an -f flv - >/dev/null 2>&1; then
+			exec "$$real" "$$@"
+		fi
+		"$$real" "$$@" | sed '/[[:space:]]libx264[[:space:]]/d'
+		;;
+	  *) exec "$$real" "$$@" ;;
+	esac
+	SH
+	chmod +x "$@"
 
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
@@ -114,4 +135,6 @@ test-hpi-sanitize: test-sanitize
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
 # acceptance on Wayland/X11.
+test-integration: $(INTEGRATION_FFMPEG)
 test-integration: export OPAL_TEST_HEADLESS=1
+test-integration: export PATH := $(abspath $(INTEGRATION_FFMPEG_DIR)):$(PATH)
