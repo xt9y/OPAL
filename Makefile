@@ -95,17 +95,23 @@ test-thread-sanitize-run: test-reliable-control test-peer-session test-peer-sess
 test-thread-sanitize:
 	mkdir -p "$(BUILD)"
 	tmp="$(BUILD)/.tsan-runtime-probe"
-	if ! printf '%s\n' '#include <thread>' 'int main(){std::thread t([]{});t.join();return 0;}' | $(CXX) -x c++ - -pthread $(TSAN) -o "$$tmp" >/dev/null 2>&1; then
-		echo 'SKIP test-thread-sanitize: compiler cannot link ThreadSanitizer runtime on this system'
-		rm -f "$$tmp"
+	cat >"$$tmp.cpp" <<'CPP'
+	#include <openssl/evp.h>
+	#include <thread>
+	static bool keygen(int id){EVP_PKEY_CTX*ctx=EVP_PKEY_CTX_new_id(id,nullptr);if(!ctx)return false;EVP_PKEY*key=nullptr;const bool ok=EVP_PKEY_keygen_init(ctx)==1&&EVP_PKEY_keygen(ctx,&key)==1;EVP_PKEY_free(key);EVP_PKEY_CTX_free(ctx);return ok;}
+	int main(){bool ok=false;std::thread t([&]{ok=keygen(EVP_PKEY_ED25519)&&keygen(EVP_PKEY_X25519);});t.join();return ok?0:1;}
+	CPP
+	if ! $(CXX) -std=c++20 -pthread "$$tmp.cpp" $(TSAN) -lcrypto -o "$$tmp" >/dev/null 2>&1; then
+		echo 'SKIP test-thread-sanitize: compiler cannot link ThreadSanitizer + OpenSSL runtime on this system'
+		rm -f "$$tmp" "$$tmp.cpp"
 		exit 0
 	fi
 	if ! TSAN_OPTIONS=halt_on_error=1 "$$tmp" >/dev/null 2>&1; then
-		echo 'SKIP test-thread-sanitize: ThreadSanitizer runtime cannot execute on this system'
-		rm -f "$$tmp"
+		echo 'SKIP test-thread-sanitize: ThreadSanitizer + OpenSSL runtime cannot execute on this system'
+		rm -f "$$tmp" "$$tmp.cpp"
 		exit 0
 	fi
-	rm -f "$$tmp"
+	rm -f "$$tmp" "$$tmp.cpp"
 	$(MAKE) -B test-thread-sanitize-run
 
 NETEM_PIPELINE := $(BUILD)/test-direct-video-pipeline-netem
