@@ -52,7 +52,7 @@ void wire_control(opal::VideoSender&sender,opal::VideoReceiver&receiver,std::ato
     auto pending_idr=std::make_shared<std::atomic<bool>>(false);
     assert(receiver.start(std::move(receiver_path),[&,sender_ready,pending_idr](const std::string&line){
         const bool idr=line.rfind("REQUEST_IDR ",0)==0;
-        if(idr)++idr_requests;
+        if(idr){++idr_requests;std::cerr<<"OPAL test "<<line<<"\n";}
         if(!sender_ready->load(std::memory_order_acquire)){
             if(idr)pending_idr->store(true,std::memory_order_release);
             return;
