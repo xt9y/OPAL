@@ -24,9 +24,6 @@ int main() {
     assert(opal::normal_gop_frames(15)==4);
     assert(opal::normal_gop_frames(240)==60);
 
-    // Keep ordinary traffic smooth enough that frame-sized bursts do not
-    // become another kernel/NIC latency queue. IDRs get a small burst so
-    // recovery starts immediately without monopolizing the shared socket.
     constexpr std::uint64_t eight_datagrams=8*1200;
     assert(opal::sender_burst_budget_bytes(30000,60,true)==eight_datagrams);
     assert(opal::sender_burst_budget_bytes(100000,15,true)==eight_datagrams);
@@ -43,5 +40,11 @@ int main() {
     assert(opal::sender_pacing_rate_kbps(100000,true)==400000);
     assert(opal::sender_pacing_rate_kbps(1,false)==1200);
     assert(opal::sender_pacing_rate_kbps(1,true)==4000);
+
+    assert(opal::encoder_reconfigure_bitrate_kbps(30000,22000,1000)==22000);
+    assert(opal::encoder_reconfigure_bitrate_kbps(30000,22500,1000)==22500);
+    assert(opal::encoder_reconfigure_bitrate_kbps(30000,23000,1000)==0);
+    assert(opal::encoder_reconfigure_bitrate_kbps(30000,18000,499)==0);
+    assert(opal::encoder_reconfigure_bitrate_kbps(18000,30000,10000)==0);
     return 0;
 }

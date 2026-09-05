@@ -45,4 +45,10 @@ int sender_pacing_rate_kbps(int bitrate_kbps,bool keyframe){
     if(keyframe)return static_cast<int>(bitrate*4);
     return static_cast<int>((bitrate*6+4)/5);
 }
+
+int encoder_reconfigure_bitrate_kbps(int active_kbps,int target_kbps,std::uint64_t since_restart_ms){
+    active_kbps=std::clamp(active_kbps,1000,100000);target_kbps=std::clamp(target_kbps,1000,100000);
+    if(since_restart_ms<500)return 0;
+    return static_cast<long long>(target_kbps)*4<=static_cast<long long>(active_kbps)*3?target_kbps:0;
+}
 }
