@@ -19,8 +19,17 @@ public:
     int floor_kbps() const;
 private:
     int ceiling_=0,floor_=0,target_=0;
-    std::uint32_t baseline_rtt_us_=0;
-    std::chrono::steady_clock::time_point good_since_{},last_raise_{};
+    std::uint32_t baseline_rtt_us_=0,smoothed_rtt_us_=0;
+    std::chrono::steady_clock::time_point last_adjust_{};
+};
+
+class AdaptiveFecController {
+public:
+    bool on_feedback(const VideoFeedbackSample&);
+    bool enabled() const;
+private:
+    bool enabled_=false;
+    std::uint32_t clean_samples_=0;
 };
 
 struct ClockEstimate {
