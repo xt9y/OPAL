@@ -50,7 +50,8 @@ struct SessionSupervisor::Impl {
                 LocalDiscoveryClientResult tailnet;std::string tailnet_error;
                 if(discover_local_host(options.rendezvous_id,options.client_public_key,tailnet,tailnet_error,kTailnetDiscoveryTimeoutMs,candidate,kLocalDiscoveryPort)){
                     adopt_direct(tailnet);options.tailnet_address=candidate;{std::lock_guard<std::mutex>lock(state_mu);remote_tailnet_value=candidate;}
-                    if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<" local="<<local_tailnet<<"\n";break;
+                    if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<" local="<<local_tailnet<<"\n";
+                    break;
                 }
                 if(debug_enabled())std::cerr<<"OPAL discovery=tailnet miss host="<<candidate<<" reason="<<(tailnet_error.empty()?"not-found":tailnet_error)<<"\n";
             }
