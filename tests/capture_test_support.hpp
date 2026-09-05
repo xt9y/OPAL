@@ -8,7 +8,9 @@ namespace opal_test {
 
 inline bool ffmpeg_h264_encoder_usable(const char*encoder){
     if(!encoder||!*encoder)return false;
-    const std::string command="ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v "+std::string(encoder)+" -an -f flv - >/dev/null 2>&1";
+    std::string command="ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v "+std::string(encoder)+" -bf 0 -g 1 ";
+    if(std::string(encoder)=="libx264")command+="-preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 ";
+    command+="-an -f flv - >/dev/null 2>&1";
     return std::system(command.c_str())==0;
 }
 
