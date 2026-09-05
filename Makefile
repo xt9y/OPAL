@@ -155,7 +155,7 @@ test-netem: $(NETEM_PIPELINE) $(LINKED_CODEC_PROBE) $(CAPTURE_PROBE)
 		ip link set lo up; \
 		cleanup(){ tc qdisc del dev lo root >/dev/null 2>&1 || true; }; \
 		trap cleanup EXIT INT TERM; \
-		run(){ name=$$1; shift; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 OPAL_TEST_NETEM=1 timeout 45 "$$BIN"; }; \
+		run(){ name=$$1; shift; case "$$name" in clean|lan-jitter) loss=0;; *) loss=1;; esac; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 OPAL_TEST_NETEM=1 OPAL_TEST_NETEM_LOSS=$$loss timeout 45 "$$BIN"; }; \
 		run clean delay 0ms; \
 		run lan-jitter delay 3ms 1ms distribution normal; \
 		run mild-loss delay 5ms 2ms loss 1%; \
