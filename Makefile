@@ -12,15 +12,19 @@ INTEGRATION_FFMPEG_DIR := $(BUILD)/integration-bin
 INTEGRATION_FFMPEG := $(INTEGRATION_FFMPEG_DIR)/ffmpeg
 LINKED_CODEC_PROBE := $(BUILD)/test-linked-codec-probe
 
-$(INTEGRATION_FFMPEG): | $(BUILD)
+$(LINKED_CODEC_PROBE): tests/test_linked_codec_probe.cpp tests/linked_codec_support.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linked_codec_probe.cpp $(AVLIBS) -o $@
+
+$(INTEGRATION_FFMPEG): $(LINKED_CODEC_PROBE) | $(BUILD)
 	mkdir -p "$(INTEGRATION_FFMPEG_DIR)"
 	cat >"$@" <<'SH'
 	#!/bin/sh
 	real='$(REAL_FFMPEG)'
+	decoder_probe='$(abspath $(LINKED_CODEC_PROBE))'
 	if [ -z "$$real" ] || [ ! -x "$$real" ]; then exit 127; fi
 	case " $$* " in
 	  *' -encoders '*)
-		if "$$real" -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 1 -preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 -an -f flv - >/dev/null 2>&1; then
+		if "$$decoder_probe" --check >/dev/null 2>&1 && "$$real" -hide_banner -loglevel error -f lavfi -i testsrc=size=32x32:rate=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 1 -preset ultrafast -tune zerolatency -keyint_min 1 -sc_threshold 0 -an -f flv - >/dev/null 2>&1; then
 			exec "$$real" "$$@"
 		fi
 		"$$real" "$$@" | sed '/[[:space:]]libx264[[:space:]]/d'
@@ -29,9 +33,6 @@ $(INTEGRATION_FFMPEG): | $(BUILD)
 	esac
 	SH
 	chmod +x "$@"
-
-$(LINKED_CODEC_PROBE): tests/test_linked_codec_probe.cpp tests/linked_codec_support.hpp | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linked_codec_probe.cpp $(AVLIBS) -o $@
 
 test-linked-codec-probe: $(LINKED_CODEC_PROBE)
 	$(LINKED_CODEC_PROBE)
@@ -143,6 +144,6 @@ test-hpi-sanitize: test-sanitize
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
 # acceptance on Wayland/X11.
-test-integration: $(INTEGRATION_FFMPEG)
+test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
 test-integration: export OPAL_TEST_HEADLESS=1
 test-integration: export PATH := $(abspath $(INTEGRATION_FFMPEG_DIR)):$(PATH)
