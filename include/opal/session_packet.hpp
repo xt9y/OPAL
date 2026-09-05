@@ -34,6 +34,7 @@ struct SessionPacketHeader {
     std::uint16_t payload_length=0;
 };
 
+bool serialize_session_header(const SessionPacketHeader&,std::span<std::uint8_t>);
 std::vector<std::uint8_t> serialize_session_header(const SessionPacketHeader&);
 bool parse_session_header(std::span<const std::uint8_t>,SessionPacketHeader&);
 
