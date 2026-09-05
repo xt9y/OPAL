@@ -2,16 +2,23 @@ include Makefile.core
 
 CXXFLAGS += -pthread
 NATIVE_CAPTURE_PKGS := libportal libpipewire-0.3 libswscale
-NATIVE_CAPTURE_ENABLED := $(shell $(PKG_CONFIG) --exists $(NATIVE_CAPTURE_PKGS) >/dev/null 2>&1 && echo 1 || echo 0)
-ifeq ($(NATIVE_CAPTURE_ENABLED),1)
 NATIVE_CAPTURE_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
 NATIVE_CAPTURE_LIBS := $(shell $(PKG_CONFIG) --libs $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
 CPPFLAGS += $(NATIVE_CAPTURE_CFLAGS) -DOPAL_HAVE_NATIVE_PIPEWIRE=1
 AVLIBS += $(NATIVE_CAPTURE_LIBS)
-NATIVE_MEDIA_LIBS += $(NATIVE_CAPTURE_LIBS)
-else
-CPPFLAGS += -DOPAL_HAVE_NATIVE_PIPEWIRE=0
-endif
+AUDIOLIBS := $(SWRLIBS) $(SDL3_LIBS)
+GLLIBS :=
+NATIVE_MEDIA_LIBS := $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS)
+LDLIBS := -lcrypto -lpthread $(NATIVE_MEDIA_LIBS)
+
+native-capture-deps-check:
+	@command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'OPAL native capture requires pkg-config.' >&2; exit 1; }
+	if ! "$(PKG_CONFIG)" --exists $(NATIVE_CAPTURE_PKGS); then
+		echo 'OPAL native PipeWire capture dependencies are required; refusing to build a capture fallback binary.' >&2
+		echo 'Missing one or more pkg-config modules: $(NATIVE_CAPTURE_PKGS)' >&2
+		exit 1
+	fi
+
 PIPEWIRE_CAPTURE_SRCS := src/pipewire_capture.cpp
 VIDEO_CAPTURE_SRCS += $(PIPEWIRE_CAPTURE_SRCS)
 DIRECT_SENDER_SRCS += $(PIPEWIRE_CAPTURE_SRCS)
@@ -22,7 +29,8 @@ DIRECT_SENDER_SRCS += $(FLV_STREAM_SRCS)
 APP_SRCS += $(FLV_STREAM_SRCS)
 CLIPBOARD_SRCS := src/clipboard.cpp
 APP_SRCS += $(CLIPBOARD_SRCS)
-$(PRODUCT): $(CLIPBOARD_SRCS) $(FLV_STREAM_SRCS) $(PIPEWIRE_CAPTURE_SRCS)
+$(PRODUCT): $(CLIPBOARD_SRCS) $(FLV_STREAM_SRCS) $(PIPEWIRE_CAPTURE_SRCS) | native-capture-deps-check
+$(MEDIA_TEST_TARGETS): | native-capture-deps-check
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
 CAPTURE_PROBE := $(BUILD)/test-capture-probe
@@ -156,8 +164,8 @@ test-thread-sanitize:
 	$(MAKE) -B test-thread-sanitize-session-run
 
 NETEM_PIPELINE := $(BUILD)/test-direct-video-pipeline-netem
-$(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto $(AVLIBS) $(AUDIOLIBS) $(GLLIBS) -o $@
+$(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp | $(BUILD) deps-check native-capture-deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto $(AVLIBS) $(AUDIOLIBS) -o $@
 
 test-netem: $(NETEM_PIPELINE) $(LINKED_CODEC_PROBE) $(CAPTURE_PROBE)
 	@if ! command -v tc >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/tc (Fedora: sudo dnf install iproute-tc)'; exit 0; fi
@@ -210,7 +218,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-thread-sanitize-session-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: native-capture-deps-check test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-thread-sanitize-session-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
 test-integration: export OPAL_TEST_HEADLESS=1
