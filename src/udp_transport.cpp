@@ -109,6 +109,39 @@ UdpSendResult send_datagram_result(int fd,const sockaddr_storage &address,sockle
     return classify_udp_send_result(static_cast<std::ptrdiff_t>(written),data.size(),send_errno);
 }
 
+UdpSendBatchResult send_datagrams_batch(int fd,const sockaddr_storage &address,socklen_t address_length,
+                                        std::span<const std::span<const std::uint8_t>> datagrams){
+    if(fd<0||address_length==0||datagrams.empty()||datagrams.size()>kUdpSendBatchMax)return {};
+    for(const auto datagram:datagrams)if(datagram.empty()||datagram.size()>65507)return {};
+#if defined(__linux__)
+    std::array<mmsghdr,kUdpSendBatchMax> messages{};
+    std::array<iovec,kUdpSendBatchMax> vectors{};
+    for(std::size_t i=0;i<datagrams.size();++i){
+        vectors[i].iov_base=const_cast<std::uint8_t*>(datagrams[i].data());
+        vectors[i].iov_len=datagrams[i].size();
+        messages[i].msg_hdr.msg_name=const_cast<sockaddr_storage*>(&address);
+        messages[i].msg_hdr.msg_namelen=address_length;
+        messages[i].msg_hdr.msg_iov=&vectors[i];
+        messages[i].msg_hdr.msg_iovlen=1;
+    }
+    int sent=0;do{sent=sendmmsg(fd,messages.data(),static_cast<unsigned int>(datagrams.size()),MSG_DONTWAIT);}while(sent<0&&errno==EINTR);
+    if(sent<0){
+        const auto result=(errno==EAGAIN||errno==EWOULDBLOCK||errno==ENOBUFS)?UdpSendResult::WouldBlock:UdpSendResult::Fatal;
+        return {0,result};
+    }
+    const auto count=static_cast<std::size_t>(sent);
+    return {count,count==datagrams.size()?UdpSendResult::Sent:UdpSendResult::WouldBlock};
+#else
+    std::size_t sent=0;
+    for(const auto datagram:datagrams){
+        const auto result=send_datagram_result(fd,address,address_length,datagram);
+        if(result!=UdpSendResult::Sent)return {sent,result};
+        ++sent;
+    }
+    return {sent,UdpSendResult::Sent};
+#endif
+}
+
 bool send_datagram(int fd,const sockaddr_storage &address,socklen_t address_length,std::span<const std::uint8_t> data){return send_datagram_result(fd,address,address_length,data)==UdpSendResult::Sent;}
 
 int recv_datagram(int fd,std::span<std::uint8_t> data,sockaddr_storage &source,socklen_t &source_length,int timeout_ms){
