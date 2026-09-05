@@ -20,6 +20,11 @@
 
 namespace {
 
+bool external_network_loss_allowed(){
+    const char*v=std::getenv("OPAL_TEST_NETEM_LOSS");
+    return v&&*v&&std::string(v)!="0";
+}
+
 opal::DirectVideoPath make_path(opal::UdpSocket socket,std::uint16_t peer_port,bool sender,std::uint32_t generation){
     opal::DirectVideoPath path;
     path.socket=socket;
@@ -85,7 +90,7 @@ void run_case(int dropped_fragments,bool expect_idr,std::uint32_t generation){
         const auto idr_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
         while(idr_requests.load()==0&&std::chrono::steady_clock::now()<idr_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
         assert(idr_requests.load()>=1);
-    }else assert(idr_requests.load()==0);
+    }else if(!external_network_loss_allowed())assert(idr_requests.load()==0);
     sender.stop();
     receiver.stop();
 }
