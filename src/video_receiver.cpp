@@ -27,6 +27,7 @@ namespace opal { namespace {
 using Clock=std::chrono::steady_clock;
 constexpr std::uint64_t kMediaStallRecoveryUs=500000;
 constexpr std::uint64_t kMediaStallFailureUs=3000000;
+constexpr std::size_t kVideoDecodeBurstFrames=6;
 std::uint64_t monotonic_us(){return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());}
 bool debug_enabled(){const char *v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 std::uint32_t read32(std::span<const std::uint8_t>b){return b.size()<4?0:(static_cast<std::uint32_t>(b[0])<<24)|(static_cast<std::uint32_t>(b[1])<<16)|(static_cast<std::uint32_t>(b[2])<<8)|b[3];}
@@ -56,7 +57,7 @@ struct VideoReceiver::Impl{
     std::thread rx_thread,media_thread,control_thread;
     mutable std::mutex media_mu,idr_mu,telemetry_mu,rx_mu,sequence_mu,frame_mu;
     std::condition_variable media_cv;
-    VideoBacklog<MediaItem,2>video_frames;
+    VideoBacklog<MediaItem,kVideoDecodeBurstFrames>video_frames;
     std::optional<MediaItem>video_config,audio_frame,audio_config;
     DecodedVideoFrame latest_frame{};
 
