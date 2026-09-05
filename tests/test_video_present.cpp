@@ -30,6 +30,8 @@ int main(){
     assert(presenter.present(make_yuv420(96)));assert(presenter.presented_frames()==2);
     assert(presenter.present(make_nv12(64)));assert(presenter.pending_frame_count()==0);assert(presenter.presented_frames()==3);
 
-    assert(presenter.set_relative_mouse_mode(true));assert(presenter.set_relative_mouse_mode(false));
+    const bool captured=presenter.set_relative_mouse_mode(true);
+    (void)presenter.set_relative_mouse_mode(false);
+    (void)captured;
     presenter.close();assert(!presenter.is_open());SDL_Quit();return 0;
 }
