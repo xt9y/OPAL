@@ -11,7 +11,7 @@ Fedora 44+ / Fedora Asahi
   GNOME instead of KDE    --> sudo dnf install -y xdg-desktop-portal-gnome
   wlroots instead of KDE  --> sudo dnf install -y xdg-desktop-portal-wlr
 
-Arch Linux
+CachyOS / Arch Linux
   sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg pipewire pipewire-pulse libportal xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
   GNOME instead of KDE    --> sudo pacman -S --needed xdg-desktop-portal-gnome
