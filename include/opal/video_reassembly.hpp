@@ -27,6 +27,7 @@ public:
     void require_idr();
     ReassemblyStatus accept(const VideoPacketHeader&,std::span<const std::uint8_t>,ReassembledFrame&);
     ReassemblyStatus accept(const VideoPlainPacket&,ReassembledFrame&);
+    ReassemblyStatus drain(ReassembledFrame&);
     std::size_t frames_in_flight() const;
     std::size_t bytes_in_flight() const;
 private:
