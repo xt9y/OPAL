@@ -34,6 +34,7 @@ struct VideoDecoder::Impl {
     AVPacket *packet=nullptr;
     AVFrame *scratch=nullptr;
     AVFrame *latest=nullptr;
+    AVFrame *mapped=nullptr;
     AVFrame *transfer=nullptr;
     std::vector<std::uint8_t> packet_bytes;
     std::vector<std::uint8_t> configured_extradata;
@@ -43,13 +44,15 @@ struct VideoDecoder::Impl {
     std::int64_t latest_pts_us=0;
     bool active_auto_hardware=false;
     bool auto_hardware_disabled=false;
+    bool drm_export_active=false;
 
     bool ensure_io(){
         if(!packet)packet=av_packet_alloc();
         if(!scratch)scratch=av_frame_alloc();
         if(!latest)latest=av_frame_alloc();
+        if(!mapped)mapped=av_frame_alloc();
         if(!transfer)transfer=av_frame_alloc();
-        return packet&&scratch&&latest&&transfer;
+        return packet&&scratch&&latest&&mapped&&transfer;
     }
 
     void clear_latest(){if(latest)av_frame_unref(latest);latest_pts_us=0;}
@@ -81,6 +84,7 @@ struct VideoDecoder::Impl {
         if(ctx)avcodec_free_context(&ctx);
         hw_pix_fmt=AV_PIX_FMT_NONE;
         active_auto_hardware=false;
+        drm_export_active=false;
     }
 
     bool open_software(const AVCodec *decoder,std::span<const std::uint8_t> extradata){
@@ -102,8 +106,22 @@ struct VideoDecoder::Impl {
 
     bool fallback_to_software(){
         if(!active_auto_hardware||!codec)return false;
-        auto_hardware_disabled=true;clear_latest();if(scratch)av_frame_unref(scratch);if(transfer)av_frame_unref(transfer);if(packet)av_packet_unref(packet);
+        auto_hardware_disabled=true;clear_latest();if(scratch)av_frame_unref(scratch);if(mapped)av_frame_unref(mapped);if(transfer)av_frame_unref(transfer);if(packet)av_packet_unref(packet);
         return open_software(codec,configured_extradata);
+    }
+
+    AVFrame* export_hardware_frame(){
+        av_frame_unref(mapped);
+        mapped->format=AV_PIX_FMT_DRM_PRIME;
+        if(av_hwframe_map(mapped,scratch,AV_HWFRAME_MAP_READ)==0){
+            if(av_frame_copy_props(mapped,scratch)<0){av_frame_unref(mapped);return nullptr;}
+            drm_export_active=true;
+            return mapped;
+        }
+        av_frame_unref(mapped);
+        av_frame_unref(transfer);
+        if(av_hwframe_transfer_data(transfer,scratch,0)<0||av_frame_copy_props(transfer,scratch)<0)return nullptr;
+        return transfer;
     }
 
     bool drain(std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
@@ -115,12 +133,12 @@ struct VideoDecoder::Impl {
             if((scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||scratch->decode_error_flags!=0){av_frame_unref(scratch);clear_latest();return false;}
             AVFrame *ready=scratch;
             if(hw_pix_fmt!=AV_PIX_FMT_NONE&&scratch->format==hw_pix_fmt){
-                av_frame_unref(transfer);
-                if(av_hwframe_transfer_data(transfer,scratch,0)<0||av_frame_copy_props(transfer,scratch)<0){av_frame_unref(scratch);clear_latest();return false;}
-                ready=transfer;
+                ready=export_hardware_frame();
+                if(!ready){av_frame_unref(scratch);clear_latest();return false;}
             }
             av_frame_unref(latest);
             if(ready==scratch)av_frame_move_ref(latest,scratch);
+            else if(ready==mapped){av_frame_move_ref(latest,mapped);av_frame_unref(scratch);}
             else{av_frame_move_ref(latest,transfer);av_frame_unref(scratch);}
             latest_pts_us=pts_us;++decoded;
         }
@@ -157,7 +175,7 @@ VideoDecoder::VideoDecoder():impl_(new Impl){}
 
 bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
     if(!impl_)return false;
-    impl_->reset_context();impl_->clear_latest();impl_->backend="unconfigured";if(impl_->scratch)av_frame_unref(impl_->scratch);if(impl_->transfer)av_frame_unref(impl_->transfer);
+    impl_->reset_context();impl_->clear_latest();impl_->backend="unconfigured";if(impl_->scratch)av_frame_unref(impl_->scratch);if(impl_->mapped)av_frame_unref(impl_->mapped);if(impl_->transfer)av_frame_unref(impl_->transfer);
     const std::string requested=[](){const char *v=std::getenv("OPAL_DECODER");return v&&*v?std::string(v):std::string("auto");}();
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);if(!codec||!impl_->ensure_io())return false;impl_->codec=codec;impl_->configured_extradata.assign(extradata.begin(),extradata.end());
     const std::span<const std::uint8_t> saved_extradata(impl_->configured_extradata.data(),impl_->configured_extradata.size());
@@ -197,8 +215,8 @@ bool VideoDecoder::decode(std::span<const std::uint8_t> unit,std::int64_t pts_us
     DecodedVideoView latest;std::size_t superseded=0;if(!decode_latest(unit,pts_us,latest,superseded))return false;if(!latest.frame)return true;DecodedVideoFrame owned{};if(!take_latest(owned))return false;out.push_back(owned);return true;
 }
 
-std::string VideoDecoder::backend_name() const{return impl_?impl_->backend:"unavailable";}
-void VideoDecoder::flush(){if(!impl_)return;if(impl_->ctx)avcodec_flush_buffers(impl_->ctx);impl_->clear_latest();if(impl_->scratch)av_frame_unref(impl_->scratch);if(impl_->transfer)av_frame_unref(impl_->transfer);if(impl_->packet)av_packet_unref(impl_->packet);}
-VideoDecoder::~VideoDecoder(){if(impl_){impl_->reset_context();if(impl_->packet)av_packet_free(&impl_->packet);if(impl_->scratch)av_frame_free(&impl_->scratch);if(impl_->latest)av_frame_free(&impl_->latest);if(impl_->transfer)av_frame_free(&impl_->transfer);delete impl_;impl_=nullptr;}}
+std::string VideoDecoder::backend_name() const{return impl_?impl_->backend+(impl_->drm_export_active?"+drmprime":""):"unavailable";}
+void VideoDecoder::flush(){if(!impl_)return;if(impl_->ctx)avcodec_flush_buffers(impl_->ctx);impl_->clear_latest();if(impl_->scratch)av_frame_unref(impl_->scratch);if(impl_->mapped)av_frame_unref(impl_->mapped);if(impl_->transfer)av_frame_unref(impl_->transfer);if(impl_->packet)av_packet_unref(impl_->packet);}
+VideoDecoder::~VideoDecoder(){if(impl_){impl_->reset_context();if(impl_->packet)av_packet_free(&impl_->packet);if(impl_->scratch)av_frame_free(&impl_->scratch);if(impl_->latest)av_frame_free(&impl_->latest);if(impl_->mapped)av_frame_free(&impl_->mapped);if(impl_->transfer)av_frame_free(&impl_->transfer);delete impl_;impl_=nullptr;}}
 
 }
