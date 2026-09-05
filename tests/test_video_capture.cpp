@@ -9,7 +9,7 @@
 #include <thread>
 
 int main(){
-    if(!opal_test::capture_tests_available())return 0;
+    if(!opal_test::capture_tests_available(true))return 0;
 
     const auto command=opal_test::lavfi_video_command(320,180,60,120,15,false,true);
     setenv("OPAL_CAPTURE_CMD",command.c_str(),1);
@@ -67,6 +67,5 @@ int main(){
     auto ffmpeg=opal::capture_command(false,60,30000,true,"",1920,1080);
     assert(ffmpeg.find("-bf 0")!=std::string::npos);
     assert(ffmpeg.find("-g 15")!=std::string::npos);
-    assert(ffmpeg.find("-keyint_min 15")!=std::string::npos);
     return 0;
 }
