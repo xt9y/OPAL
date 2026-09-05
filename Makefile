@@ -83,10 +83,21 @@ test-direct-media-sanitize: export ASAN_OPTIONS := detect_leaks=1:strict_string_
 test-direct-media-sanitize: export UBSAN_OPTIONS := print_stacktrace=1:halt_on_error=1
 test-direct-media-sanitize: test-flv-stream
 
-test-thread-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
-test-thread-sanitize: LDFLAGS += $(TSAN)
-test-thread-sanitize: export TSAN_OPTIONS := halt_on_error=1:history_size=7
-test-thread-sanitize: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
+test-thread-sanitize-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
+test-thread-sanitize-run: LDFLAGS += $(TSAN)
+test-thread-sanitize-run: export TSAN_OPTIONS := halt_on_error=1:history_size=7
+test-thread-sanitize-run: test-reliable-control test-peer-session test-peer-session-relay test-video-packet
+
+test-thread-sanitize:
+	mkdir -p "$(BUILD)"
+	tmp="$(BUILD)/.tsan-link-probe"
+	if ! printf '%s\n' 'int main(){return 0;}' | $(CXX) -x c++ - $(TSAN) -o "$$tmp" >/dev/null 2>&1; then
+		echo 'SKIP test-thread-sanitize: compiler cannot link ThreadSanitizer runtime on this system'
+		rm -f "$$tmp"
+		exit 0
+	fi
+	rm -f "$$tmp"
+	$(MAKE) -B test-thread-sanitize-run
 
 NETEM_PIPELINE := $(BUILD)/test-direct-video-pipeline-netem
 $(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp | $(BUILD) deps-check
@@ -143,7 +154,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-flv-stream test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: test-flv-stream test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
 test-integration: export OPAL_TEST_HEADLESS=1
