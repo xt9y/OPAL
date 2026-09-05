@@ -1,6 +1,9 @@
 #include <opal/input_record.hpp>
 #include <opal/media.hpp>
+#include <array>
 #include <cassert>
+#include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <fcntl.h>
 #include <fstream>
@@ -30,6 +33,7 @@ int main(){
     {
         auto sink=opal::start_sink("cat >/dev/null");
         assert(sink.pid>0&&sink.fd>=0&&!sink.compact_input);
+        const int flags=fcntl(sink.fd,F_GETFL,0);assert(flags>=0&&(flags&O_NONBLOCK));
         std::string burst(32*1024,'I');assert(opal::write_sink_timeout(sink,burst.data(),burst.size(),1000));
         opal::stop_sink(sink);
     }
@@ -45,6 +49,11 @@ int main(){
         assert(bytes.size()==opal::kInputRecordBytes);
         opal::InputRecord record{};assert(opal::decode_input_record(bytes,record));
         assert(record.type==opal::InputRecordType::Relative&&record.a==-17&&record.b==23);
+    }
+    {
+        auto sink=opal::start_sink("sleep 5 # opal-input");assert(sink.pid>0&&sink.fd>=0&&sink.compact_input);
+        std::array<char,4096>fill{};for(;;){const auto n=write(sink.fd,fill.data(),fill.size());if(n>0)continue;if(n<0&&errno==EINTR)continue;assert(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK));break;}
+        const std::string command="POINTER 100 200\n";const auto begin=std::chrono::steady_clock::now();assert(!opal::write_sink_timeout(sink,command.data(),command.size(),1000));const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count();assert(elapsed<50);opal::stop_sink(sink);
     }
     {
         int w=-1,h=-1;
