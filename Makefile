@@ -52,6 +52,10 @@ test-flv-stream: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_flv_stream.cpp $(FLV_STREAM_SRCS) -o $(BUILD)/test-flv-stream
 	$(BUILD)/test-flv-stream
 
+test-video-reorder: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_reorder.cpp $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -o $(BUILD)/test-video-reorder
+	$(BUILD)/test-video-reorder
+
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
 	$(BUILD)/test-clipboard
@@ -71,7 +75,7 @@ test-latency-window: | $(BUILD)
 test-capture-probe: $(CAPTURE_PROBE)
 	$(CAPTURE_PROBE)
 
-test: test-flv-stream test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe
+test: test-flv-stream test-video-reorder test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe
 
 SAN_COMMON := -O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
 ASAN_UBSAN := -fsanitize=address,undefined
@@ -81,7 +85,7 @@ test-direct-media-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pth
 test-direct-media-sanitize: LDFLAGS += $(ASAN_UBSAN)
 test-direct-media-sanitize: export ASAN_OPTIONS := detect_leaks=1:strict_string_checks=1:check_initialization_order=1
 test-direct-media-sanitize: export UBSAN_OPTIONS := print_stacktrace=1:halt_on_error=1
-test-direct-media-sanitize: test-flv-stream
+test-direct-media-sanitize: test-flv-stream test-video-reorder
 
 test-thread-sanitize-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
 test-thread-sanitize-run: LDFLAGS += $(TSAN)
@@ -90,9 +94,14 @@ test-thread-sanitize-run: test-reliable-control test-peer-session test-peer-sess
 
 test-thread-sanitize:
 	mkdir -p "$(BUILD)"
-	tmp="$(BUILD)/.tsan-link-probe"
-	if ! printf '%s\n' 'int main(){return 0;}' | $(CXX) -x c++ - $(TSAN) -o "$$tmp" >/dev/null 2>&1; then
+	tmp="$(BUILD)/.tsan-runtime-probe"
+	if ! printf '%s\n' '#include <thread>' 'int main(){std::thread t([]{});t.join();return 0;}' | $(CXX) -x c++ - -pthread $(TSAN) -o "$$tmp" >/dev/null 2>&1; then
 		echo 'SKIP test-thread-sanitize: compiler cannot link ThreadSanitizer runtime on this system'
+		rm -f "$$tmp"
+		exit 0
+	fi
+	if ! TSAN_OPTIONS=halt_on_error=1 "$$tmp" >/dev/null 2>&1; then
+		echo 'SKIP test-thread-sanitize: ThreadSanitizer runtime cannot execute on this system'
 		rm -f "$$tmp"
 		exit 0
 	fi
@@ -144,7 +153,7 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 	done
 	echo "HPI soak iterations=$$iterations seconds=$$(($$(date +%s) - start))"
 
-test-hpi: test-flv-stream test-capture-probe test-linked-codec-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
+test-hpi: test-flv-stream test-video-reorder test-capture-probe test-linked-codec-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
 test-sanitize:
 	$(MAKE) clean
@@ -154,7 +163,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-flv-stream test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
 test-integration: export OPAL_TEST_HEADLESS=1
