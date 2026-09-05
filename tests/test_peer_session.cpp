@@ -17,7 +17,13 @@
 namespace {
 struct Identity{std::filesystem::path root,priv,pub;std::string public_hex;};
 Identity identity(const char*name){Identity i;i.root=std::filesystem::temp_directory_path()/name;std::filesystem::remove_all(i.root);std::filesystem::create_directories(i.root);i.priv=i.root/"id.key";i.pub=i.root/"id.pub";assert(opal::ensure_identity(i.priv,i.pub));i.public_hex=opal::public_key_hex(i.pub);return i;}
-bool trace_enabled(){const char*v=std::getenv("OPAL_TEST_TRACE");return v&&*v&&std::string(v)!="0";}
+bool trace_enabled(){
+#ifdef __SANITIZE_THREAD__
+    return true;
+#else
+    const char*v=std::getenv("OPAL_TEST_TRACE");return v&&*v&&std::string(v)!="0";
+#endif
+}
 void trace(const char*phase){if(trace_enabled())std::cerr<<"OPAL peer-session phase="<<phase<<"\n";}
 }
 
