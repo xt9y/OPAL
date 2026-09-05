@@ -153,7 +153,7 @@ struct VideoReceiver::Impl{
         bool dropped=false;
         {std::lock_guard<std::mutex>lock(media_mu);
             if(item.frame.media_type==VideoMediaType::VideoH264){
-                if(item.frame.config){reassembler.require_idr();clear_video_backlog();video_config=std::move(item);}
+                if(item.frame.config){clear_video_backlog();video_config=std::move(item);}
                 else{
                     const bool keyframe=item.frame.keyframe;
                     const auto result=push_video_backlog(std::move(item),keyframe);
