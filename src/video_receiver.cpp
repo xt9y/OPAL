@@ -2,6 +2,7 @@
 
 #include <opal/audio_output.hpp>
 #include <opal/udp_transport.hpp>
+#include <opal/video_backlog.hpp>
 #include <opal/video_decoder.hpp>
 #include <opal/video_feedback.hpp>
 #include <opal/video_packet.hpp>
@@ -32,7 +33,6 @@ double ewma(double old,double sample){return old==0.0?sample:old*0.8+sample*0.2;
 struct VideoReceiver::Impl{
     struct Arrival{std::uint64_t id=0,us=0;};
     struct MediaItem{ReassembledFrame frame;double reassembly_ms=0.0;std::uint64_t first_arrival_us=0;};
-    static constexpr std::size_t kVideoDecodeBacklogCapacity=8;
 
     std::unique_ptr<DirectVideoPath> owned_path;
     VideoKeys keys;
@@ -53,14 +53,13 @@ struct VideoReceiver::Impl{
     std::thread rx_thread,media_thread,control_thread;
     mutable std::mutex media_mu,idr_mu,telemetry_mu,rx_mu,sequence_mu,frame_mu;
     std::condition_variable media_cv;
-    std::array<std::optional<MediaItem>,kVideoDecodeBacklogCapacity>video_frames{};
-    std::size_t video_head=0,video_count=0;
+    VideoBacklog<MediaItem,2>video_frames;
     std::optional<MediaItem>video_config,audio_frame,audio_config;
     DecodedVideoFrame latest_frame{};
 
     std::atomic<bool>run{false},media{false},clock_valid{false},force_reassembly_idr{false},audio_reset_requested{false};
     std::atomic<VideoReceiverFailure>failure{VideoReceiverFailure::NoFailure};
-    std::atomic<std::uint64_t>stale{0},highest{0},kernel_drops{0},decoded_frames{0},presented_frames{0},skipped_present_frames{0},last_media_us{0};
+    std::atomic<std::uint64_t>stale{0},highest{0},kernel_drops{0},decoded_frames{0},presented_frames{0},skipped_present_frames{0},encoded_drops{0},last_media_us{0};
     std::atomic<std::int64_t>latest_video_ts{0},clock_offset_us{0};
     std::atomic<std::uint32_t>current_rtt_us{0},last_decode_age_us{0},host_capture_to_packet_us{0},audio_queued_debug{0},video_backlog_debug{0};
     std::atomic<int>host_active_kbps{0};
@@ -82,9 +81,10 @@ struct VideoReceiver::Impl{
     void note_arrival(std::uint64_t id,std::uint64_t us){for(const auto&s:arrivals)if(s.id==id)return;for(auto&s:arrivals)if(s.id==0){s={id,us};return;}arrivals[arrival_cursor%arrivals.size()]={id,us};arrival_cursor=(arrival_cursor+1)%arrivals.size();}
     std::uint64_t take_arrival(std::uint64_t id,std::uint64_t fallback){for(auto&s:arrivals)if(s.id==id){const auto us=s.us;s={};return us;}return fallback;}
 
-    void clear_video_backlog(){for(auto&slot:video_frames)slot.reset();video_head=0;video_count=0;video_backlog_debug.store(0,std::memory_order_release);}
-    bool push_video_backlog(MediaItem item){if(video_count>=kVideoDecodeBacklogCapacity)return false;const auto tail=(video_head+video_count)%video_frames.size();video_frames[tail]=std::move(item);++video_count;video_backlog_debug.store(static_cast<std::uint32_t>(video_count),std::memory_order_release);return true;}
-    std::optional<MediaItem>pop_video_backlog(){if(video_count==0)return std::nullopt;auto item=std::move(video_frames[video_head]);video_frames[video_head].reset();video_head=(video_head+1)%video_frames.size();--video_count;video_backlog_debug.store(static_cast<std::uint32_t>(video_count),std::memory_order_release);return item;}
+    void sync_video_backlog_debug(){video_backlog_debug.store(static_cast<std::uint32_t>(video_frames.size()),std::memory_order_release);}
+    void clear_video_backlog(){video_frames.clear();sync_video_backlog_debug();}
+    VideoBacklogPush push_video_backlog(MediaItem item,bool keyframe){const auto result=video_frames.push(std::move(item),keyframe);sync_video_backlog_debug();return result;}
+    std::optional<MediaItem>pop_video_backlog(){auto item=video_frames.pop();sync_video_backlog_debug();return item;}
     std::size_t video_backlog_size()const{return video_backlog_debug.load(std::memory_order_acquire);}
 
     void clear_latest_frame(){std::lock_guard<std::mutex>lock(frame_mu);if(latest_frame.frame)av_frame_free(&latest_frame.frame);latest_frame.pts_us=0;}
@@ -129,7 +129,7 @@ struct VideoReceiver::Impl{
         DecodedVideoView newest;std::size_t superseded=0;
         if(!decoder_ready||!decoder.decode_latest(a.data,static_cast<std::int64_t>(a.capture_timestamp_us),newest,superseded)){decoder.flush();request_idr_media("decode-failure");return false;}
         const auto decode_end=monotonic_us();bool skip_publish=false;
-        if(newest.frame){decoded_frames.fetch_add(static_cast<std::uint64_t>(superseded)+1);if(superseded)stale.fetch_add(superseded);{std::lock_guard<std::mutex>lock(media_mu);skip_publish=video_count>0;}if(skip_publish){skipped_present_frames.fetch_add(1);stale.fetch_add(1);}}
+        if(newest.frame){decoded_frames.fetch_add(static_cast<std::uint64_t>(superseded)+1);if(superseded)stale.fetch_add(superseded);{std::lock_guard<std::mutex>lock(media_mu);skip_publish=!video_frames.empty();}if(skip_publish){skipped_present_frames.fetch_add(1);stale.fetch_add(1);}}
         update_decode_telemetry(a,item.reassembly_ms,static_cast<double>(decode_end-decode_begin)/1000.0,item.first_arrival_us,decode_end);
         if(newest.frame&&!skip_publish)publish_latest(newest,static_cast<std::int64_t>(a.capture_timestamp_us));
         return true;
@@ -148,21 +148,26 @@ struct VideoReceiver::Impl{
     }
 
     void enqueue_media(MediaItem item){
-        bool need_idr=false;
+        bool dropped=false;
         {std::lock_guard<std::mutex>lock(media_mu);
             if(item.frame.media_type==VideoMediaType::VideoH264){
                 if(item.frame.config){reassembler.require_idr();clear_video_backlog();video_config=std::move(item);}
-                else{if(item.frame.keyframe)clear_video_backlog();if(!push_video_backlog(std::move(item))){clear_video_backlog();need_idr=true;}}
+                else{
+                    const bool keyframe=item.frame.keyframe;
+                    const auto result=push_video_backlog(std::move(item),keyframe);
+                    if(result==VideoBacklogPush::DroppedIncoming)dropped=true;
+                }
             }else if(item.frame.media_type==VideoMediaType::AudioAac){if(item.frame.config)audio_config=std::move(item);else audio_frame=std::move(item);}
         }
-        media_cv.notify_one();if(need_idr)request_idr_rx("decode-backlog");
+        if(dropped){encoded_drops.fetch_add(1);stale.fetch_add(1);skipped_present_frames.fetch_add(1);}
+        media_cv.notify_one();
     }
 
     void media_loop(){
         while(run.load()){
             if(audio_reset_requested.exchange(false)){audio_output.reset_to(latest_video_ts.load());audio_queued_debug.store(audio_output.queued_ms());}
             std::optional<MediaItem>item;
-            {std::unique_lock<std::mutex>lock(media_mu);media_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||video_config||video_count>0||audio_config||audio_frame||audio_reset_requested.load();});if(!run.load())break;if(video_config){item=std::move(video_config);video_config.reset();}else if(video_count>0)item=pop_video_backlog();else if(audio_config){item=std::move(audio_config);audio_config.reset();}else if(audio_frame){item=std::move(audio_frame);audio_frame.reset();}}
+            {std::unique_lock<std::mutex>lock(media_mu);media_cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return !run.load()||video_config||!video_frames.empty()||audio_config||audio_frame||audio_reset_requested.load();});if(!run.load())break;if(video_config){item=std::move(video_config);video_config.reset();}else if(!video_frames.empty())item=pop_video_backlog();else if(audio_config){item=std::move(audio_config);audio_config.reset();}else if(audio_frame){item=std::move(audio_frame);audio_frame.reset();}}
             if(item)handle_media_complete(*item);
         }
         audio_output.close();clear_latest_frame();decoder.flush();
@@ -198,7 +203,7 @@ struct VideoReceiver::Impl{
         if(debug_enabled()&&(last_debug.time_since_epoch().count()==0||now-last_debug>=std::chrono::seconds(1))){
             const auto decoded_now=decoded_frames.load(),presented_now=presented_frames.load();const double elapsed=last_debug.time_since_epoch().count()==0?0.0:std::chrono::duration<double>(now-last_debug).count();LatencyTelemetry snapshot;
             {std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();if(elapsed>0.0){telemetry.decoded_fps=static_cast<double>(decoded_now-last_debug_decoded)/elapsed;telemetry.presented_fps=static_cast<double>(presented_now-last_debug_presented)/elapsed;}snapshot=telemetry;}
-            std::cerr<<format_latency_telemetry(snapshot)<<" audio="<<audio_queued_debug.load()<<"ms rtt="<<static_cast<double>(current_rtt_us.load())/1000.0<<"ms kernel_drop="<<kernel_drops.load()<<"\n";
+            std::cerr<<format_latency_telemetry(snapshot)<<" audio="<<audio_queued_debug.load()<<"ms rtt="<<static_cast<double>(current_rtt_us.load())/1000.0<<"ms kernel_drop="<<kernel_drops.load()<<" encoded_drop="<<encoded_drops.load()<<"\n";
             last_debug_decoded=decoded_now;last_debug_presented=presented_now;last_debug=now;
         }
     }
@@ -226,6 +231,7 @@ bool VideoReceiver::take_latest_video(DecodedVideoFrame&out){return impl_&&impl_
 void VideoReceiver::note_presented_video(std::int64_t pts_us,double present_ms){if(!impl_)return;impl_->presented_frames.fetch_add(1);impl_->latest_video_ts.store(pts_us);impl_->update_present_telemetry(pts_us,present_ms,monotonic_us());}
 std::uint64_t VideoReceiver::stale_frames()const{return impl_?impl_->stale.load():0;}
 std::uint64_t VideoReceiver::highest_sequence()const{return impl_?impl_->highest.load():0;}
+std::uint64_t VideoReceiver::encoded_backlog_drops()const{return impl_?impl_->encoded_drops.load():0;}
 std::uint32_t VideoReceiver::audio_queued_ms()const{return impl_?impl_->audio_queued_debug.load():0;}
 void VideoReceiver::stop(){if(!impl_)return;impl_->run.store(false);impl_->media_cv.notify_all();if(impl_->rx_thread.joinable())impl_->rx_thread.join();if(impl_->control_thread.joinable())impl_->control_thread.join();impl_->media_cv.notify_all();if(impl_->media_thread.joinable())impl_->media_thread.join();impl_->clear_latest_frame();}
 VideoReceiver::~VideoReceiver(){stop();}

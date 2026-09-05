@@ -35,6 +35,7 @@ public:
     void note_presented_video(std::int64_t pts_us,double present_ms);
     std::uint64_t stale_frames() const;
     std::uint64_t highest_sequence() const;
+    std::uint64_t encoded_backlog_drops() const;
     std::uint32_t audio_queued_ms() const;
     void stop();
     ~VideoReceiver();
