@@ -47,6 +47,7 @@ public:
     bool send_input(std::string command);
     bool send_pointer(std::string command);
     bool send_media_datagram(std::span<const std::uint8_t> wire);
+    bool send_media_datagrams(std::span<const std::span<const std::uint8_t>> wires);
     bool established() const;
     bool running() const;
     std::uint32_t generation() const;
