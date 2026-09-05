@@ -6,20 +6,20 @@ install
 
 Fedora 44+ / Fedora Asahi
   sudo dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
-  sudo dnf install -y --allowerasing gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel libglvnd-devel pulseaudio-libs-devel ffmpeg ffmpeg-devel pipewire pipewire-devel pipewire-pulseaudio libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo dnf install -y --allowerasing gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire pipewire-devel pipewire-pulseaudio libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
   GNOME instead of KDE    --> sudo dnf install -y xdg-desktop-portal-gnome
   wlroots instead of KDE  --> sudo dnf install -y xdg-desktop-portal-wlr
 
 CachyOS / Arch Linux
-  sudo pacman -S --needed base-devel pkgconf sdl3 openssl libglvnd libpulse ffmpeg pipewire pipewire-pulse libportal xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo pacman -S --needed base-devel pkgconf sdl3 openssl ffmpeg pipewire pipewire-pulse libportal xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
   GNOME instead of KDE    --> sudo pacman -S --needed xdg-desktop-portal-gnome
   wlroots instead of KDE  --> sudo pacman -S --needed xdg-desktop-portal-wlr
 
 Debian 13+ / Ubuntu with SDL3
   sudo apt-get update
-  sudo apt-get install -y build-essential pkg-config libsdl3-dev libssl-dev libgl1-mesa-dev libpulse-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo apt-get install -y build-essential pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
   GNOME instead of KDE    --> sudo apt-get install -y xdg-desktop-portal-gnome
   wlroots instead of KDE  --> sudo apt-get install -y xdg-desktop-portal-wlr
@@ -38,11 +38,9 @@ run
 
 required build/runtime stack
   C++20 compiler + make + pkg-config
-  SDL3
+  SDL3 --> window, rendering, client input, client clipboard, audio output
   OpenSSL
-  OpenGL/libglvnd
   FFmpeg executable + libavformat/libavcodec/libavutil/libswresample/libswscale
-  PulseAudio client library
   PipeWire + PipeWire PulseAudio compatibility service
   libportal
   xdg-desktop-portal + one compositor portal backend
@@ -53,14 +51,20 @@ Wayland host
   native screen capture --> PipeWire + libportal + xdg-desktop-portal
   clipboard             --> wl-copy + wl-paste from wl-clipboard
   input                 --> /dev/uinput; sudo make install installs the OPAL udev rule and loads uinput when possible
-  audio                 --> PipeWire/PulseAudio compatible default source
+  audio capture         --> PipeWire/PulseAudio compatible default source
+
+client
+  window/render/input/clipboard/audio --> SDL3
+  video presentation                   --> SDL renderer only
 
 video
   H.264 encode/decode is required.
-  OPAL selects available hardware paths automatically: VAAPI, V4L2 M2M, NVENC or QSV.
-  Software fallback uses libx264/OpenH264 when available.
+  OPAL selects available hardware codec paths automatically: VAAPI, V4L2 M2M, NVENC or QSV.
+  SDL3 is always the client presentation backend.
+  Hardware-decoded frames are normalized to an SDL-supported YUV/NV12 frame before presentation.
+  Software codec fallback uses libx264/OpenH264 when available.
   Fedora command above uses RPM Fusion FFmpeg so the full H.264 software fallback is available.
-  gpu-screen-recorder is optional only; it is an external fallback when native PipeWire capture cannot run.
+  gpu-screen-recorder is optional only; it is an external capture fallback when native PipeWire capture cannot run.
 
 network
   OPAL uses signed rendezvous + direct encrypted UDP with encrypted relay fallback.
