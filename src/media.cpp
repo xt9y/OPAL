@@ -37,4 +37,5 @@ bool write_sink_timeout(SinkProcess &sink,const void *data,size_t size,int timeo
     if(sink.compact_input){const std::string_view command(static_cast<const char*>(data),size);if(!encode_input_command(command,compact))return false;data=compact.data();size=compact.size();timeout_ms=std::min(timeout_ms,2);}
     auto*p=static_cast<const unsigned char*>(data);auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));while(size){auto now=std::chrono::steady_clock::now();if(now>=deadline)return false;auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count();pollfd f{sink.fd,POLLOUT,0};int rc=poll(&f,1,static_cast<int>(std::max<long long>(1,ms)));if(rc<0&&errno==EINTR)continue;if(rc<=0||f.revents&(POLLERR|POLLHUP|POLLNVAL))return false;ssize_t n=write(sink.fd,p,size);if(n<0&&errno==EINTR)continue;if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK))continue;if(n<=0)return false;p+=n;size-=static_cast<size_t>(n);}return true;
 }
-void stop_sink(SinkProcess &sink){if(sink.fd>=0){close(sink.fd);sink.fd=-1;}stop_group(sink.pid);sink.pid=-1;}
+void stop_sink(SinkProcess &sink){if(sink.fd>=0){close(sink.fd);sink.fd=-1;}stop_group(sink.pid);sink.pid=-1;sink.compact_input=false;}
+}
