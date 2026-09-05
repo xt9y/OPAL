@@ -242,7 +242,7 @@ struct VideoReceiver::Impl{
             clear_video_backlog();audio_frame.reset();
         }
         stall_reset_requested.store(true);audio_reset_requested.store(true);last_stall_recovery_us.store(now);media_cv.notify_one();
-        request_idr_control("reassembly-loss");
+        if(attempt==1)request_idr_control("reassembly-loss");
         const double media_silence_ms=last_media&&now>last_media?static_cast<double>(now-last_media)/1000.0:0.0;
         if(debug_enabled())std::cerr<<"OPAL media stall local-recovery attempt="<<attempt<<" video_silence="<<static_cast<double>(now-last)/1000.0<<"ms media_silence="<<media_silence_ms<<"ms hard_fail="<<static_cast<double>(kMediaStallFailureUs)/1000.0<<"ms\n";
         return true;
