@@ -72,7 +72,7 @@ int main(){
 
             const bool force_single=(frame==2);
             const bool force_double=(frame==10);
-            int dropped_data=0;const int random_loss=loss_percent(rng);
+            int dropped_data=0;const int sampled_loss=loss_percent(rng);const int random_loss=frame<3?0:sampled_loss;
             std::vector<opal::VideoPlainPacket> delivery;delivery.reserve(packets.size());
             for(const auto&packet:packets){
                 const bool data=packet.header.media_type!=opal::VideoMediaType::Fec;
