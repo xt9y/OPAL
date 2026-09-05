@@ -85,6 +85,7 @@ int main(){
         assert(first.find("-fm cfr")==std::string::npos);
         assert(first.find("-keyint 0.25")!=std::string::npos);
         assert(first.find("-tune performance")!=std::string::npos);
+        assert(first.find("-ffmpeg-opts 'flush_packets=1'")!=std::string::npos);
         assert(first.find("-c flv")!=std::string::npos);
         {std::ofstream f(token);f<<"restore-token";}
         auto restored=opal::capture_command(true,60,30000,true,token,0,0);
