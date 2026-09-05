@@ -6,6 +6,7 @@ APP_SRCS += $(CLIPBOARD_SRCS)
 $(PRODUCT): $(CLIPBOARD_SRCS)
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
+FFMPEG_LIBX264_PROBE := ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -an -f flv - >/dev/null 2>&1
 
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
@@ -23,7 +24,11 @@ test-latency-window: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_latency_window.cpp -o $(BUILD)/test-latency-window
 	$(BUILD)/test-latency-window
 
-test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window
+test-capture-probe: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_capture_probe.cpp -o $(BUILD)/test-capture-probe
+	$(BUILD)/test-capture-probe
+
+test: test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe
 
 # Sanitizer targets propagate their flags to their prerequisites. The wrapper
 # below forces clean rebuilds because make does not consider CXXFLAGS when it
@@ -52,7 +57,7 @@ test-netem: $(NETEM_PIPELINE)
 	@if ! command -v tc >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/tc (Fedora: sudo dnf install iproute-tc)'; exit 0; fi
 	if ! command -v ip >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/ip'; exit 0; fi
 	if ! command -v timeout >/dev/null 2>&1; then echo 'SKIP test-netem: timeout command unavailable'; exit 0; fi
-	if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$$)'; then echo 'SKIP test-netem: FFmpeg libx264 encoder unavailable'; exit 0; fi
+	if ! $(FFMPEG_LIBX264_PROBE); then echo 'SKIP test-netem: FFmpeg libx264 is advertised but not executable'; exit 0; fi
 	export BIN='$(abspath $(NETEM_PIPELINE))'
 	run_cases='set -eu; \
 		ip link set lo up; \
@@ -74,13 +79,13 @@ test-netem: $(NETEM_PIPELINE)
 	fi
 
 # Repeated real threads, crypto, packetization, reassembly, decode and recovery.
-# If libx264 is unavailable, the deterministic non-capture stress tests still run.
+# If libx264 is unusable, the deterministic non-capture stress tests still run.
 test-soak: test-peer-session test-udp-transport test-direct-video-stress test-direct-video-pipeline
 	@case '$(OPAL_SOAK_SECONDS)' in ''|*[!0-9]*) echo 'OPAL_SOAK_SECONDS must be a positive integer' >&2; exit 2;; esac
 	[ '$(OPAL_SOAK_SECONDS)' -gt 0 ] || { echo 'OPAL_SOAK_SECONDS must be > 0' >&2; exit 2; }
 	start=$$(date +%s); deadline=$$((start + $(OPAL_SOAK_SECONDS))); iterations=0
 	have_pipeline=0
-	if ffmpeg -hide_banner -encoders 2>/dev/null | grep -Eq '(^|[[:space:]])libx264([[:space:]]|$$)'; then have_pipeline=1; else echo 'SKIP pipeline portion of soak: FFmpeg libx264 encoder unavailable'; fi
+	if $(FFMPEG_LIBX264_PROBE); then have_pipeline=1; else echo 'SKIP pipeline portion of soak: FFmpeg libx264 is not executable'; fi
 	while [ $$(date +%s) -lt $$deadline ]; do
 		$(BUILD)/test-peer-session
 		$(BUILD)/test-udp-transport
@@ -92,7 +97,7 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 
 # Fast HPI correctness gate. Hostile kernel networking and sanitizers stay
 # explicit because they are intentionally slower and environment-sensitive.
-test-hpi: test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
+test-hpi: test-capture-probe test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
 
 # Always rebuild sanitizer binaries from scratch. ASan/UBSan and TSan are run
 # in separate clean trees because they are not link-compatible with each other.
@@ -104,7 +109,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: test-input-record test-latency-window test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: test-input-record test-latency-window test-capture-probe test-thread-sanitize test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 # The integration test validates networking/recovery in a headless process.
 # Real presentation is covered separately by test-video-present and machine
