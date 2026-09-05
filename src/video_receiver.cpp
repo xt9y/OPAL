@@ -122,11 +122,11 @@ struct VideoReceiver::Impl{
         }
     }
 
-    bool decode_and_publish(const MediaItem&item){
-        const auto&a=item.frame;const auto decode_begin=monotonic_us();
+    bool decode_and_publish(MediaItem&item){
+        auto&a=item.frame;const auto decode_begin=monotonic_us();
         if(const char*stall=std::getenv("OPAL_TEST_DECODE_STALL_MS");stall&&*stall)try{const int ms=std::clamp(std::stoi(stall),0,2000);if(ms)std::this_thread::sleep_for(std::chrono::milliseconds(ms));}catch(...){ }
         DecodedVideoView newest;std::size_t superseded=0;
-        if(!decoder_ready||!decoder.decode_latest(a.data,static_cast<std::int64_t>(a.capture_timestamp_us),newest,superseded)){decoder.flush();request_idr_media("decode-failure");return false;}
+        if(!decoder_ready||!decoder.decode_latest_owned(std::move(a.data),static_cast<std::int64_t>(a.capture_timestamp_us),newest,superseded)){decoder.flush();request_idr_media("decode-failure");return false;}
         const auto decode_end=monotonic_us();bool skip_publish=false;
         if(newest.frame){decoded_frames.fetch_add(static_cast<std::uint64_t>(superseded)+1);if(superseded)stale.fetch_add(superseded);{std::lock_guard<std::mutex>lock(media_mu);skip_publish=!video_frames.empty();}if(skip_publish){skipped_present_frames.fetch_add(1);stale.fetch_add(1);}}
         update_decode_telemetry(a,item.reassembly_ms,static_cast<double>(decode_end-decode_begin)/1000.0,item.first_arrival_us,decode_end);
@@ -134,8 +134,8 @@ struct VideoReceiver::Impl{
         return true;
     }
 
-    void handle_media_complete(const MediaItem&item){
-        const auto&a=item.frame;
+    void handle_media_complete(MediaItem&item){
+        auto&a=item.frame;
         if(a.media_type==VideoMediaType::VideoH264){
             if(a.config){decoder.flush();decoder_ready=decoder.configure_h264(a.data);{std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.decoder_backend=decoder_ready?decoder.backend_name():"unconfigured";}if(!decoder_ready)request_idr_media("decode-failure");return;}
             decode_and_publish(item);return;
