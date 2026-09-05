@@ -35,7 +35,7 @@ bool VideoPresenter::present_borrowed(DecodedVideoView decoded){const AVFrame*f=
 bool VideoPresenter::present(DecodedVideoFrame decoded){AVFrame*f=decoded.frame;if(!f)return false;const bool ok=present_borrowed({f,decoded.pts_us});av_frame_free(&f);return ok;}
 std::pair<int,int> VideoPresenter::drawable_size()const{if(!impl_||!impl_->window)return{0,0};int w=0,h=0;if(!SDL_GetWindowSizeInPixels(impl_->window,&w,&h))return{0,0};return{w,h};}
 std::pair<int,int> VideoPresenter::window_size()const{if(!impl_||!impl_->window)return{0,0};int w=0,h=0;if(!SDL_GetWindowSize(impl_->window,&w,&h))return{0,0};return{w,h};}
-bool VideoPresenter::set_relative_mouse_mode(bool enabled){if(!impl_||!impl_->window)return false;if(!SDL_SetWindowRelativeMouseMode(impl_->window,false))return false;if(!SDL_SetWindowMouseGrab(impl_->window,enabled))return false;return enabled?SDL_HideCursor():SDL_ShowCursor();}
+bool VideoPresenter::set_relative_mouse_mode(bool enabled){if(!impl_||!impl_->window)return false;if(!SDL_SetWindowRelativeMouseMode(impl_->window,enabled))return false;if(!SDL_SetWindowMouseGrab(impl_->window,enabled))return false;return enabled?SDL_HideCursor():SDL_ShowCursor();}
 std::size_t VideoPresenter::pending_frame_count()const{return 0;}
 std::uint64_t VideoPresenter::presented_frames()const{return impl_?impl_->presented:0;}
 std::string VideoPresenter::backend_name()const{const char*driver=SDL_GetCurrentVideoDriver();return driver&&*driver?driver:"unconfigured";}
