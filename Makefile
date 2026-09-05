@@ -6,7 +6,7 @@ APP_SRCS += $(CLIPBOARD_SRCS)
 $(PRODUCT): $(CLIPBOARD_SRCS)
 $(INPUT): include/opal/input_record.hpp
 OPAL_SOAK_SECONDS ?= 3600
-FFMPEG_LIBX264_PROBE := ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -an -f flv - >/dev/null 2>&1
+FFMPEG_H264_PROBE := (ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v libx264 -an -f flv - >/dev/null 2>&1 || ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:r=1 -frames:v 1 -pix_fmt yuv420p -c:v libopenh264 -an -f flv - >/dev/null 2>&1)
 
 test-clipboard: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
@@ -57,7 +57,7 @@ test-netem: $(NETEM_PIPELINE)
 	@if ! command -v tc >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/tc (Fedora: sudo dnf install iproute-tc)'; exit 0; fi
 	if ! command -v ip >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/ip'; exit 0; fi
 	if ! command -v timeout >/dev/null 2>&1; then echo 'SKIP test-netem: timeout command unavailable'; exit 0; fi
-	if ! $(FFMPEG_LIBX264_PROBE); then echo 'SKIP test-netem: FFmpeg libx264 is advertised but not executable'; exit 0; fi
+	if ! $(FFMPEG_H264_PROBE); then echo 'SKIP test-netem: FFmpeg has no executable libx264/libopenh264 encoder'; exit 0; fi
 	export BIN='$(abspath $(NETEM_PIPELINE))'
 	run_cases='set -eu; \
 		ip link set lo up; \
@@ -79,13 +79,13 @@ test-netem: $(NETEM_PIPELINE)
 	fi
 
 # Repeated real threads, crypto, packetization, reassembly, decode and recovery.
-# If libx264 is unusable, the deterministic non-capture stress tests still run.
+# If no H.264 encoder is usable, deterministic non-capture stress tests still run.
 test-soak: test-peer-session test-udp-transport test-direct-video-stress test-direct-video-pipeline
 	@case '$(OPAL_SOAK_SECONDS)' in ''|*[!0-9]*) echo 'OPAL_SOAK_SECONDS must be a positive integer' >&2; exit 2;; esac
 	[ '$(OPAL_SOAK_SECONDS)' -gt 0 ] || { echo 'OPAL_SOAK_SECONDS must be > 0' >&2; exit 2; }
 	start=$$(date +%s); deadline=$$((start + $(OPAL_SOAK_SECONDS))); iterations=0
 	have_pipeline=0
-	if $(FFMPEG_LIBX264_PROBE); then have_pipeline=1; else echo 'SKIP pipeline portion of soak: FFmpeg libx264 is not executable'; fi
+	if $(FFMPEG_H264_PROBE); then have_pipeline=1; else echo 'SKIP pipeline portion of soak: FFmpeg has no executable libx264/libopenh264 encoder'; fi
 	while [ $$(date +%s) -lt $$deadline ]; do
 		$(BUILD)/test-peer-session
 		$(BUILD)/test-udp-transport
