@@ -36,6 +36,7 @@ int main(){
     auto size=presenter.drawable_size();assert(size.first>0&&size.second>0);
 
     auto borrowed=make_yuv420(48);AVFrame*borrowed_ptr=borrowed.frame;assert(presenter.present_borrowed({borrowed.frame,borrowed.pts_us}));assert(borrowed.frame==borrowed_ptr);assert(presenter.presented_frames()==1);av_frame_free(&borrowed.frame);
+    assert(presenter.backend_name().find("dmabuf")==std::string::npos);
     assert(presenter.present(make_yuv420(96)));assert(presenter.presented_frames()==2);
     assert(presenter.present(make_nv12(64)));assert(presenter.pending_frame_count()==0);assert(presenter.presented_frames()==3);
 
