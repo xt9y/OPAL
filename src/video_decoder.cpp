@@ -1,12 +1,16 @@
 #include <opal/video_decoder.hpp>
 
+#include <climits>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <string>
 #include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/buffer.h>
 #include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/mem.h>
@@ -14,6 +18,13 @@ extern "C" {
 }
 
 namespace opal {
+namespace {
+constexpr std::size_t kOwnedPacketPaddingReserve=64;
+static_assert(AV_INPUT_BUFFER_PADDING_SIZE<=kOwnedPacketPaddingReserve);
+void release_owned_packet(void *opaque,std::uint8_t*){
+    delete static_cast<std::shared_ptr<std::vector<std::uint8_t>>*>(opaque);
+}
+}
 
 struct VideoDecoder::Impl {
     AVCodecContext *ctx=nullptr;
@@ -91,6 +102,52 @@ struct VideoDecoder::Impl {
         auto_hardware_disabled=true;clear_latest();if(scratch)av_frame_unref(scratch);if(transfer)av_frame_unref(transfer);if(packet)av_packet_unref(packet);
         return open_software(codec,configured_extradata);
     }
+
+    bool drain(std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
+        out={};superseded=0;std::size_t decoded=0;
+        for(;;){
+            const int rc=avcodec_receive_frame(ctx,scratch);
+            if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF)break;
+            if(rc<0)return false;
+            if((scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||scratch->decode_error_flags!=0){av_frame_unref(scratch);clear_latest();return false;}
+            AVFrame *ready=scratch;
+            if(hw_pix_fmt!=AV_PIX_FMT_NONE&&scratch->format==hw_pix_fmt){
+                av_frame_unref(transfer);
+                if(av_hwframe_transfer_data(transfer,scratch,0)<0||av_frame_copy_props(transfer,scratch)<0){av_frame_unref(scratch);clear_latest();return false;}
+                ready=transfer;
+            }
+            av_frame_unref(latest);
+            if(ready==scratch)av_frame_move_ref(latest,scratch);
+            else{av_frame_move_ref(latest,transfer);av_frame_unref(scratch);}
+            latest_pts_us=pts_us;++decoded;
+        }
+        if(decoded==0)return true;
+        superseded=decoded-1;out.frame=latest;out.pts_us=latest_pts_us;return true;
+    }
+
+    bool submit_borrowed(std::span<const std::uint8_t>unit,std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
+        const std::size_t needed=unit.size()+AV_INPUT_BUFFER_PADDING_SIZE;
+        if(packet_bytes.size()<needed)packet_bytes.resize(needed);
+        std::memcpy(packet_bytes.data(),unit.data(),unit.size());
+        std::memset(packet_bytes.data()+unit.size(),0,AV_INPUT_BUFFER_PADDING_SIZE);
+        av_packet_unref(packet);packet->data=packet_bytes.data();packet->size=static_cast<int>(unit.size());packet->pts=pts_us;packet->dts=pts_us;
+        const int send_rc=avcodec_send_packet(ctx,packet);packet->data=nullptr;packet->size=0;
+        if(send_rc<0)return false;
+        return drain(pts_us,out,superseded);
+    }
+
+    bool submit_owned(const std::shared_ptr<std::vector<std::uint8_t>>&storage,std::size_t payload_size,std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
+        if(!storage||storage->empty()||payload_size==0||payload_size>static_cast<std::size_t>(INT_MAX)||storage->size()<payload_size+AV_INPUT_BUFFER_PADDING_SIZE)return false;
+        av_packet_unref(packet);
+        auto *holder=new(std::nothrow) std::shared_ptr<std::vector<std::uint8_t>>(storage);if(!holder)return false;
+        AVBufferRef *buffer=av_buffer_create(storage->data(),storage->size(),release_owned_packet,holder,AV_BUFFER_FLAG_READONLY);
+        if(!buffer){delete holder;return false;}
+        packet->buf=buffer;packet->data=storage->data();packet->size=static_cast<int>(payload_size);packet->pts=pts_us;packet->dts=pts_us;
+        const int send_rc=avcodec_send_packet(ctx,packet);
+        av_packet_unref(packet);
+        if(send_rc<0)return false;
+        return drain(pts_us,out,superseded);
+    }
 };
 
 VideoDecoder::VideoDecoder():impl_(new Impl){}
@@ -108,14 +165,21 @@ bool VideoDecoder::configure_h264(std::span<const std::uint8_t> extradata){
 }
 
 bool VideoDecoder::decode_latest(std::span<const std::uint8_t> unit,std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
-    if(!impl_||!impl_->ctx||unit.empty()||!impl_->ensure_io()){out={};superseded=0;return false;}
-    auto decode_once=[&]()->bool{
-        out={};superseded=0;const std::size_t needed=unit.size()+AV_INPUT_BUFFER_PADDING_SIZE;if(impl_->packet_bytes.size()<needed)impl_->packet_bytes.resize(needed);std::memcpy(impl_->packet_bytes.data(),unit.data(),unit.size());std::memset(impl_->packet_bytes.data()+unit.size(),0,AV_INPUT_BUFFER_PADDING_SIZE);
-        av_packet_unref(impl_->packet);impl_->packet->data=impl_->packet_bytes.data();impl_->packet->size=static_cast<int>(unit.size());impl_->packet->pts=pts_us;impl_->packet->dts=pts_us;const int send_rc=avcodec_send_packet(impl_->ctx,impl_->packet);impl_->packet->data=nullptr;impl_->packet->size=0;if(send_rc<0)return false;
-        std::size_t decoded=0;for(;;){const int rc=avcodec_receive_frame(impl_->ctx,impl_->scratch);if(rc==AVERROR(EAGAIN)||rc==AVERROR_EOF)break;if(rc<0)return false;if((impl_->scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||impl_->scratch->decode_error_flags!=0){av_frame_unref(impl_->scratch);impl_->clear_latest();return false;}AVFrame *ready=impl_->scratch;if(impl_->hw_pix_fmt!=AV_PIX_FMT_NONE&&impl_->scratch->format==impl_->hw_pix_fmt){av_frame_unref(impl_->transfer);if(av_hwframe_transfer_data(impl_->transfer,impl_->scratch,0)<0||av_frame_copy_props(impl_->transfer,impl_->scratch)<0){av_frame_unref(impl_->scratch);impl_->clear_latest();return false;}ready=impl_->transfer;}av_frame_unref(impl_->latest);if(ready==impl_->scratch)av_frame_move_ref(impl_->latest,impl_->scratch);else{av_frame_move_ref(impl_->latest,impl_->transfer);av_frame_unref(impl_->scratch);}impl_->latest_pts_us=pts_us;++decoded;}
-        if(decoded==0)return true;superseded=decoded-1;out.frame=impl_->latest;out.pts_us=impl_->latest_pts_us;return true;
-    };
-    if(decode_once())return true;if(!impl_->fallback_to_software())return false;return decode_once();
+    if(!impl_||!impl_->ctx||unit.empty()||unit.size()>static_cast<std::size_t>(INT_MAX)||!impl_->ensure_io()){out={};superseded=0;return false;}
+    if(impl_->submit_borrowed(unit,pts_us,out,superseded))return true;
+    if(!impl_->fallback_to_software())return false;
+    return impl_->submit_borrowed(unit,pts_us,out,superseded);
+}
+
+bool VideoDecoder::decode_latest_owned(std::vector<std::uint8_t> unit,std::int64_t pts_us,DecodedVideoView &out,std::size_t &superseded){
+    if(!impl_||!impl_->ctx||unit.empty()||unit.size()>static_cast<std::size_t>(INT_MAX)||!impl_->ensure_io()){out={};superseded=0;return false;}
+    const std::size_t payload_size=unit.size();
+    if(unit.capacity()<payload_size+kOwnedPacketPaddingReserve)unit.reserve(payload_size+kOwnedPacketPaddingReserve);
+    unit.resize(payload_size+AV_INPUT_BUFFER_PADDING_SIZE,0);
+    auto storage=std::make_shared<std::vector<std::uint8_t>>(std::move(unit));
+    if(impl_->submit_owned(storage,payload_size,pts_us,out,superseded))return true;
+    if(!impl_->fallback_to_software())return false;
+    return impl_->submit_owned(storage,payload_size,pts_us,out,superseded);
 }
 
 bool VideoDecoder::take_latest(DecodedVideoFrame&out){
