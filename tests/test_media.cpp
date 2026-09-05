@@ -135,7 +135,7 @@ int main(){
         assert(first.find("-s 1920x1080")!=std::string::npos);
         assert(first.find("-fm vfr")!=std::string::npos);
         assert(first.find("-fm cfr")==std::string::npos);
-        assert(first.find("-keyint 0.25")!=std::string::npos);
+        assert(first.find("-keyint 0.5")!=std::string::npos);
         assert(first.find("-tune performance")!=std::string::npos);
         assert(first.find("-c flv")!=std::string::npos);
         if(first.find("-ffmpeg-opts")!=std::string::npos)assert(first.find("flush_packets=1")!=std::string::npos);
