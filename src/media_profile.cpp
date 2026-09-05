@@ -1,5 +1,6 @@
 #include <opal/media_profile.hpp>
 #include <algorithm>
+#include <array>
 
 namespace opal {
 StreamOptions default_stream_options(){return {};}
@@ -10,6 +11,15 @@ bool stream_mode_limit(const std::string &mode,int &max_width,int &max_height){
     if(mode=="1440p"){max_width=2560;max_height=1440;return true;}
     if(mode=="4k"){max_width=3840;max_height=2160;return true;}
     return false;
+}
+
+int automatic_stream_fps(int display_refresh_hz,int capture_max_fps){
+    if(display_refresh_hz<=0||capture_max_fps<=0)return 60;
+    const int ceiling=std::min(display_refresh_hz,capture_max_fps);
+    constexpr std::array<int,6>rates={60,90,120,144,165,240};
+    int chosen=60;
+    for(const int rate:rates)if(rate<=ceiling)chosen=rate;else break;
+    return chosen;
 }
 
 int automatic_bitrate_kbps(int width,int height,int fps){
