@@ -32,7 +32,7 @@ int main(){
         assert(capture.pid<0&&capture.fd<0);
     }
     if(opal_test::capture_tests_available()){
-        const auto command=opal_test::lavfi_video_command(160,90,30,30,8,false,false);
+        const auto command=opal_test::lavfi_video_command(320,180,30,30,8,false,false);
         assert(!command.empty());
         auto capture=opal::start_capture(command);
         assert(capture.pid>0&&capture.fd>=0);
