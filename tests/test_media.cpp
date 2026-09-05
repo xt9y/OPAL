@@ -49,7 +49,7 @@ int main(){
             prefix.insert(prefix.end(),chunk.begin(),chunk.begin()+static_cast<std::ptrdiff_t>(needed));
         }
         opal::stop_capture(capture);
-        if(prefix.size()<13)std::cerr<<"capture pipe produced only "<<bytes<<" bytes before EOF/deadline\n";
+        if(prefix.size()<13)std::cerr<<"capture pipe produced only "<<bytes<<" bytes before EOF/deadline encoder="<<opal_test::ffmpeg_h264_encoder()<<" command="<<command<<"\n";
         assert(prefix.size()>=13);
         assert(prefix[0]=='F'&&prefix[1]=='L'&&prefix[2]=='V'&&prefix[3]==1);
         assert(prefix[5]==0&&prefix[6]==0&&prefix[7]==0&&prefix[8]==9);
@@ -149,6 +149,7 @@ int main(){
     {
         auto fallback=opal::capture_command(false,60,30000,true,"",1920,1080);
         if(!fallback.empty()){
+            assert(fallback.find("-nostdin")!=std::string::npos);
             assert(fallback.find("-draw_mouse 1")!=std::string::npos);
             assert(fallback.find("scale=")!=std::string::npos);
             assert(fallback.find("-fflags nobuffer")!=std::string::npos);
