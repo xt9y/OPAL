@@ -23,12 +23,12 @@ int automatic_bitrate_kbps(int width,int height,int fps){
 
 std::uint64_t capture_stale_budget_us(int fps){
     fps=std::clamp(fps,15,240);
-    return static_cast<std::uint64_t>(std::clamp(2000000/fps,20000,150000));
+    return static_cast<std::uint64_t>(std::clamp(2000000/fps,8000,150000));
 }
 
 int normal_gop_frames(int fps){
     fps=std::clamp(fps,15,240);
-    return fps*2;
+    return std::max(1,(fps+3)/4);
 }
 
 std::uint64_t sender_burst_budget_bytes(int bitrate_kbps,int fps,bool keyframe){

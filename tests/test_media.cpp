@@ -67,7 +67,7 @@ int main(){
         assert(opal::automatic_bitrate_kbps(3840,2160,60)==66000);
         assert(opal::automatic_bitrate_kbps(3840,2160,120)==100000);
         assert(opal::capture_stale_budget_us(60)>=32000&&opal::capture_stale_budget_us(60)<=34000);
-        assert(opal::normal_gop_frames(60)==120);
+        assert(opal::normal_gop_frames(60)==15);
     }
     {
         setenv("WAYLAND_DISPLAY","wayland-0",1);
@@ -99,8 +99,8 @@ int main(){
         assert(fallback.find("-fflags nobuffer")!=std::string::npos);
         assert(fallback.find("-flags low_delay")!=std::string::npos);
         assert(fallback.find("-bf 0")!=std::string::npos);
-        assert(fallback.find("-g 120")!=std::string::npos);
-        assert(fallback.find("-keyint_min 120")!=std::string::npos);
+        assert(fallback.find("-g 15")!=std::string::npos);
+        assert(fallback.find("-keyint_min 15")!=std::string::npos);
         assert(fallback.find("-bufsize 1000k")!=std::string::npos);
         assert(fallback.find("-flush_packets 1")!=std::string::npos);
         assert(fallback.find("-f flv pipe:1")!=std::string::npos);

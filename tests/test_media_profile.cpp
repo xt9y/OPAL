@@ -16,12 +16,13 @@ int main() {
 
     assert(opal::automatic_bitrate_kbps(1920,1080,60)==30000);
     assert(opal::capture_stale_budget_us(60)>=32000&&opal::capture_stale_budget_us(60)<=34000);
-    assert(opal::capture_stale_budget_us(240)==20000);
+    assert(opal::capture_stale_budget_us(120)>=16000&&opal::capture_stale_budget_us(120)<=17000);
+    assert(opal::capture_stale_budget_us(240)>=8000&&opal::capture_stale_budget_us(240)<=9000);
     assert(opal::capture_stale_budget_us(15)>=133000&&opal::capture_stale_budget_us(15)<=134000);
-    assert(opal::normal_gop_frames(60)==120);
-    assert(opal::normal_gop_frames(120)==240);
-    assert(opal::normal_gop_frames(15)==30);
-    assert(opal::normal_gop_frames(240)==480);
+    assert(opal::normal_gop_frames(60)==15);
+    assert(opal::normal_gop_frames(120)==30);
+    assert(opal::normal_gop_frames(15)==4);
+    assert(opal::normal_gop_frames(240)==60);
 
     // IDRs stay tightly paced so a large intra frame cannot monopolize the
     // shared UDP socket. Ordinary frames need a frame-sized token budget so
