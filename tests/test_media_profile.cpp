@@ -24,17 +24,18 @@ int main() {
     assert(opal::normal_gop_frames(15)==4);
     assert(opal::normal_gop_frames(240)==60);
 
-    // IDRs stay tightly paced so a large intra frame cannot monopolize the
-    // shared UDP socket. Ordinary frames need a frame-sized token budget so
-    // normal 60 FPS traffic does not consume the entire frame deadline and
-    // spuriously trigger send-failure capture restarts.
-    constexpr std::uint64_t two_datagrams=2*1200;
-    assert(opal::sender_burst_budget_bytes(30000,60,true)==two_datagrams);
-    assert(opal::sender_burst_budget_bytes(100000,15,true)==two_datagrams);
-    assert(opal::sender_burst_budget_bytes(30000,60,false)==128ULL*1024ULL);
-    assert(opal::sender_burst_budget_bytes(20000,15,false)==333332ULL);
-    assert(opal::sender_burst_budget_bytes(100000,15,false)==512ULL*1024ULL);
-    assert(opal::sender_burst_budget_bytes(1,1000,false)==128ULL*1024ULL);
+    // Keep ordinary traffic smooth enough that frame-sized bursts do not
+    // become another kernel/NIC latency queue. IDRs get a small burst so
+    // recovery starts immediately without monopolizing the shared socket.
+    constexpr std::uint64_t eight_datagrams=8*1200;
+    assert(opal::sender_burst_budget_bytes(30000,60,true)==eight_datagrams);
+    assert(opal::sender_burst_budget_bytes(100000,15,true)==eight_datagrams);
+    const auto b1080=opal::sender_burst_budget_bytes(30000,60,false);
+    assert(b1080>=15ULL*1024ULL&&b1080<=16ULL*1024ULL);
+    const auto b20m15=opal::sender_burst_budget_bytes(20000,15,false);
+    assert(b20m15>=40ULL*1024ULL&&b20m15<=42ULL*1024ULL);
+    assert(opal::sender_burst_budget_bytes(100000,15,false)==64ULL*1024ULL);
+    assert(opal::sender_burst_budget_bytes(1,1000,false)==12ULL*1024ULL);
 
     assert(opal::sender_pacing_rate_kbps(30000,false)==36000);
     assert(opal::sender_pacing_rate_kbps(30000,true)==120000);

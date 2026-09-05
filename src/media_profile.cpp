@@ -32,12 +32,12 @@ int normal_gop_frames(int fps){
 }
 
 std::uint64_t sender_burst_budget_bytes(int bitrate_kbps,int fps,bool keyframe){
-    if(keyframe)return 2ULL*1200ULL;
+    if(keyframe)return 8ULL*1200ULL;
     bitrate_kbps=std::clamp(bitrate_kbps,1000,100000);
     fps=std::clamp(fps,15,240);
     const std::uint64_t average=(static_cast<std::uint64_t>(bitrate_kbps)*1000ULL)/(8ULL*static_cast<std::uint64_t>(fps));
-    const std::uint64_t scaled=average*2ULL;
-    return std::clamp<std::uint64_t>(scaled,128ULL*1024ULL,512ULL*1024ULL);
+    const std::uint64_t scaled=average/4ULL;
+    return std::clamp<std::uint64_t>(scaled,12ULL*1024ULL,64ULL*1024ULL);
 }
 
 int sender_pacing_rate_kbps(int bitrate_kbps,bool keyframe){
