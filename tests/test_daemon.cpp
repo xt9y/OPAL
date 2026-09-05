@@ -38,21 +38,20 @@ int main() {
     assert(media_start.find("start_native")!=std::string::npos);
     assert(host.find("if(sender_start_thread.joinable())sender_start_thread.join();sender.stop()")!=std::string::npos);
 
-    // The host service must inherit the interactive graphical session before
-    // restart/start, otherwise SDL clipboard initialization can silently fail
-    // even while PipeWire portal capture still works.
     assert(system.find("systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XAUTHORITY")!=std::string::npos);
     assert(system.find("import_graphical_environment()")!=std::string::npos);
 
-    // Clipboard initialization must be retryable at session time instead of a
-    // permanent one-shot decision made when the daemon first launches.
+    // A headless Wayland daemon cannot rely on SDL's seat/selection state.
+    // Use wl-clipboard's event-driven watcher/owner on the host instead.
     const auto clipboard_class=host.find("class HostClipboardBridge");
     const auto peer_session=host.find("bool run_peer_session",clipboard_class);
     assert(clipboard_class!=std::string::npos&&peer_session!=std::string::npos&&peer_session>clipboard_class);
     const auto clipboard_source=host.substr(clipboard_class,peer_session-clipboard_class);
-    assert(clipboard_source.find("ensure_enabled()")!=std::string::npos);
-    assert(clipboard_source.find("SDL_InitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS)")!=std::string::npos);
-    assert(clipboard_source.find("next_init_")!=std::string::npos);
-    assert(host.find("clipboard_enabled=")==std::string::npos);
+    assert(clipboard_source.find("wl-paste --type text --watch")!=std::string::npos);
+    assert(clipboard_source.find("wl-copy --type text/plain;charset=utf-8")!=std::string::npos);
+    assert(clipboard_source.find("read_capture")!=std::string::npos);
+    assert(clipboard_source.find("command_exists(\"wl-paste\")")!=std::string::npos);
+    assert(clipboard_source.find("command_exists(\"wl-copy\")")!=std::string::npos);
+    assert(host.find("clipboard backend=wayland-native")!=std::string::npos);
     return 0;
 }

@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 
 namespace opal { namespace {
+
+bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 
 bool valid_clipboard_text(std::string_view text){
     if(text.find('\0')!=std::string_view::npos)return false;
@@ -66,22 +70,30 @@ std::string header(std::uint64_t id,std::size_t offset,std::size_t total){
 
 void ClipboardSender::prime_local(std::string_view text){
     last_local_.assign(text);primed_=true;transfer_text_.clear();transfer_active_=false;outbound_.clear();
+    if(debug_enabled())std::cerr<<"OPAL clipboard prime bytes="<<text.size()<<"\n";
 }
 
 bool ClipboardSender::observe_local(std::string_view text){
     if(primed_&&text==last_local_)return false;
     last_local_.assign(text);primed_=true;transfer_text_.clear();transfer_active_=false;outbound_.clear();
-    if(text.size()>kClipboardMaxBytes||!valid_clipboard_text(text))return false;
-    transfer_text_=last_local_;transfer_active_=true;queue_current();return true;
+    if(text.size()>kClipboardMaxBytes||!valid_clipboard_text(text)){
+        if(debug_enabled())std::cerr<<"OPAL clipboard local-change rejected bytes="<<text.size()<<"\n";
+        return false;
+    }
+    transfer_text_=last_local_;transfer_active_=true;queue_current();
+    if(debug_enabled())std::cerr<<"OPAL clipboard local-change bytes="<<text.size()<<" chunks="<<outbound_.size()<<"\n";
+    return true;
 }
 
 void ClipboardSender::note_remote_applied(std::string_view text){
     last_local_.assign(text);primed_=true;transfer_text_.clear();transfer_active_=false;outbound_.clear();
+    if(debug_enabled())std::cerr<<"OPAL clipboard remote-applied bytes="<<text.size()<<"\n";
 }
 
 void ClipboardSender::restart_transport(){
     if(!transfer_active_)return;
     outbound_.clear();queue_current();
+    if(debug_enabled())std::cerr<<"OPAL clipboard transport-restart chunks="<<outbound_.size()<<"\n";
 }
 
 void ClipboardSender::queue_current(){
@@ -97,7 +109,7 @@ void ClipboardSender::queue_current(){
 }
 
 const std::string* ClipboardSender::next_message()const{return outbound_.empty()?nullptr:&outbound_.front();}
-void ClipboardSender::pop_message(){if(outbound_.empty())return;outbound_.pop_front();if(outbound_.empty()){transfer_text_.clear();transfer_active_=false;}}
+void ClipboardSender::pop_message(){if(outbound_.empty())return;const auto bytes=outbound_.front().size();outbound_.pop_front();if(debug_enabled())std::cerr<<"OPAL clipboard tx-control bytes="<<bytes<<" remaining="<<outbound_.size()<<"\n";if(outbound_.empty()){transfer_text_.clear();transfer_active_=false;}}
 std::size_t ClipboardSender::queued_messages()const{return outbound_.size();}
 
 ClipboardReceiveStatus ClipboardReceiver::receive(std::string_view message,std::string& completed){
@@ -122,7 +134,7 @@ ClipboardReceiveStatus ClipboardReceiver::receive(std::string_view message,std::
     buffer_.append(chunk.data(),chunk.size());
     if(buffer_.size()<total_)return ClipboardReceiveStatus::Accepted;
     if(buffer_.size()!=total_||!valid_clipboard_text(buffer_)){reset();return ClipboardReceiveStatus::Rejected;}
-    completed=buffer_;reset();return ClipboardReceiveStatus::Complete;
+    completed=buffer_;if(debug_enabled())std::cerr<<"OPAL clipboard rx-complete bytes="<<completed.size()<<"\n";reset();return ClipboardReceiveStatus::Complete;
 }
 
 void ClipboardReceiver::reset(){transfer_id_=0;total_=0;buffer_.clear();}
