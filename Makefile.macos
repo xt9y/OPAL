@@ -100,14 +100,22 @@ macos-sign: $(PRODUCT) macos-input
 macos-all: macos-sign
 
 # Deliberately install-only: build/sign as the logged-in user first. This keeps
-# codesign out of sudo/root execution and preserves the exact binaries TCC saw.
+# codesign out of root execution and preserves the exact binaries TCC saw.
 macos-install:
+	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run macos-install as a normal user; the target invokes sudo only for installation.' >&2; exit 2; fi
 	@test -x "$(PRODUCT)" -a -x "$(BUILD)/opal-input" || { echo 'Build first as your user: gmake -j"$$(sysctl -n hw.ncpu)"' >&2; exit 1; }
 	codesign --verify --strict "$(PRODUCT)"
 	codesign --verify --strict "$(BUILD)/opal-input"
-	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)"
-	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
-	$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
+	@if [ -n "$(DESTDIR)" ]; then \
+		$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)"; \
+		$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"; \
+		$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
+	else \
+		command -v sudo >/dev/null 2>&1 || { echo 'sudo is required to install under $(PREFIX)' >&2; exit 1; }; \
+		sudo $(INSTALL) -d "$(BINDIR)" "$(LIBEXECDIR)"; \
+		sudo $(INSTALL) -m 0755 "$(PRODUCT)" "$(BINDIR)/opal"; \
+		sudo $(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(LIBEXECDIR)/opal-input"; \
+	fi
 
 # Permission-free suite. Linux capture/systemd/uinput fixture tests are omitted;
 # macOS-native capture is exercised separately by macos-runtime-test.
