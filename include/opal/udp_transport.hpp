@@ -61,22 +61,60 @@ UdpSocket open_udp_socket();
 void close_udp_socket(UdpSocket &);
 std::vector<UdpCandidate> local_udp_candidates(const UdpSocket &);
 bool resolve_udp_endpoint(const std::string &, std::uint16_t, UdpEndpoint &);
-bool resolve_udp_endpoint(const std::string &, std::uint16_t, UdpEndpoint &, std::uint32_t &native_size);
 bool udp_endpoint_numeric(const UdpEndpoint &, std::string &host, std::uint16_t &port);
 bool udp_endpoint_equal(const UdpEndpoint &, const UdpEndpoint &);
 UdpSendResult classify_udp_send_result(std::ptrdiff_t written, std::size_t expected, int error_number);
 UdpSendResult send_datagram_result(const UdpSocket &, const UdpEndpoint &, std::span<const std::uint8_t>);
-UdpSendResult send_datagram_result(UdpNativeHandle, const UdpEndpoint &, std::uint32_t,
-                                   std::span<const std::uint8_t>);
 UdpSendBatchResult send_datagrams_batch(const UdpSocket &, const UdpEndpoint &,
                                         std::span<const std::span<const std::uint8_t>>);
-UdpSendBatchResult send_datagrams_batch(UdpNativeHandle, const UdpEndpoint &, std::uint32_t,
-                                        std::span<const std::span<const std::uint8_t>>);
 bool send_datagram(const UdpSocket &, const UdpEndpoint &, std::span<const std::uint8_t>);
-bool send_datagram(UdpNativeHandle, const UdpEndpoint &, std::uint32_t, std::span<const std::uint8_t>);
 int recv_datagram(const UdpSocket &, std::span<std::uint8_t>, UdpEndpoint &, int timeout_ms);
-int recv_datagram(UdpNativeHandle, std::span<std::uint8_t>, UdpEndpoint &, std::uint32_t &, int timeout_ms);
 int recv_datagrams_batch(const UdpSocket &, std::span<UdpReceiveSlot>, int timeout_ms);
-int recv_datagrams_batch(UdpNativeHandle, std::span<UdpReceiveSlot>, int timeout_ms);
+
+// Transitional source-compatible wrappers. They use OPAL's opaque handle and
+// endpoint types only, so no POSIX socket type leaks into public headers.
+inline bool resolve_udp_endpoint(const std::string &host, std::uint16_t port,
+                                 UdpEndpoint &endpoint, std::uint32_t &native_size)
+{
+    const bool ok = resolve_udp_endpoint(host, port, endpoint);
+    native_size = ok ? endpoint.native_size : 0;
+    return ok;
+}
+
+inline UdpSendResult send_datagram_result(UdpNativeHandle handle, const UdpEndpoint &endpoint,
+                                          std::uint32_t, std::span<const std::uint8_t> data)
+{
+    return send_datagram_result(UdpSocket{handle, 0}, endpoint, data);
+}
+
+inline UdpSendBatchResult send_datagrams_batch(UdpNativeHandle handle, const UdpEndpoint &endpoint,
+                                               std::uint32_t,
+                                               std::span<const std::span<const std::uint8_t>> datagrams)
+{
+    return send_datagrams_batch(UdpSocket{handle, 0}, endpoint, datagrams);
+}
+
+inline bool send_datagram(UdpNativeHandle handle, const UdpEndpoint &endpoint, std::uint32_t,
+                          std::span<const std::uint8_t> data)
+{
+    return send_datagram(UdpSocket{handle, 0}, endpoint, data);
+}
+
+inline int recv_datagram(UdpNativeHandle handle, std::span<std::uint8_t> data,
+                         UdpEndpoint &source, std::uint32_t &source_length, int timeout_ms)
+{
+    const int result = recv_datagram(UdpSocket{handle, 0}, data, source, timeout_ms);
+    source_length = source.native_size;
+    return result;
+}
+
+inline int recv_datagrams_batch(UdpNativeHandle handle, std::span<UdpReceiveSlot> slots, int timeout_ms)
+{
+    const int result = recv_datagrams_batch(UdpSocket{handle, 0}, slots, timeout_ms);
+    if (result > 0) {
+        for (int i = 0; i < result; ++i) slots[static_cast<std::size_t>(i)].source_length = slots[static_cast<std::size_t>(i)].source.native_size;
+    }
+    return result;
+}
 
 }
