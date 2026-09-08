@@ -29,6 +29,10 @@ int main()
     assert(text.find("mach_timebase_info") != std::string::npos);
     assert(text.find("CaptureTimestampQuality::Exact") != std::string::npos);
     assert(text.find("anchor_pts_") == std::string::npos);
+    assert(text.find("dispatch_release(content_sem)") != std::string::npos);
+    assert(text.find("dispatch_release(start_sem)") != std::string::npos);
+    assert(text.find("dispatch_release(stop_sem)") != std::string::npos);
+    assert(text.find("dispatch_release(queue_)") != std::string::npos);
     assert(text.find("PermissionDenied") != std::string::npos);
     return 0;
 }
