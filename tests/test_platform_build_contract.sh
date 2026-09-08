@@ -36,9 +36,23 @@ grep -q 'brew --prefix openssl@3' Makefile.macos
 grep -q 'PKG_CONFIG_PATH' Makefile.macos
 grep -q -- '--libs-only-L openssl' Makefile.macos
 grep -q 'OPENSSL_LIBRARY_FLAGS' Makefile.macos
-grep -q 'GNU Make 3.82+' GNUmakefile
-grep -q '^  gmake macos-install$' README
-! grep -q 'sudo .*gmake macos-install' README
+
+# Apple's make is only the public front door. It forwards into Homebrew GNU
+# Make internally so the user always types the same make commands on both OSes.
+grep -q 'command -v gmake' GNUmakefile
+grep -q 'exec gmake' GNUmakefile
+grep -q 'install,macos-install' GNUmakefile
+grep -q 'all,macos-all' GNUmakefile
+grep -q 'test,macos-verify' GNUmakefile
+! grep -q 'run .gmake. instead' GNUmakefile
+
+grep -q '^  make -j' README
+grep -q '^  make install$' README
+grep -q '^  make macos-verify$' README
+grep -q '^  make macos-runtime-test$' README
+! grep -q '^[[:space:]]*gmake' README
+! grep -q 'sudo .*make macos-install' README
+
 grep -q 'Run macos-install as a normal user' Makefile.macos
 grep -q 'sudo $(INSTALL) -d' Makefile.macos
 grep -q 'NSScreenCaptureUsageDescription' platform/macos/Info.plist
