@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -51,8 +53,7 @@ using Clock = std::chrono::steady_clock;
 
 std::uint64_t monotonic_us()
 {
-    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-        Clock::now().time_since_epoch()).count());
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());
 }
 
 std::vector<std::uint8_t> annexb_parameter_sets(std::span<const std::uint8_t> data)
@@ -64,9 +65,7 @@ std::vector<std::uint8_t> annexb_parameter_sets(std::span<const std::uint8_t> da
         for (std::size_t i = from; i + 3 <= data.size(); ++i) {
             if (data[i] != 0 || data[i + 1] != 0) continue;
             if (data[i + 2] == 1) { begin = i; bytes = 3; return true; }
-            if (i + 4 <= data.size() && data[i + 2] == 0 && data[i + 3] == 1) {
-                begin = i; bytes = 4; return true;
-            }
+            if (i + 4 <= data.size() && data[i + 2] == 0 && data[i + 3] == 1) { begin = i; bytes = 4; return true; }
         }
         return false;
     };
@@ -80,8 +79,7 @@ std::vector<std::uint8_t> annexb_parameter_sets(std::span<const std::uint8_t> da
         const std::size_t end = have_next ? next : data.size();
         const auto type = data[nal] & 0x1f;
         if (type == 7 || type == 8) {
-            out.insert(out.end(), data.begin() + static_cast<std::ptrdiff_t>(begin),
-                       data.begin() + static_cast<std::ptrdiff_t>(end));
+            out.insert(out.end(), data.begin() + static_cast<std::ptrdiff_t>(begin), data.begin() + static_cast<std::ptrdiff_t>(end));
             sps |= type == 7;
             pps |= type == 8;
         }
@@ -111,6 +109,7 @@ class PersistentPipeWireHub;
 struct MonitorCapture {
     PersistentPipeWireHub* owner = nullptr;
     std::uint32_t node_id = PW_ID_ANY;
+    std::uint64_t pipewire_serial = 0;
     pw_stream* stream = nullptr;
     spa_hook listener{};
     spa_video_info_raw raw_info{};
@@ -165,15 +164,15 @@ public:
     bool ensure_started(const StreamOptions& stream, const std::string& token_file)
     {
         std::lock_guard<std::mutex> start_lock(start_mu_);
-        if (started_) return true;
-        if (failed_) return false;
+        if (started_.load(std::memory_order_acquire)) return true;
+        if (failed_.load(std::memory_order_acquire)) return false;
         token_file_ = token_file;
         preferred_width_ = stream.max_width > 0 ? std::clamp(stream.max_width, 16, 7680) : 7680;
         preferred_height_ = stream.max_height > 0 ? std::clamp(stream.max_height, 16, 4320) : 4320;
         fps_ = std::clamp(stream.fps, 15, 240);
-        if (!open_portal()) { failed_ = true; authorization_lost_ = true; cleanup_started_resources(); return false; }
-        if (!open_pipewire()) { failed_ = true; cleanup_started_resources(); return false; }
-        started_ = true;
+        if (!open_portal()) { cleanup_started_resources(); return false; }
+        if (!open_pipewire()) { cleanup_started_resources(); return false; }
+        started_.store(true, std::memory_order_release);
         return true;
     }
 
@@ -183,26 +182,20 @@ public:
         for (;;) {
             {
                 std::unique_lock<std::mutex> lock(mu_);
-                cv_.wait_until(lock, deadline, [&] { return failed_ || serial_ != seen_serial; });
-                if (failed_) return false;
+                cv_.wait_until(lock, deadline, [&] { return failed_.load(std::memory_order_acquire) || serial_ != seen_serial; });
+                if (failed_.load(std::memory_order_acquire)) return false;
                 if (serial_ == seen_serial) return false;
                 seen_serial = serial_;
             }
 
-            struct Snapshot {
-                MonitorCapture* monitor = nullptr;
-                std::shared_ptr<HubRawFrame> frame;
-            };
+            struct Snapshot { MonitorCapture* monitor = nullptr; std::shared_ptr<HubRawFrame> frame; };
             std::vector<Snapshot> snapshots;
             snapshots.reserve(monitors_.size());
             bool waiting_for_first_frame = false;
             for (const auto& monitor : monitors_) {
-                if (!monitor->active.load()) continue;
+                if (!monitor->active.load(std::memory_order_acquire)) continue;
                 std::shared_ptr<HubRawFrame> frame;
-                {
-                    std::lock_guard<std::mutex> lock(monitor->frame_mu);
-                    frame = monitor->latest;
-                }
+                { std::lock_guard<std::mutex> lock(monitor->frame_mu); frame = monitor->latest; }
                 if (!frame) { waiting_for_first_frame = true; break; }
                 snapshots.push_back({monitor.get(), std::move(frame)});
             }
@@ -210,22 +203,15 @@ public:
                 if (Clock::now() >= deadline) return false;
                 continue;
             }
-            if (snapshots.empty()) {
-                set_failure("all selected monitor streams unavailable", false);
-                return false;
-            }
+            if (snapshots.empty()) { set_failure("all selected monitor streams unavailable", false); return false; }
 
             std::vector<MonitorGeometry> geometry;
             geometry.reserve(snapshots.size());
             for (const auto& snapshot : snapshots) geometry.push_back(snapshot.frame->geometry);
-            const auto next_layout = build_composite_layout(
-                geometry,
-                max_width > 0 ? max_width : 7680,
-                max_height > 0 ? max_height : 4320);
+            const auto next_layout = build_composite_layout(geometry, max_width > 0 ? max_width : 7680, max_height > 0 ? max_height : 4320);
             if (!next_layout.valid()) return false;
 
-            const std::size_t bytes = static_cast<std::size_t>(next_layout.canvas_width) *
-                                      static_cast<std::size_t>(next_layout.canvas_height) * 4u;
+            const std::size_t bytes = static_cast<std::size_t>(next_layout.canvas_width) * static_cast<std::size_t>(next_layout.canvas_height) * 4u;
             if (composite_.size() != bytes) composite_.assign(bytes, 0);
             else std::fill(composite_.begin(), composite_.end(), 0);
 
@@ -235,27 +221,16 @@ public:
                 auto& snapshot = snapshots[i];
                 const auto& frame = *snapshot.frame;
                 const auto& tile = next_layout.monitors[i];
-                snapshot.monitor->compositor_sws = sws_getCachedContext(
-                    snapshot.monitor->compositor_sws,
-                    frame.width, frame.height, frame.format,
-                    tile.tile_width, tile.tile_height, AV_PIX_FMT_BGRA,
+                snapshot.monitor->compositor_sws = sws_getCachedContext(snapshot.monitor->compositor_sws,
+                    frame.width, frame.height, frame.format, tile.tile_width, tile.tile_height, AV_PIX_FMT_BGRA,
                     SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-                if (!snapshot.monitor->compositor_sws) {
-                    set_failure("multi-monitor compositor scaler unavailable", false);
-                    return false;
-                }
+                if (!snapshot.monitor->compositor_sws) { set_failure("multi-monitor compositor scaler unavailable", false); return false; }
                 const std::uint8_t* source[4] = {frame.pixels.data(), nullptr, nullptr, nullptr};
                 int source_stride[4] = {frame.stride, 0, 0, 0};
-                std::uint8_t* destination[4] = {
-                    composite_.data() + static_cast<std::size_t>(tile.tile_x) * 4u,
-                    nullptr, nullptr, nullptr
-                };
+                std::uint8_t* destination[4] = {composite_.data() + static_cast<std::size_t>(tile.tile_x) * 4u, nullptr, nullptr, nullptr};
                 int destination_stride[4] = {next_layout.canvas_width * 4, 0, 0, 0};
-                if (sws_scale(snapshot.monitor->compositor_sws,
-                              source, source_stride, 0, frame.height,
-                              destination, destination_stride) <= 0) {
-                    set_failure("multi-monitor compositor scaling failed", false);
-                    return false;
+                if (sws_scale(snapshot.monitor->compositor_sws, source, source_stride, 0, frame.height, destination, destination_stride) <= 0) {
+                    set_failure("multi-monitor compositor scaling failed", false); return false;
                 }
                 oldest_capture = std::min(oldest_capture, frame.capture_us);
                 any_dmabuf |= frame.source_dmabuf;
@@ -266,13 +241,9 @@ public:
             out.height = next_layout.canvas_height;
             out.stride = next_layout.canvas_width * 4;
             out.format = AV_PIX_FMT_BGRA;
-            out.capture_us = oldest_capture == std::numeric_limits<std::uint64_t>::max()
-                                 ? monotonic_us() : oldest_capture;
+            out.capture_us = oldest_capture == std::numeric_limits<std::uint64_t>::max() ? monotonic_us() : oldest_capture;
             out.source_dmabuf = any_dmabuf;
-            {
-                std::lock_guard<std::mutex> lock(mu_);
-                layout_ = next_layout;
-            }
+            { std::lock_guard<std::mutex> lock(mu_); layout_ = next_layout; }
             return true;
         }
     }
@@ -283,11 +254,7 @@ public:
         return layout_;
     }
 
-    bool authorization_lost() const
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        return authorization_lost_;
-    }
+    bool authorization_lost() const { return authorization_lost_.load(std::memory_order_acquire); }
 
     std::string last_error() const
     {
@@ -297,7 +264,7 @@ public:
 
     void capture_latest_buffer(MonitorCapture& monitor)
     {
-        if (!monitor.stream || !monitor.active.load()) return;
+        if (!monitor.stream || !monitor.active.load(std::memory_order_acquire)) return;
         pw_buffer* selected = nullptr;
         for (;;) {
             pw_buffer* next = pw_stream_dequeue_buffer(monitor.stream);
@@ -308,8 +275,7 @@ public:
         if (!selected) return;
         auto requeue = [&] { pw_stream_queue_buffer(monitor.stream, selected); };
         spa_buffer* buffer = selected->buffer;
-        if (!buffer || buffer->n_datas == 0 || monitor.raw_info.size.width == 0 ||
-            monitor.raw_info.size.height == 0) { requeue(); return; }
+        if (!buffer || buffer->n_datas == 0 || monitor.raw_info.size.width == 0 || monitor.raw_info.size.height == 0) { requeue(); return; }
         spa_data& data = buffer->datas[0];
         if (!data.chunk || data.chunk->stride <= 0) { requeue(); return; }
         const AVPixelFormat format = av_format(monitor.raw_info.format);
@@ -319,9 +285,7 @@ public:
         const int source_stride = data.chunk->stride;
         const std::size_t row_bytes = static_cast<std::size_t>(width) * 4u;
         if (source_stride < static_cast<int>(row_bytes)) { requeue(); return; }
-        const std::uint64_t end = static_cast<std::uint64_t>(data.chunk->offset) +
-                                  static_cast<std::uint64_t>(height - 1) * static_cast<std::uint64_t>(source_stride) +
-                                  row_bytes;
+        const std::uint64_t end = static_cast<std::uint64_t>(data.chunk->offset) + static_cast<std::uint64_t>(height - 1) * static_cast<std::uint64_t>(source_stride) + row_bytes;
         if (end > data.maxsize) { requeue(); return; }
 
         void* mapping = nullptr;
@@ -335,10 +299,7 @@ public:
         if (!base) { requeue(); return; }
 
         std::shared_ptr<HubRawFrame> frame;
-        {
-            std::lock_guard<std::mutex> lock(monitor.frame_mu);
-            if (monitor.latest && monitor.latest.use_count() == 1) frame = std::move(monitor.latest);
-        }
+        { std::lock_guard<std::mutex> lock(monitor.frame_mu); if (monitor.latest && monitor.latest.use_count() == 1) frame = std::move(monitor.latest); }
         if (!frame) frame = std::make_shared<HubRawFrame>();
         frame->pixels.resize(row_bytes * static_cast<std::size_t>(height));
         frame->width = width;
@@ -350,40 +311,29 @@ public:
         frame->geometry = monitor.portal_geometry;
         frame->geometry.source_width = width;
         frame->geometry.source_height = height;
-        if (!frame->geometry.logical_geometry_valid) {
-            frame->geometry.logical_width = width;
-            frame->geometry.logical_height = height;
-        }
+        if (!frame->geometry.logical_geometry_valid) { frame->geometry.logical_width = width; frame->geometry.logical_height = height; }
         const auto* source = base + data.chunk->offset;
-        for (int y = 0; y < height; ++y) {
-            std::copy_n(source + static_cast<std::ptrdiff_t>(y) * source_stride, row_bytes,
-                        frame->pixels.data() + static_cast<std::size_t>(y) * row_bytes);
-        }
+        for (int y = 0; y < height; ++y)
+            std::copy_n(source + static_cast<std::ptrdiff_t>(y) * source_stride, row_bytes, frame->pixels.data() + static_cast<std::size_t>(y) * row_bytes);
         if (mapping) munmap(mapping, data.maxsize);
         requeue();
-        {
-            std::lock_guard<std::mutex> lock(monitor.frame_mu);
-            monitor.latest = std::move(frame);
-        }
-        {
-            std::lock_guard<std::mutex> lock(mu_);
-            ++serial_;
-        }
+        { std::lock_guard<std::mutex> lock(monitor.frame_mu); monitor.latest = std::move(frame); }
+        { std::lock_guard<std::mutex> lock(mu_); ++serial_; }
         cv_.notify_all();
     }
 
     void monitor_failed(MonitorCapture& monitor, const char* message)
     {
-        if (!started_ || !monitor.active.exchange(false)) return;
+        if (!started_.load(std::memory_order_acquire) || !monitor.active.exchange(false, std::memory_order_acq_rel)) return;
         bool any_active = false;
-        for (const auto& candidate : monitors_) any_active |= candidate->active.load();
+        for (const auto& candidate : monitors_) any_active |= candidate->active.load(std::memory_order_acquire);
         {
             std::lock_guard<std::mutex> lock(mu_);
             if (error_.empty() && message && *message) error_ = message;
             ++serial_;
             if (!any_active) {
-                failed_ = true;
-                authorization_lost_ = true;
+                failed_.store(true, std::memory_order_release);
+                authorization_lost_.store(true, std::memory_order_release);
                 if (error_.empty()) error_ = "all selected monitor streams disconnected; rerun OPAL host screen authorization";
             }
         }
@@ -401,45 +351,31 @@ private:
         PortalWait wait;
         wait.loop = main_loop;
         const auto restore = read_token();
-        xdp_portal_create_screencast_session(
-            portal_, XDP_OUTPUT_MONITOR, XDP_SCREENCAST_FLAG_MULTIPLE,
-            XDP_CURSOR_MODE_EMBEDDED, XDP_PERSIST_MODE_PERSISTENT,
-            restore.empty() ? nullptr : restore.c_str(), cancel, &portal_created_cb, &wait);
+        xdp_portal_create_screencast_session(portal_, XDP_OUTPUT_MONITOR, XDP_SCREENCAST_FLAG_MULTIPLE,
+            XDP_CURSOR_MODE_EMBEDDED, XDP_PERSIST_MODE_PERSISTENT, restore.empty() ? nullptr : restore.c_str(),
+            cancel, &portal_created_cb, &wait);
         g_main_loop_run(main_loop);
         if (!wait.session) {
             if (wait.error) { set_failure(wait.error->message, true); g_error_free(wait.error); }
             else set_failure("screen authorization was denied", true);
-            g_object_unref(cancel);
-            g_main_loop_unref(main_loop);
-            return false;
+            g_object_unref(cancel); g_main_loop_unref(main_loop); return false;
         }
         session_ = wait.session;
-        wait = {};
-        wait.loop = main_loop;
+        wait = {}; wait.loop = main_loop;
         xdp_session_start(session_, nullptr, cancel, &portal_started_cb, &wait);
         g_main_loop_run(main_loop);
         if (!wait.ok) {
             if (wait.error) { set_failure(wait.error->message, true); g_error_free(wait.error); }
             else set_failure("stored screen authorization could not be restored", true);
-            g_object_unref(cancel);
-            g_main_loop_unref(main_loop);
-            return false;
+            g_object_unref(cancel); g_main_loop_unref(main_loop); return false;
         }
 
         GVariant* streams = xdp_session_get_streams(session_);
-        if (!streams) {
-            set_failure("portal returned no PipeWire streams", true);
-            g_object_unref(cancel);
-            g_main_loop_unref(main_loop);
-            return false;
-        }
+        if (!streams) { set_failure("portal returned no PipeWire streams", true); g_object_unref(cancel); g_main_loop_unref(main_loop); return false; }
         const gsize stream_count = g_variant_n_children(streams);
         if (stream_count == 0) {
-            g_variant_unref(streams);
-            set_failure("portal returned no PipeWire streams", true);
-            g_object_unref(cancel);
-            g_main_loop_unref(main_loop);
-            return false;
+            g_variant_unref(streams); set_failure("portal returned no PipeWire streams", true);
+            g_object_unref(cancel); g_main_loop_unref(main_loop); return false;
         }
 
         monitors_.clear();
@@ -453,8 +389,11 @@ private:
             monitor->node_id = static_cast<std::uint32_t>(node_id);
             if (props) {
                 gint32 x = 0, y = 0, width = 0, height = 0;
+                guint64 pipewire_serial = 0;
                 const bool have_position = g_variant_lookup(props, "position", "(ii)", &x, &y);
                 const bool have_size = g_variant_lookup(props, "size", "(ii)", &width, &height);
+                if (g_variant_lookup(props, "pipewire-serial", "t", &pipewire_serial))
+                    monitor->pipewire_serial = static_cast<std::uint64_t>(pipewire_serial);
                 if (have_position && have_size && width > 0 && height > 0) {
                     monitor->portal_geometry.logical_x = static_cast<int>(x);
                     monitor->portal_geometry.logical_y = static_cast<int>(y);
@@ -469,21 +408,12 @@ private:
         g_variant_unref(streams);
 
         remote_fd_ = xdp_session_open_pipewire_remote(session_);
-        if (remote_fd_ < 0) {
-            set_failure("portal PipeWire remote unavailable", true);
-            g_object_unref(cancel);
-            g_main_loop_unref(main_loop);
-            return false;
-        }
+        if (remote_fd_ < 0) { set_failure("portal PipeWire remote unavailable", true); g_object_unref(cancel); g_main_loop_unref(main_loop); return false; }
         if (!save_token_atomic(session_)) {
             set_failure("could not persist rotated screen authorization token", true);
-            g_object_unref(cancel);
-            g_main_loop_unref(main_loop);
-            return false;
+            g_object_unref(cancel); g_main_loop_unref(main_loop); return false;
         }
-        g_object_unref(cancel);
-        g_main_loop_unref(main_loop);
-        return true;
+        g_object_unref(cancel); g_main_loop_unref(main_loop); return true;
     }
 
     bool open_pipewire()
@@ -494,21 +424,21 @@ private:
         context_ = loop_ ? pw_context_new(pw_thread_loop_get_loop(loop_), nullptr, 0) : nullptr;
         core_ = context_ ? pw_context_connect_fd(context_, remote_fd_, nullptr, 0) : nullptr;
         if (core_) remote_fd_ = -1;
-        if (!loop_ || !context_ || !core_) {
-            set_failure("PipeWire remote connection failed", false);
-            return false;
-        }
+        if (!loop_ || !context_ || !core_) { set_failure("PipeWire remote connection failed", false); return false; }
 
         static const pw_stream_events events = make_stream_events();
         for (std::size_t index = 0; index < monitors_.size(); ++index) {
             auto& monitor = *monitors_[index];
             const std::string name = "OPAL monitor " + std::to_string(index + 1);
-            monitor.stream = pw_stream_new(core_, name.c_str(), pw_properties_new(
-                PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture", PW_KEY_MEDIA_ROLE, "Screen", nullptr));
-            if (!monitor.stream) {
-                set_failure("PipeWire monitor stream allocation failed", false);
-                return false;
+            pw_properties* properties = pw_properties_new(PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture",
+                                                          PW_KEY_MEDIA_ROLE, "Screen", nullptr);
+            if (!properties) { set_failure("PipeWire monitor properties allocation failed", false); return false; }
+            if (monitor.pipewire_serial != 0) {
+                const std::string serial = std::to_string(monitor.pipewire_serial);
+                pw_properties_set(properties, PW_KEY_TARGET_OBJECT, serial.c_str());
             }
+            monitor.stream = pw_stream_new(core_, name.c_str(), properties);
+            if (!monitor.stream) { set_failure("PipeWire monitor stream allocation failed", false); return false; }
             pw_stream_add_listener(monitor.stream, &monitor.listener, &events, &monitor);
 
             std::array<std::uint8_t, 1024> pod_buffer{};
@@ -517,25 +447,19 @@ private:
             spa_rectangle default_size{static_cast<std::uint32_t>(preferred_width_), static_cast<std::uint32_t>(preferred_height_)};
             spa_rectangle min_size{16, 16}, max_size{7680, 4320};
             spa_fraction default_rate{static_cast<std::uint32_t>(fps_), 1}, min_rate{1, 1}, max_rate{240, 1};
-            params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
-                &builder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
-                SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
-                SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-                SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRA,
-                    SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBx),
-                SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&default_size, &min_size, &max_size),
-                SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(&default_rate, &min_rate, &max_rate)));
-            const int rc = pw_stream_connect(monitor.stream, PW_DIRECTION_INPUT, monitor.node_id,
+            params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+                SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRx,
+                    SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBx), SPA_FORMAT_VIDEO_size,
+                SPA_POD_CHOICE_RANGE_Rectangle(&default_size, &min_size, &max_size), SPA_FORMAT_VIDEO_framerate,
+                SPA_POD_CHOICE_RANGE_Fraction(&default_rate, &min_rate, &max_rate)));
+            const std::uint32_t target = monitor.pipewire_serial != 0 ? PW_ID_ANY : monitor.node_id;
+            const int rc = pw_stream_connect(monitor.stream, PW_DIRECTION_INPUT, target,
                 static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
-            if (rc < 0) {
-                set_failure("PipeWire monitor stream connect failed", false);
-                return false;
-            }
+            if (rc < 0) { set_failure("PipeWire monitor stream connect failed", false); return false; }
         }
-        if (pw_thread_loop_start(loop_) < 0) {
-            set_failure("PipeWire capture loop failed to start", false);
-            return false;
-        }
+        if (pw_thread_loop_start(loop_) < 0) { set_failure("PipeWire capture loop failed to start", false); return false; }
+        loop_started_ = true;
         return true;
     }
 
@@ -560,18 +484,12 @@ private:
         std::array<std::uint8_t, 768> storage{};
         spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
         const spa_pod* params[2];
-        params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
-            &builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
-            SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(4, 2, 8),
-            SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
-            SPA_PARAM_BUFFERS_size, SPA_POD_Int(size),
-            SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride),
-            SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(
-                (1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd) | (1 << SPA_DATA_MemPtr))));
-        params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
-            &builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
-            SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
-            SPA_PARAM_META_size, SPA_POD_Int(static_cast<int>(sizeof(spa_meta_header)))));
+        params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+            SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(4, 2, 8), SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
+            SPA_PARAM_BUFFERS_size, SPA_POD_Int(size), SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride), SPA_PARAM_BUFFERS_dataType,
+            SPA_POD_CHOICE_FLAGS_Int((1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd) | (1 << SPA_DATA_MemPtr))));
+        params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+            SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header), SPA_PARAM_META_size, SPA_POD_Int(static_cast<int>(sizeof(spa_meta_header)))));
         (void)pw_stream_update_params(monitor->stream, params, 2);
     }
 
@@ -597,10 +515,8 @@ private:
         if (!monitor.stream || !buffer) return local_now;
         std::uint64_t source_time = buffer->time;
         if (buffer->buffer) {
-            const auto* header = static_cast<const spa_meta_header*>(spa_buffer_find_meta_data(
-                buffer->buffer, SPA_META_Header, sizeof(spa_meta_header)));
-            if (header && header->pts != SPA_TIME_INVALID && header->pts >= 0)
-                source_time = static_cast<std::uint64_t>(header->pts);
+            const auto* header = static_cast<const spa_meta_header*>(spa_buffer_find_meta_data(buffer->buffer, SPA_META_Header, sizeof(spa_meta_header)));
+            if (header && header->pts != SPA_TIME_INVALID && header->pts >= 0) source_time = static_cast<std::uint64_t>(header->pts);
         }
         if (!source_time) return local_now;
         const auto pipewire_now = pw_stream_get_nsec(monitor.stream);
@@ -651,22 +567,22 @@ private:
 
     void set_failure(std::string text, bool authorization)
     {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (error_.empty()) error_ = std::move(text);
-        failed_ = true;
-        authorization_lost_ |= authorization;
-        ++serial_;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (error_.empty()) error_ = std::move(text);
+            ++serial_;
+        }
+        failed_.store(true, std::memory_order_release);
+        if (authorization) authorization_lost_.store(true, std::memory_order_release);
         cv_.notify_all();
     }
 
     void cleanup_started_resources()
     {
-        if (loop_) pw_thread_loop_stop(loop_);
+        started_.store(false, std::memory_order_release);
+        if (loop_ && loop_started_) { pw_thread_loop_stop(loop_); loop_started_ = false; }
         for (auto& monitor : monitors_) {
-            if (monitor->stream) {
-                pw_stream_destroy(monitor->stream);
-                monitor->stream = nullptr;
-            }
+            if (monitor->stream) { pw_stream_destroy(monitor->stream); monitor->stream = nullptr; }
         }
         monitors_.clear();
         if (core_) { pw_core_disconnect(core_); core_ = nullptr; }
@@ -682,16 +598,16 @@ private:
     {
         std::lock_guard<std::mutex> start_lock(start_mu_);
         cleanup_started_resources();
-        started_ = false;
     }
 
     mutable std::mutex mu_;
     std::condition_variable cv_;
     std::mutex start_mu_;
-    bool started_ = false;
-    bool failed_ = false;
-    bool authorization_lost_ = false;
+    std::atomic<bool> started_{false};
+    std::atomic<bool> failed_{false};
+    std::atomic<bool> authorization_lost_{false};
     bool pipewire_initialized_ = false;
+    bool loop_started_ = false;
     std::string error_;
     std::string token_file_;
     XdpPortal* portal_ = nullptr;
@@ -793,8 +709,7 @@ struct NativePipeWireVideoCapture::Impl {
         enc.sw_frame->width = raw.width;
         enc.sw_frame->height = raw.height;
         if (av_frame_get_buffer(enc.sw_frame, 32) < 0) return false;
-        enc.sws = sws_getContext(raw.width, raw.height, raw.format,
-                                 raw.width, raw.height, enc.convert_format,
+        enc.sws = sws_getContext(raw.width, raw.height, raw.format, raw.width, raw.height, enc.convert_format,
                                  SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
         return enc.sws != nullptr;
     }
@@ -803,9 +718,7 @@ struct NativePipeWireVideoCapture::Impl {
     {
         const AVCodec* codec = avcodec_find_encoder_by_name("h264_vaapi");
         if (!codec) return false;
-        if (av_hwdevice_ctx_create(&enc.hw_device, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0) < 0 || !enc.hw_device) {
-            enc.reset(); return false;
-        }
+        if (av_hwdevice_ctx_create(&enc.hw_device, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0) < 0 || !enc.hw_device) { enc.reset(); return false; }
         enc.ctx = avcodec_alloc_context3(codec);
         if (!enc.ctx) { enc.reset(); return false; }
         enc.convert_format = AV_PIX_FMT_NV12;
@@ -869,17 +782,13 @@ struct NativePipeWireVideoCapture::Impl {
             AVDictionary* options = nullptr;
             const std::string encoder_name = name;
             if (encoder_name == "h264_nvenc") {
-                av_dict_set(&options, "preset", "p1", 0);
-                av_dict_set(&options, "tune", "ull", 0);
-                av_dict_set(&options, "zerolatency", "1", 0);
-                av_dict_set(&options, "delay", "0", 0);
+                av_dict_set(&options, "preset", "p1", 0); av_dict_set(&options, "tune", "ull", 0);
+                av_dict_set(&options, "zerolatency", "1", 0); av_dict_set(&options, "delay", "0", 0);
             } else if (encoder_name == "h264_qsv") {
-                av_dict_set(&options, "async_depth", "1", 0);
-                av_dict_set(&options, "preset", "veryfast", 0);
+                av_dict_set(&options, "async_depth", "1", 0); av_dict_set(&options, "preset", "veryfast", 0);
             } else if (encoder_name == "libx264") {
                 enc.ctx->slices = low_latency_h264_slices(raw.width, raw.height);
-                av_dict_set(&options, "preset", "ultrafast", 0);
-                av_dict_set(&options, "tune", "zerolatency", 0);
+                av_dict_set(&options, "preset", "ultrafast", 0); av_dict_set(&options, "tune", "zerolatency", 0);
             }
             const int rc = avcodec_open2(enc.ctx, codec, &options);
             av_dict_free(&options);
@@ -896,8 +805,7 @@ struct NativePipeWireVideoCapture::Impl {
     {
         if (!config.extradata.empty()) return;
         std::vector<std::uint8_t> extra;
-        if (ctx && ctx->extradata && ctx->extradata_size > 0)
-            extra.assign(ctx->extradata, ctx->extradata + ctx->extradata_size);
+        if (ctx && ctx->extradata && ctx->extradata_size > 0) extra.assign(ctx->extradata, ctx->extradata + ctx->extradata_size);
         else if (keyframe) extra = annexb_parameter_sets(packet);
         if (extra.empty()) return;
         config.kind = MediaKind::VideoH264;
@@ -908,13 +816,9 @@ struct NativePipeWireVideoCapture::Impl {
     bool configure_encoder(EncoderState& enc, const HubRawFrame& raw)
     {
         enc.reset();
-        if (!open_vaapi(enc, raw) && !open_cpu_input_encoder(enc, raw)) {
-            set_error("no usable in-process low-latency H.264 encoder");
-            return false;
-        }
+        if (!open_vaapi(enc, raw) && !open_cpu_input_encoder(enc, raw)) { set_error("no usable in-process low-latency H.264 encoder"); return false; }
         std::lock_guard<std::mutex> lock(mu);
-        backend = std::string("pipewire-persistent+multimonitor+") + enc.name +
-                  (enc.hardware ? "+hw" : "+sw") + (saw_dmabuf.load() ? "+dmabuf-source" : "");
+        backend = std::string("pipewire-persistent+multimonitor+") + enc.name + (enc.hardware ? "+hw" : "+sw") + (saw_dmabuf.load() ? "+dmabuf-source" : "");
         publish_config(enc.ctx, {}, false);
         return true;
     }
@@ -924,14 +828,12 @@ struct NativePipeWireVideoCapture::Impl {
         if (av_frame_make_writable(enc.sw_frame) < 0) return false;
         const std::uint8_t* source[4] = {raw.pixels.data(), nullptr, nullptr, nullptr};
         int source_stride[4] = {raw.stride, 0, 0, 0};
-        if (sws_scale(enc.sws, source, source_stride, 0, raw.height,
-                      enc.sw_frame->data, enc.sw_frame->linesize) <= 0) return false;
+        if (sws_scale(enc.sws, source, source_stride, 0, raw.height, enc.sw_frame->data, enc.sw_frame->linesize) <= 0) return false;
         enc.sw_frame->pts = static_cast<std::int64_t>(frame_index);
         AVFrame* submit = enc.sw_frame;
         if (enc.ctx->pix_fmt == AV_PIX_FMT_VAAPI) {
             av_frame_unref(enc.hw_frame);
-            if (av_hwframe_get_buffer(enc.ctx->hw_frames_ctx, enc.hw_frame, 0) < 0 ||
-                av_hwframe_transfer_data(enc.hw_frame, enc.sw_frame, 0) < 0) return false;
+            if (av_hwframe_get_buffer(enc.ctx->hw_frames_ctx, enc.hw_frame, 0) < 0 || av_hwframe_transfer_data(enc.hw_frame, enc.sw_frame, 0) < 0) return false;
             enc.hw_frame->pts = enc.sw_frame->pts;
             submit = enc.hw_frame;
         }
@@ -941,10 +843,7 @@ struct NativePipeWireVideoCapture::Impl {
             if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) break;
             if (rc < 0) return false;
             const bool keyframe = (enc.packet->flags & AV_PKT_FLAG_KEY) != 0;
-            {
-                std::lock_guard<std::mutex> lock(mu);
-                publish_config(enc.ctx, std::span<const std::uint8_t>(enc.packet->data, enc.packet->size), keyframe);
-            }
+            { std::lock_guard<std::mutex> lock(mu); publish_config(enc.ctx, std::span<const std::uint8_t>(enc.packet->data, enc.packet->size), keyframe); }
             EncodedMediaUnit unit;
             unit.kind = MediaKind::VideoH264;
             unit.data.assign(enc.packet->data, enc.packet->data + enc.packet->size);
@@ -952,11 +851,7 @@ struct NativePipeWireVideoCapture::Impl {
             unit.capture_time_us = raw.capture_us;
             unit.keyframe = keyframe;
             av_packet_unref(enc.packet);
-            {
-                std::lock_guard<std::mutex> lock(mu);
-                if (encoded.size() >= 2) encoded.pop_front();
-                encoded.push_back(std::move(unit));
-            }
+            { std::lock_guard<std::mutex> lock(mu); if (encoded.size() >= 2) encoded.pop_front(); encoded.push_back(std::move(unit)); }
             encoded_cv.notify_one();
         }
         return true;
@@ -974,28 +869,17 @@ struct NativePipeWireVideoCapture::Impl {
                 if (pipewire_hub().authorization_lost()) {
                     auto reason = pipewire_hub().last_error();
                     if (reason.empty()) reason = "Linux screen authorization lost; rerun OPAL host screen authorization";
-                    set_error(reason);
-                    break;
+                    set_error(reason); break;
                 }
                 continue;
             }
             if (raw.source_dmabuf) saw_dmabuf.store(true);
             if (!enc.ctx || raw.width != width || raw.height != height || raw.format != input) {
-                {
-                    std::lock_guard<std::mutex> lock(mu);
-                    config = {};
-                    ++config_rev;
-                }
+                { std::lock_guard<std::mutex> lock(mu); config = {}; ++config_rev; }
                 if (!configure_encoder(enc, raw)) break;
-                width = raw.width;
-                height = raw.height;
-                input = raw.format;
-                frame_index = 0;
+                width = raw.width; height = raw.height; input = raw.format; frame_index = 0;
             }
-            if (!encode_one(enc, raw, frame_index++)) {
-                set_error("native H.264 encode failed");
-                break;
-            }
+            if (!encode_one(enc, raw, frame_index++)) { set_error("native H.264 encode failed"); break; }
         }
     }
 
@@ -1005,29 +889,22 @@ struct NativePipeWireVideoCapture::Impl {
         if (!pipewire_hub().ensure_started(requested, token_file)) {
             auto reason = pipewire_hub().last_error();
             if (reason.empty()) reason = "persistent PipeWire capture unavailable";
-            set_error(reason);
-            return;
+            set_error(reason); return;
         }
-        {
-            std::lock_guard<std::mutex> lock(mu);
-            backend = "pipewire-persistent+multimonitor+starting";
-        }
+        { std::lock_guard<std::mutex> lock(mu); backend = "pipewire-persistent+multimonitor+starting"; }
         encoder_loop();
     }
 #endif
 };
 
-bool native_pipewire_prepare(const StreamOptions& stream,
-                             const std::string& restore_token_file,
-                             std::string* error)
+bool native_pipewire_prepare(const StreamOptions& stream, const std::string& restore_token_file, std::string* error)
 {
 #if OPAL_HAVE_NATIVE_PIPEWIRE
     const bool ok = pipewire_hub().ensure_started(stream, restore_token_file);
     if (!ok && error) *error = pipewire_hub().last_error();
     return ok;
 #else
-    (void)stream;
-    (void)restore_token_file;
+    (void)stream; (void)restore_token_file;
     if (error) *error = "native PipeWire capture not compiled";
     return false;
 #endif
@@ -1080,9 +957,7 @@ bool NativePipeWireVideoCapture::start(const StreamOptions& stream, int bitrate_
     impl_->setup_thread = std::thread([this] { impl_->setup_loop(); });
     return true;
 #else
-    (void)stream;
-    (void)bitrate_kbps;
-    (void)restore_token_file;
+    (void)stream; (void)bitrate_kbps; (void)restore_token_file;
     impl_->error = "native PipeWire capture not compiled";
     impl_->terminal.store(true);
     return false;
@@ -1103,30 +978,10 @@ bool NativePipeWireVideoCapture::next(EncodedMediaUnit& unit, int timeout_ms)
 }
 
 bool NativePipeWireVideoCapture::ended() const { return !impl_ || impl_->terminal.load(); }
-std::uint64_t NativePipeWireVideoCapture::config_revision() const
-{
-    if (!impl_) return 0;
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    return impl_->config_rev;
-}
-MediaConfig NativePipeWireVideoCapture::config() const
-{
-    if (!impl_) return {};
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    return impl_->config;
-}
-std::string NativePipeWireVideoCapture::backend_name() const
-{
-    if (!impl_) return "unavailable";
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    return impl_->backend;
-}
-std::string NativePipeWireVideoCapture::last_error() const
-{
-    if (!impl_) return "native capture unavailable";
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    return impl_->error;
-}
+std::uint64_t NativePipeWireVideoCapture::config_revision() const { if (!impl_) return 0; std::lock_guard<std::mutex> lock(impl_->mu); return impl_->config_rev; }
+MediaConfig NativePipeWireVideoCapture::config() const { if (!impl_) return {}; std::lock_guard<std::mutex> lock(impl_->mu); return impl_->config; }
+std::string NativePipeWireVideoCapture::backend_name() const { if (!impl_) return "unavailable"; std::lock_guard<std::mutex> lock(impl_->mu); return impl_->backend; }
+std::string NativePipeWireVideoCapture::last_error() const { if (!impl_) return "native capture unavailable"; std::lock_guard<std::mutex> lock(impl_->mu); return impl_->error; }
 
 void NativePipeWireVideoCapture::stop()
 {
