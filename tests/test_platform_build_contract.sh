@@ -4,11 +4,12 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
+make_bin=${MAKE_BIN:-make}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-make -Bn OPAL_OS=linux build/opal >"$tmp/linux"
-make -Bn OPAL_OS=macos macos-all >"$tmp/macos"
+"$make_bin" -Bn OPAL_OS=linux build/opal >"$tmp/linux"
+"$make_bin" -Bn OPAL_OS=macos macos-all >"$tmp/macos"
 
 grep -q 'src/pipewire_capture.cpp' "$tmp/linux"
 grep -q 'src/input_helper.cpp' "$tmp/linux" || true
