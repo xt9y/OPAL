@@ -35,7 +35,10 @@ grep -q 'PKG_CONFIG_PATH' Makefile.macos
 grep -q -- '--libs-only-L openssl' Makefile.macos
 grep -q 'OPENSSL_LIBRARY_FLAGS' Makefile.macos
 grep -q 'GNU Make 3.82+' GNUmakefile
-grep -q 'gmake -j' README
+grep -q '^  gmake macos-install$' README
+! grep -q 'sudo .*gmake macos-install' README
+grep -q 'Run macos-install as a normal user' Makefile.macos
+grep -q 'sudo $(INSTALL) -d' Makefile.macos
 grep -q 'NSScreenCaptureUsageDescription' platform/macos/Info.plist
 grep -q 'NSAudioCaptureUsageDescription' platform/macos/Info.plist
 grep -q '<string>de.xt9y.opal</string>' platform/macos/Info.plist
