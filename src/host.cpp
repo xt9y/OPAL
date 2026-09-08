@@ -7,6 +7,7 @@
 #include <opal/media.hpp>
 #include <opal/media_profile.hpp>
 #include <opal/peer_session.hpp>
+#include <opal/pipewire_capture.hpp>
 #include <opal/rendezvous_client.hpp>
 #include <opal/tailnet.hpp>
 #include <opal/video_feedback.hpp>
@@ -50,7 +51,8 @@ void append_test_log(const char*n,const std::string&line){const char*p=std::gete
 std::string input_helper_command(){const char*e=std::getenv("OPAL_INPUT_HELPER");return e&&*e?e:(access("/usr/local/libexec/opal/opal-input",X_OK)==0?"/usr/local/libexec/opal/opal-input":"./build/opal-input");}
 void input_close_locked(){stop_sink(input_sink);}bool input_open_locked(){if(input_sink.pid>0&&input_sink.fd>=0)return true;input_sink=start_sink(input_helper_command());return input_sink.pid>0&&input_sink.fd>=0;}
 bool input_write_locked(const std::string&s){if(!input_open_locked())return false;const std::string line=s+"\n";if(!write_sink_timeout(input_sink,line.data(),line.size(),50)){input_close_locked();return false;}return true;}
-bool input_send(const std::string&s){std::lock_guard<std::mutex>l(input_mu);if(input_write_locked(s))return true;return input_write_locked(s);}
+std::string remap_pointer_line(const std::string&line){if(line.rfind("POINTER ",0)!=0)return line;std::istringstream in(line);std::string word,extra;int x=0,y=0;if(!(in>>word>>x>>y)||in>>extra||word!="POINTER")return line;const auto layout=native_pipewire_layout();if(!layout.valid())return line;const auto mapped=map_composite_pointer(layout,x,y);return "POINTER "+std::to_string(mapped.first)+" "+std::to_string(mapped.second);}
+bool input_send(const std::string&s){const auto mapped=remap_pointer_line(s);std::lock_guard<std::mutex>l(input_mu);if(input_write_locked(mapped))return true;return input_write_locked(mapped);}
 void track_input(const std::string&line,HeldInputState&held){std::istringstream ss(line);std::string t;ss>>t;if(t=="KEY"){int c=0,d=0;if(ss>>c>>d){if(d)held.press_key(c);else held.release_key(c);}}else if(t=="BUTTON"){int b=0,d=0;if(ss>>b>>d){if(d)held.press_button(b);else held.release_button(b);}}}
 bool parse_media_ready(const std::string&line,std::uint32_t&generation,StreamOptions&stream,bool&debug){std::istringstream in(line);std::string word,extra;unsigned long long gen=0;int width=0,height=0,fps=0,dbg=0;if(!(in>>word>>gen>>width>>height>>fps>>dbg)||in>>extra||word!="MEDIA_RECEIVER_READY"||gen==0||gen>0xffffffffULL)return false;const bool native=width==0&&height==0;const bool bounded=width>=16&&height>=16&&width<=16384&&height<=16384;if((!native&&!bounded)||fps<15||fps>240||(dbg!=0&&dbg!=1))return false;generation=static_cast<std::uint32_t>(gen);stream={width,height,fps};debug=dbg==1;return true;}
 std::string host_meta(){std::string mac=host_cfg.get("host","mac");if(mac.empty())mac="-";auto tailnet=local_tailnet_ipv4();if(tailnet.empty())tailnet="-";return "HOST_META "+std::to_string(host_desktop_width)+" "+std::to_string(host_desktop_height)+" "+mac+" "+tailnet;}
