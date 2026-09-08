@@ -1,4 +1,5 @@
 #include <opal/video_encoder_backend.hpp>
+#include <opal/encoded_buffer_pool.hpp>
 
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
@@ -85,8 +86,13 @@ bool sample_to_annexb(CMSampleBufferRef sample, std::size_t nal_length_size, std
     if (CMBlockBufferGetDataPointer(block, 0, &length_at_offset, &total_length, &data) != kCMBlockBufferNoErr ||
         !data || total_length == 0) return false;
 
-    out.clear();
-    out.reserve(total_length + 64);
+    const std::size_t required_capacity = total_length + 64;
+    if (out.capacity() < required_capacity) {
+        if (out.capacity() != 0) encoded_buffer_pool().release(std::move(out));
+        out = encoded_buffer_pool().acquire(required_capacity, 0);
+    } else {
+        out.clear();
+    }
     static constexpr std::array<std::uint8_t,4> start_code{0,0,0,1};
     std::size_t offset = 0;
     while (offset + nal_length_size <= total_length) {
