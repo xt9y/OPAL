@@ -6,27 +6,31 @@ Make Linux/Wayland hosting use one persistent portal authorization/session inste
 
 ## User-visible behavior
 
-During Linux host setup, OPAL asks whether screen capture should be remembered. If enabled, the host opens the compositor portal once and the user may select one or multiple monitors. OPAL stores the persistent restore token and reuses the authorized monitor set on later host/client sessions.
+During Linux host setup, OPAL asks whether screen capture should be remembered. If enabled, the host opens the compositor portal once and the user may select one or multiple monitors. OPAL stores the persistent restore token and reuses the authorized monitor set on later host sessions.
 
 During an active remote session OPAL must never silently open the KDE/xdg-desktop-portal source chooser. Encoder restarts, bitrate changes, IDR recovery, packet loss, decode recovery, capture-stale recovery, and client reconnects must not trigger interactive screen authorization.
 
-If the stored authorization is no longer restorable, OPAL reports an explicit screen-authorization-lost error and requires deliberate host reauthorization instead of opening the chooser in the background.
+If stored authorization cannot be restored, OPAL reports an explicit screen-authorization-lost/not-ready state to remote clients. Reauthorization is deliberate host-side setup work; media recovery never invokes it.
 
 ## Portal lifecycle
 
-The Linux host owns the XDG ScreenCast portal session rather than VideoSender.
+The Linux host service owns the XDG ScreenCast portal session rather than VideoSender.
 
 The portal request uses:
 
-- source type: monitor only
-- multiple sources: enabled
+- output type: `XDP_OUTPUT_MONITOR`
+- screencast flags: `XDP_SCREENCAST_FLAG_MULTIPLE`
 - cursor mode: embedded
-- persistence: persistent
+- persistence: `XDP_PERSIST_MODE_PERSISTENT`
 - restore token: previously saved token when present
 
-The initial interactive setup may show the compositor chooser. Normal streaming paths use restoration only.
+The initial interactive setup may show the compositor chooser. Normal streaming paths do not create portal sessions.
 
-Every successful portal Start result may return a new restore token. OPAL immediately replaces the previous token with the newest token using an atomic file replacement. The capture session does not recreate the portal merely because the encoder or media sender needs to restart.
+At host service startup/login, before the host advertises capture readiness to remote clients, OPAL establishes or restores the persistent portal session. This is the only automatic lifecycle point allowed to call portal session creation. A valid restore token should restore the selected monitors without asking again. If the desktop portal invalidated/revoked the token or a previously selected source no longer exists, the portal may require host interaction; this happens outside an active remote media session and OPAL remains not-ready until authorization is restored.
+
+Every successful portal Start result may return a new restore token. OPAL immediately replaces the previous token with the newest token using an atomic file replacement because restore tokens are single-use.
+
+The capture session does not recreate the portal because an encoder, VideoSender, PipeWire stream, or client session restarts.
 
 ## Host capture ownership
 
@@ -38,17 +42,29 @@ Introduce a Linux host capture session abstraction responsible for:
 - discovery of all selected monitor streams
 - per-monitor stream state and latest-frame mailboxes
 - monitor metadata needed for composition and pointer mapping
+- capture readiness state
 - explicit authorization-lost state
 
 VideoSender consumes frames from this already-authorized capture source. Encoder and network lifecycle remain independent from portal authorization lifecycle.
 
 ## Multi-monitor capture
 
-Each selected portal stream becomes one MonitorStream. OPAL keeps one latest-frame mailbox per monitor; faster monitors never block slower monitors.
+Each selected portal stream becomes one MonitorStream. OPAL consumes every returned stream instead of only stream child 0.
 
-At each compositor output frame, OPAL takes the latest available frame for each authorized monitor. A missing/stale monitor does not force a new portal request.
+OPAL keeps one latest-frame mailbox per monitor; faster monitors never block slower monitors. At each compositor output frame, OPAL takes the latest available frame for each authorized monitor. A missing/stale monitor does not force a new portal request.
 
-Selected monitors are ordered deterministically by the portal-reported monitor identity/metadata. New monitors connected later are not automatically added because they were not part of the user's authorization.
+For stream identity/ordering, OPAL prefers portal metadata in this order:
+
+1. persistent stream `id` when available
+2. monitor `position`/`size` logical metadata
+3. `pipewire-serial` for PipeWire targeting when available
+4. stable fallback order from the returned stream list
+
+`position`, `size`, `id`, and `pipewire-serial` are optional depending on portal version/backend. OPAL must not assume they always exist.
+
+When position metadata exists, visible tile ordering is left-to-right by compositor logical x position, then y position. Otherwise the stable stream identity/list order is used.
+
+New monitors connected later are not automatically added because they were not part of the user's authorization.
 
 ## Composition
 
@@ -64,35 +80,40 @@ The combined canvas width is tile_width * monitor_count and the height is tile_h
 
 If the combined canvas exceeds the negotiated encoder/client limit, OPAL uniformly scales the completed canvas down once. Monitor tiles remain equal in final dimensions.
 
-The compositor reuses buffers and scaling contexts to avoid per-frame allocation churn. It must preserve the current latest-frame/low-latency behavior rather than queueing historical monitor frames.
+The compositor reuses frame buffers and scaling contexts. It must not allocate large per-frame composition buffers or queue historical monitor frames.
 
 ## Capture timestamps
 
 Each monitor frame retains its PipeWire capture timestamp.
 
-For a composed frame, OPAL uses a conservative composite timestamp that does not claim the visible frame is newer than its oldest contributing monitor image. This keeps capture-to-packet latency telemetry meaningful across mixed refresh rates.
+For a composed frame, OPAL uses the oldest timestamp among the monitor frames actually visible in that composite. This prevents latency telemetry from claiming the complete displayed canvas is newer than one of its component images.
 
 ## Input mapping
 
 Relative mouse input remains unchanged. The existing relative/raw mouse path and mouse normalization behavior are not modified.
 
-Absolute pointer events are mapped through the inverse compositor transform:
+Absolute pointer events are mapped through the inverse compositor transform.
 
-1. client pointer position -> combined remote canvas position
-2. combined x coordinate -> selected monitor tile
-3. tile-local x/y -> original monitor-local coordinates using inverse tile scaling
-4. monitor-local coordinates -> host virtual-desktop coordinates using portal monitor position metadata
-5. emit the existing Linux absolute pointer input
+When portal monitor `position` and `size` metadata are available, they are treated as compositor logical coordinates, not pixel coordinates:
 
-This lets OPAL display monitors in one clean horizontal row even if KDE physically arranges them with vertical offsets.
+1. client pointer -> combined remote canvas
+2. combined x -> selected equal-sized tile
+3. tile-local x/y -> that monitor's logical `size`
+4. add the monitor logical `position`
+5. normalize the resulting point across the bounding rectangle of all selected logical monitor regions
+6. emit the existing Linux absolute uinput pointer coordinates
 
-Pointer mapping clamps to the selected monitor's bounds so scaled or mixed-resolution tiles cannot produce out-of-range host coordinates.
+This lets OPAL display monitors in one clean horizontal row while still targeting a KDE layout that may contain vertical offsets or different logical scaling.
+
+When portal position/size metadata are absent, OPAL first attempts to resolve equivalent logical display bounds through the local display backend. If reliable monitor geometry still cannot be established, relative mouse input continues to work, but OPAL must not pretend absolute cross-monitor mapping is exact; diagnostics report degraded absolute mapping instead of using guessed pixel geometry.
+
+Pointer mapping clamps to the selected monitor's bounds so stretched/mixed-resolution tiles cannot produce out-of-range host coordinates.
 
 ## Recovery behavior
 
 ### Encoder/network recovery
 
-The following must not recreate portal authorization:
+The following must not recreate portal authorization or the host capture session:
 
 - bitrate reconfiguration
 - IDR recovery
@@ -105,15 +126,17 @@ These restart only the relevant encoder/media state.
 
 ### PipeWire stream recovery
 
-If one monitor stream disconnects, OPAL first attempts to reconnect/recreate that PipeWire stream within the existing authorized portal remote/session.
+If one monitor stream disconnects, OPAL attempts to reconnect/recreate that PipeWire stream against the already-open authorized PipeWire remote/session.
 
-If a selected monitor physically disappears, OPAL keeps the remaining authorized monitor streams alive. The missing tile may be removed from the composed layout and the encoder configuration is refreshed with a new IDR.
+If a selected monitor physically disappears, OPAL keeps the remaining authorized monitor streams alive. The missing tile is removed from the composed layout, the encoder configuration is refreshed, and a new IDR is generated. No portal chooser is opened.
+
+If all monitor PipeWire streams become unavailable while the portal session is still valid, OPAL reports capture-unavailable and attempts noninteractive PipeWire recovery inside the existing portal session.
 
 ### Portal failure
 
-If the full portal session becomes invalid or restoration is rejected, OPAL enters authorization-lost state. It must not fall back to an interactive portal Start from a live remote media path.
+If the full portal session becomes invalid during a remote session, OPAL enters authorization-lost/not-ready state. It must not call portal session creation from the remote media path.
 
-Reauthorization occurs only through an explicit host setup/reconfigure action.
+The active remote media session ends cleanly with an explicit authorization error. Reauthorization occurs through host setup/service readiness handling, not silently from VideoSender.
 
 ## Existing protocol compatibility
 
@@ -129,11 +152,13 @@ Linux first host setup gains a yes/no prompt analogous to Wake-on-LAN:
 
     Remember selected screens for automatic hosting? [Y/n]
 
-When enabled, host setup performs the one interactive portal authorization required to obtain a persistent restore token.
+When enabled, host setup performs the one interactive portal authorization required to obtain persistent screen authorization.
 
-Configuration records whether automatic screen restoration is enabled. The restore token remains private OPAL state under ~/.opal and is replaced atomically whenever the portal rotates it.
+Configuration records whether automatic screen restoration is enabled. The restore token remains private OPAL state under `~/.opal` and is replaced atomically whenever the portal rotates it.
 
-A deliberate reauthorization command/path should remove/replace the old restore token and reopen the portal chooser.
+The Linux host service restores screen capture readiness during startup before accepting remote capture clients.
+
+A deliberate reauthorization path removes/replaces the old restore token and reopens the portal chooser.
 
 ## Error reporting
 
@@ -141,37 +166,42 @@ Distinguish at least:
 
 - portal unavailable
 - user denied initial authorization
-- stored authorization cannot be restored
+- stored authorization cannot be restored / host interaction required
 - PipeWire remote unavailable
 - one monitor stream disconnected
 - all monitor streams unavailable
+- absolute pointer geometry degraded
 - compositor/encoder reconfiguration failure
 
-When authorization is lost during a remote session, diagnostics should explicitly say to rerun Linux host screen authorization instead of reporting a generic capture failure.
+When authorization is lost during a remote session, diagnostics explicitly say to redo Linux host screen authorization instead of reporting a generic capture failure.
 
 ## Testing
 
 Add focused tests/contracts for:
 
+- `XDP_SCREENCAST_FLAG_MULTIPLE` is requested with monitor-only sources
 - multiple portal streams are consumed, not only child 0
+- optional stream metadata parsing (`id`, `position`, `size`, `pipewire-serial`)
 - restore-token rotation replaces the previous token atomically
-- live recovery paths cannot call interactive portal authorization
-- encoder restart does not recreate the portal session
+- live recovery paths cannot call portal session creation
+- encoder restart does not recreate the host portal/capture session
+- client reconnect reuses the existing host capture session
 - equal tile sizing and horizontal canvas geometry
 - mixed-resolution monitor scaling
 - combined output clamping preserves equal tile sizes
-- conservative composite timestamp selection
-- absolute pointer inverse mapping for two and three monitors
+- oldest-visible-frame composite timestamp selection
+- absolute pointer inverse mapping for two and three monitors with logical offsets/scaling
+- missing geometry produces explicit degraded absolute mapping rather than guessed geometry
 - relative mouse path remains unchanged
 - monitor removal updates composition without interactive portal fallback
-- authorization-lost failure is terminal until explicit reauthorization
+- authorization-lost failure ends media without opening a chooser
 
-Linux integration/runtime verification should include KDE Wayland with one and two selected monitors and repeated bitrate/capture recovery events while asserting that the KDE chooser does not reappear mid-session.
+Linux integration/runtime verification includes KDE Wayland with one and two selected monitors, host-service restart, client reconnects, repeated bitrate/IDR/capture recovery events, mixed monitor resolutions/refresh rates, and monitor removal while asserting that the KDE chooser does not reappear during an active remote session.
 
 ## Out of scope
 
 - separate independent video streams per monitor over the OPAL protocol
 - client-side per-monitor windows
 - automatically authorizing newly connected monitors
-- bypassing the desktop portal's first consent prompt
+- bypassing the desktop portal's initial/revoked-permission consent behavior
 - changing macOS ScreenCaptureKit behavior
