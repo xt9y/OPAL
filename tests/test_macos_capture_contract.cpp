@@ -17,6 +17,8 @@ int main()
     assert(text.find("SCShareableContent") != std::string::npos);
     assert(text.find("SCStreamConfiguration") != std::string::npos);
     assert(text.find("SCStreamOutputTypeScreen") != std::string::npos);
+    assert(text.find("SCStreamDelegate") != std::string::npos);
+    assert(text.find("didStopWithError") != std::string::npos);
     assert(text.find("CMSampleBuffer") != std::string::npos);
     assert(text.find("CVPixelBuffer") != std::string::npos);
     assert(text.find("CGMainDisplayID") != std::string::npos);
@@ -34,5 +36,9 @@ int main()
     assert(text.find("dispatch_release(stop_sem)") != std::string::npos);
     assert(text.find("dispatch_release(queue_)") != std::string::npos);
     assert(text.find("PermissionDenied") != std::string::npos);
+
+    const auto facade = read_all("src/platform/macos/video_capture.cpp");
+    assert(facade.find("terminal = true") != std::string::npos);
+    assert(facade.find("last_platform_error") != std::string::npos);
     return 0;
 }
