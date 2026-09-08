@@ -29,6 +29,10 @@ int main()
     assert(text.find("fifo_capture_us_") != std::string::npos);
     assert(text.find("fifo_samples_before") != std::string::npos);
     assert(text.find("unit.capture_time_us = fifo_capture_us_") != std::string::npos);
+    assert(text.find("dispatch_release(content_sem)") != std::string::npos);
+    assert(text.find("dispatch_release(start_sem)") != std::string::npos);
+    assert(text.find("dispatch_release(stop_sem)") != std::string::npos);
+    assert(text.find("dispatch_release(queue_)") != std::string::npos);
     assert(text.find("ffmpeg -") == std::string::npos);
     return 0;
 }
