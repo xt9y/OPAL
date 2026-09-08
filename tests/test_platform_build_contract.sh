@@ -51,7 +51,7 @@ grep -q '^  make install$' README
 grep -q '^  make test$' README
 grep -q '^  make macos-runtime-test$' README
 ! grep -q '^[[:space:]]*gmake' README
-! grep -q 'sudo .*make install' README
+grep -q 'make install builds and signs as your normal user' README
 
 grep -q '^macos-install: macos-all$' Makefile.macos
 grep -q 'Run make install as a normal user' Makefile.macos
