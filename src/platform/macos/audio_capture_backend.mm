@@ -15,6 +15,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -90,8 +91,9 @@ std::uint64_t stream_capture_time_us(SCStream* stream, CMTime pts, std::uint64_t
 }
 
 static void opal_audio_capture_accept(void* owner, CMSampleBufferRef sample);
+static void opal_audio_capture_stopped(void* owner, NSError* error);
 
-@interface OpalAudioStreamOutput : NSObject <SCStreamOutput>
+@interface OpalAudioStreamOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, assign) void* owner;
 @end
 
@@ -100,6 +102,12 @@ static void opal_audio_capture_accept(void* owner, CMSampleBufferRef sample);
 {
     (void)stream;
     if (type == SCStreamOutputTypeAudio && self.owner) opal_audio_capture_accept(self.owner, sampleBuffer);
+}
+
+- (void)stream:(SCStream*)stream didStopWithError:(NSError*)error
+{
+    (void)stream;
+    if (self.owner) opal_audio_capture_stopped(self.owner, error);
 }
 @end
 
@@ -114,6 +122,11 @@ public:
     {
         stop();
         error_ = {};
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            terminal_error_ = {};
+            latest_sample_.reset();
+        }
 
         __block SCShareableContent* shareable = nil;
         __block NSError* share_error = nil;
@@ -159,7 +172,7 @@ public:
         output_ = [[OpalAudioStreamOutput alloc] init];
         output_.owner = this;
         queue_ = dispatch_queue_create("de.xt9y.opal.capture.audio", DISPATCH_QUEUE_SERIAL);
-        stream_ = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:nil];
+        stream_ = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:output_];
         [filter release];
         [configuration release];
 
@@ -191,14 +204,14 @@ public:
             return false;
         }
         [start_error release];
-        running_ = true;
+        running_.store(true, std::memory_order_release);
         return true;
     }
 
     bool next(EncodedMediaUnit& unit, int timeout_ms) override
     {
         unit = {};
-        if (!running_) return false;
+        if (!running_.load(std::memory_order_acquire)) return false;
         const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
         for (;;) {
             if (fifo_ && codec_ && codec_->frame_size > 0 && av_audio_fifo_size(fifo_) >= codec_->frame_size) {
@@ -213,9 +226,9 @@ public:
                     if (timeout_ms <= 0) return false;
                     const auto now = Clock::now();
                     if (now >= deadline) return false;
-                    cv_.wait_until(lock, deadline, [&]{ return latest_sample_ || !running_; });
+                    cv_.wait_until(lock, deadline, [&]{ return latest_sample_ || !running_.load(std::memory_order_acquire); });
                 }
-                if (!running_ || !latest_sample_) return false;
+                if (!running_.load(std::memory_order_acquire) || !latest_sample_) return false;
                 sample_owner = std::move(latest_sample_);
             }
             if (!ingest(static_cast<CMSampleBufferRef>(sample_owner.get()))) return false;
@@ -224,9 +237,9 @@ public:
 
     void stop() override
     {
+        running_.store(false, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(mu_);
-            running_ = false;
             latest_sample_.reset();
         }
         cv_.notify_all();
@@ -258,7 +271,14 @@ public:
     MediaConfig config() const override { return config_; }
     std::uint64_t config_revision() const override { return config_revision_; }
     std::string backend_name() const override { return "screencapturekit+aac"; }
-    PlatformError last_platform_error() const override { return error_; }
+    PlatformError last_platform_error() const override
+    {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (terminal_error_) return terminal_error_;
+        }
+        return error_;
+    }
 
     void accept(CMSampleBufferRef sample)
     {
@@ -268,10 +288,23 @@ public:
             [](void* value){ if (value) CFRelease(static_cast<CFTypeRef>(value)); });
         {
             std::lock_guard<std::mutex> lock(mu_);
-            if (!running_) return;
+            if (!running_.load(std::memory_order_acquire)) return;
             latest_sample_ = std::move(owner);
         }
         cv_.notify_one();
+    }
+
+    void stopped(NSError* error)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!running_.load(std::memory_order_acquire)) return;
+            terminal_error_ = mac_audio_error(error, "ScreenCaptureKit audio stream stopped unexpectedly");
+            terminal_error_.fallback_possible = true;
+            latest_sample_.reset();
+        }
+        running_.store(false, std::memory_order_release);
+        cv_.notify_all();
     }
 
 private:
@@ -466,7 +499,8 @@ private:
     mutable std::mutex mu_;
     std::condition_variable cv_;
     std::shared_ptr<void> latest_sample_;
-    bool running_ = false;
+    std::atomic<bool> running_{false};
+    PlatformError terminal_error_{};
     SCStream* stream_ = nil;
     OpalAudioStreamOutput* output_ = nil;
     dispatch_queue_t queue_ = nullptr;
@@ -496,4 +530,9 @@ std::unique_ptr<AudioCaptureBackend> make_audio_capture_backend()
 static void opal_audio_capture_accept(void* owner, CMSampleBufferRef sample)
 {
     static_cast<opal::MacAudioCaptureBackend*>(owner)->accept(sample);
+}
+
+static void opal_audio_capture_stopped(void* owner, NSError* error)
+{
+    static_cast<opal::MacAudioCaptureBackend*>(owner)->stopped(error);
 }
