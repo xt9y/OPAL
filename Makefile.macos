@@ -22,6 +22,11 @@ APPLE_FRAMEWORKS := \
 	-framework VideoToolbox \
 	-framework AudioToolbox
 
+MACOS_INFO_PLIST := platform/macos/Info.plist
+MACOS_INPUT_INFO_PLIST := platform/macos/InputHelper-Info.plist
+MACOS_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INFO_PLIST)
+MACOS_INPUT_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INPUT_INFO_PLIST)
+
 MACOS_VIDEO_SRCS := \
 	src/platform/macos/video_capture.cpp \
 	src/native_video_pipeline.cpp \
@@ -46,31 +51,44 @@ APP_SRCS += $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
 MACOS_FFMPEG_LIBS := $(AVLIBS) $(SWRLIBS)
 AVLIBS := $(MACOS_FFMPEG_LIBS) $(APPLE_FRAMEWORKS)
 NATIVE_MEDIA_LIBS := $(MACOS_FFMPEG_LIBS) $(SDL3_LIBS) $(APPLE_FRAMEWORKS)
+LDFLAGS += $(MACOS_INFO_LDFLAGS)
 LDLIBS := $(OPENSSL_LIBS) -pthread $(NATIVE_MEDIA_LIBS)
 
 macos-deps-check:
 	@os=$$(uname -s); arch=$$(uname -m)
 	[ "$$os" = Darwin ] || { echo 'OPAL macOS build must run on macOS.' >&2; exit 1; }
 	[ "$$arch" = arm64 ] || { echo 'OPAL currently supports Apple Silicon macOS (arm64) only.' >&2; exit 1; }
-	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config. Install: brew install pkg-config sdl3 openssl ffmpeg' >&2; exit 1; }
+	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config. Install: brew install make pkg-config sdl3 openssl@3 ffmpeg' >&2; exit 1; }
+	command -v codesign >/dev/null 2>&1 || { echo 'Missing codesign. Install the Xcode Command Line Tools: xcode-select --install' >&2; exit 1; }
 	missing=''
 	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample; do
 		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi
 	done
 	if [ -n "$$missing" ]; then
 		echo "Missing macOS build modules:$$missing" >&2
-		echo 'Install: brew install pkg-config sdl3 openssl ffmpeg' >&2
+		echo 'Install: brew install make pkg-config sdl3 openssl@3 ffmpeg' >&2
 		exit 1
 	fi
 
-$(PRODUCT): $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS) | macos-deps-check
+$(PRODUCT): $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS) $(MACOS_INFO_PLIST) | macos-deps-check
 
-macos-input: $(MACOS_INPUT_SRC) include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fobjc-arc $(MACOS_INPUT_SRC) -framework ApplicationServices -framework CoreGraphics -o $(BUILD)/opal-input
+macos-input: $(MACOS_INPUT_SRC) include/opal/input_record.hpp include/opal/input_wire.hpp $(MACOS_INPUT_INFO_PLIST) | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fobjc-arc $(MACOS_INPUT_SRC) $(MACOS_INPUT_INFO_LDFLAGS) -framework ApplicationServices -framework CoreGraphics -o $(BUILD)/opal-input
 
-macos-all: $(PRODUCT) macos-input
+macos-sign: $(PRODUCT) macos-input
+	codesign --force --sign - --identifier de.xt9y.opal "$(PRODUCT)"
+	codesign --force --sign - --identifier de.xt9y.opal.input "$(BUILD)/opal-input"
+	codesign --verify --strict "$(PRODUCT)"
+	codesign --verify --strict "$(BUILD)/opal-input"
 
-macos-install: macos-all
+macos-all: macos-sign
+
+# Deliberately install-only: build/sign as the logged-in user first. This keeps
+# codesign out of sudo/root execution and preserves the exact binaries TCC saw.
+macos-install:
+	@test -x "$(PRODUCT)" -a -x "$(BUILD)/opal-input" || { echo 'Build first as your user: gmake -j"$$(sysctl -n hw.ncpu)"' >&2; exit 1; }
+	codesign --verify --strict "$(PRODUCT)"
+	codesign --verify --strict "$(BUILD)/opal-input"
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)"
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
 	$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
@@ -83,4 +101,4 @@ macos-test: test-platform-contract test-cross-platform-architecture test-platfor
 	test-video-reassembly test-video-feedback test-session-packet test-reliable-control \
 	test-peer-handshake test-peer-session
 
-.PHONY: macos-deps-check macos-input macos-all macos-install macos-test
+.PHONY: macos-deps-check macos-input macos-sign macos-all macos-install macos-test
