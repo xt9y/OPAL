@@ -30,6 +30,8 @@ grep -q 'codesign --force --sign - --identifier de.xt9y.opal ' "$tmp/macos"
 grep -q 'codesign --force --sign - --identifier de.xt9y.opal.input ' "$tmp/macos"
 grep -q 'Apple Silicon macOS (arm64) only' "$tmp/macos"
 grep -q 'brew install make pkg-config sdl3 openssl@3 ffmpeg' "$tmp/macos"
+grep -q 'brew --prefix openssl@3' Makefile.macos
+grep -q 'PKG_CONFIG_PATH' Makefile.macos
 grep -q 'GNU Make 3.82+' GNUmakefile
 grep -q 'gmake -j' README
 grep -q 'NSScreenCaptureUsageDescription' platform/macos/Info.plist
