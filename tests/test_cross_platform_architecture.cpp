@@ -40,5 +40,10 @@ int main()
         }
     }
     assert(clean);
+
+    const auto wake = read_all("src/wake.cpp");
+    assert(wake.find("SOCK_DGRAM|SOCK_CLOEXEC") == std::string::npos);
+    assert(wake.find("set_socket_no_sigpipe") != std::string::npos);
+    assert(wake.find("send_flags_no_sigpipe") != std::string::npos);
     return 0;
 }
