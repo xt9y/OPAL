@@ -59,8 +59,14 @@ std::optional<CGKeyCode> mac_keycode(int code)
         case Kp4: return 86; case Kp5: return 87; case Kp6: return 88; case Kp7: return 89;
         case Kp8: return 91; case Kp9: return 92;
         case F5: return 96; case F6: return 97; case F7: return 98; case F3: return 99;
-        case F8: return 100; case F9: return 101; case F11: return 103; case F10: return 109;
-        case F12: return 111; case Insert: return 114; case Home: return 115; case PageUp: return 116;
+        case F8: return 100; case F9: return 101; case F11: return 103;
+        case SysRq: return 105;
+        case ScrollLock: return 107;
+        case F10: return 109;
+        case Compose: return 110;
+        case F12: return 111;
+        case Pause: return 113;
+        case Insert: return 114; case Home: return 115; case PageUp: return 116;
         case Delete: return 117; case F4: return 118; case End: return 119; case F2: return 120;
         case PageDown: return 121; case F1: return 122; case Left: return 123; case Right: return 124;
         case Down: return 125; case Up: return 126;
