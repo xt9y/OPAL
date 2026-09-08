@@ -3,6 +3,7 @@
 #include <opal/platform.hpp>
 #include <opal/platform_error.hpp>
 #include <opal/system.hpp>
+#include <opal/tailnet.hpp>
 
 #include <SDL3/SDL.h>
 #import <Foundation/Foundation.h>
@@ -245,7 +246,7 @@ void write_default_config(const Paths &paths)
 
 int ensure_tailnet()
 {
-    if (command_exists("tailscale")) return 0;
+    if (tailscale_cli_available()) return 0;
     std::cerr << "Tailscale is not installed; continuing with LAN/rendezvous/relay connectivity.\n";
     return 1;
 }
@@ -287,7 +288,7 @@ int doctor()
     else if (!input_status.authorized) show_doctor_failure("Accessibility input helper", PlatformComponent::Input, PlatformFailure::PermissionDenied);
     else show_doctor_item("Accessibility input helper", true);
 
-    if (command_exists("tailscale")) show_doctor_item("Tailscale WAN underlay", true);
+    if (tailscale_cli_available()) show_doctor_item("Tailscale WAN underlay", true);
     else show_doctor_failure("Tailscale WAN underlay", PlatformComponent::Datagram, PlatformFailure::DependencyMissing);
 
     show_doctor_item("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
