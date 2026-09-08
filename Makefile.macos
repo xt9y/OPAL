@@ -13,9 +13,13 @@ include Makefile.core
 
 MACOSX_DEPLOYMENT_TARGET ?= 13.0
 export MACOSX_DEPLOYMENT_TARGET
-CXXFLAGS += -pthread -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl 2>/dev/null)
 OPENSSL_LIBS := $(shell $(PKG_CONFIG) --libs openssl 2>/dev/null)
+OPENSSL_LIBRARY_FLAGS := $(shell $(PKG_CONFIG) --libs-only-L openssl 2>/dev/null)
+# Several common test recipes intentionally retain their existing literal
+# -lcrypto link. Supplying the keg-only Homebrew search path through CXXFLAGS
+# keeps those shared recipes unchanged and lets Clang resolve libcrypto.
+CXXFLAGS += -pthread -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET) $(OPENSSL_LIBRARY_FLAGS)
 CPPFLAGS += $(OPENSSL_CFLAGS) -DOPAL_PLATFORM_MACOS=1 \
 	-DSDL_GetClipboardText=opal_macos_get_clipboard_text \
 	-DSDL_SetClipboardText=opal_macos_set_clipboard_text
