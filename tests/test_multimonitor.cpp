@@ -41,6 +41,21 @@ int main()
 
     {
         std::vector<MonitorGeometry> monitors = {
+            {1921, 1081, 0, 0, 1921, 1081, true},
+            {1367, 769, 1921, 0, 1367, 769, true},
+        };
+        const auto layout = build_composite_layout(monitors, 3839, 2159);
+        assert(layout.valid());
+        assert((layout.tile_width % 2) == 0);
+        assert((layout.tile_height % 2) == 0);
+        assert((layout.canvas_width % 2) == 0);
+        assert((layout.canvas_height % 2) == 0);
+        assert(layout.canvas_width <= 3839);
+        assert(layout.canvas_height <= 2159);
+    }
+
+    {
+        std::vector<MonitorGeometry> monitors = {
             {1920, 1080, -1920, 200, 1920, 1080, true},
             {2560, 1440, 0, 0, 2560, 1440, true},
             {1280, 1024, 2560, 100, 1280, 1024, true},
