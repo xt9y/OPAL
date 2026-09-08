@@ -77,9 +77,9 @@ struct VideoCapture::Impl {
         native_video.stop();native_active=false;timestamp_estimated=true;native_config_revision=0;configs.clear();++config_revision;const auto command=full_capture_command();if(!start_process(command,false)){error="capture fallback did not start";terminal=true;return false;}if(debug_enabled())std::cerr<<"OPAL capture fallback backend="<<backend<<" acquisition_timestamp=estimated demux=native-flv\n";return true;
     }
     bool start_native(){
-        if(!NativePipeWireVideoCapture::compiled()||!wayland_session())return false;if(!native_video.start(stream,bitrate_kbps,portal_token))return false;native_active=true;timestamp_estimated=false;backend="pipewire-native";native_config_revision=0;
+        if(!NativePipeWireVideoCapture::compiled()||!wayland_session())return false;if(!native_video.start(stream,bitrate_kbps,portal_token))return false;native_active=true;timestamp_estimated=false;backend="pipewire-persistent+multimonitor";native_config_revision=0;
         if(audio_requested){const auto command=audio_only_command();if(command.empty()||!start_process(command,true)){native_video.stop();native_active=false;return false;}}
-        if(debug_enabled())std::cerr<<"OPAL capture backend=pipewire-native acquisition_timestamp=pipewire-cycle-exact video_encode=in-process audio="<<(audio_requested?"ffmpeg-audio-only":"off")<<" startup=async\n";return true;
+        if(debug_enabled())std::cerr<<"OPAL capture backend=pipewire-persistent+multimonitor acquisition_timestamp=pipewire-cycle-exact video_encode=in-process audio="<<(audio_requested?"ffmpeg-audio-only":"off")<<" startup=async\n";return true;
     }
 
     bool pump_external(EncodedMediaView&unit,int timeout_ms,bool allow_video){
@@ -116,7 +116,15 @@ bool VideoCapture::next_view(EncodedMediaView&unit,int timeout_ms){
     for(;;){
         impl_->sync_native_config();if(impl_->native_to_view(unit,0))return true;if(impl_->capture.fd>=0&&impl_->pump_external(unit,0,false))return true;
         if(impl_->native_video.ended()){
-            const auto reason=impl_->native_video.last_error();if(debug_enabled())std::cerr<<"OPAL native capture ended reason="<<(reason.empty()?"unknown":reason)<<"; falling back\n";if(!impl_->start_external_fallback())return false;return impl_->pump_external(unit,std::max(1,timeout_ms),true);
+            const auto reason=impl_->native_video.last_error();
+            if(native_pipewire_authorization_lost()){
+                impl_->error=reason.empty()?"Linux screen authorization lost; rerun OPAL host screen authorization":reason;
+                impl_->terminal=true;
+                if(debug_enabled())std::cerr<<"OPAL native capture ended reason="<<impl_->error<<"; interactive portal fallback disabled\n";
+                return false;
+            }
+            if(debug_enabled())std::cerr<<"OPAL native capture ended reason="<<(reason.empty()?"unknown":reason)<<"; falling back\n";
+            if(!impl_->start_external_fallback())return false;return impl_->pump_external(unit,std::max(1,timeout_ms),true);
         }
         const auto now=std::chrono::steady_clock::now();if(now>=deadline)return false;const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count();const int wait_ms=std::max(1,std::min<int>(5,static_cast<int>(remaining)));if(impl_->native_to_view(unit,wait_ms))return true;if(impl_->capture.fd>=0&&impl_->pump_external(unit,0,false))return true;
     }
