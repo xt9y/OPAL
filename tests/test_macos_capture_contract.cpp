@@ -19,6 +19,8 @@ int main()
     assert(text.find("SCStreamOutputTypeScreen") != std::string::npos);
     assert(text.find("CMSampleBuffer") != std::string::npos);
     assert(text.find("CVPixelBuffer") != std::string::npos);
+    assert(text.find("CGMainDisplayID") != std::string::npos);
+    assert(text.find("candidate.displayID == main_id") != std::string::npos);
     assert(text.find("queueDepth = 3") != std::string::npos);
     assert(text.find("latest_ = std::move(frame)") != std::string::npos);
     assert(text.find("kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange") != std::string::npos);
