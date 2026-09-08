@@ -45,10 +45,14 @@ test-macos-audio-contract: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_audio_contract.cpp -o $(BUILD)/test-macos-audio-contract
 	$(BUILD)/test-macos-audio-contract
 
+test-macos-host-permission-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_host_permission_contract.cpp -o $(BUILD)/test-macos-host-permission-contract
+	$(BUILD)/test-macos-host-permission-contract
+
 test-platform-build-contract:
 	sh tests/test_platform_build_contract.sh
 
 .PHONY: test-platform-contract test-cross-platform-architecture test-udp-batch-contract \
 	test-native-video-pipeline test-audio-capture-backend test-macos-clipboard-contract \
 	test-macos-capture-contract test-macos-videotoolbox-contract test-macos-audio-contract \
-	test-platform-build-contract
+	test-macos-host-permission-contract test-platform-build-contract
