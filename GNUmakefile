@@ -15,6 +15,10 @@ else
 $(error Unsupported platform '$(UNAME_S)'; OPAL currently supports Linux and macOS)
 endif
 
+TAILNET_SRCS := src/tailnet.cpp
+APP_SRCS += $(TAILNET_SRCS)
+$(PRODUCT): $(TAILNET_SRCS)
+
 test-platform-contract: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_platform_contract.cpp -o $(BUILD)/test-platform-contract
 	$(BUILD)/test-platform-contract
