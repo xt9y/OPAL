@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <netinet/in.h>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -26,7 +25,7 @@ std::uint32_t read_magic(std::span<const std::uint8_t>b){if(b.size()<4)return 0;
 std::uint64_t numeric_session_id(const std::string&hex_id){const auto bytes=unhex(hex_id);if(bytes.size()!=16)return 0;std::uint64_t value=0;for(int i=0;i<8;++i)value=(value<<8)|bytes[static_cast<std::size_t>(i)];return value?value:1;}
 std::vector<std::string> fields(std::string_view text){std::istringstream in{std::string(text)};std::vector<std::string>out;std::string v;while(in>>v)out.push_back(std::move(v));return out;}
 VideoKeys channel_video_keys(const PeerChannelKeys&keys){VideoKeys result;result.send_key=keys.send_key;result.recv_key=keys.recv_key;result.send_nonce_base=keys.send_nonce_base;result.recv_nonce_base=keys.recv_nonce_base;return result;}
-bool same_source(const sockaddr_storage&a,const sockaddr_storage&b){if(a.ss_family!=b.ss_family)return false;if(a.ss_family==AF_INET6){const auto*x=reinterpret_cast<const sockaddr_in6*>(&a),*y=reinterpret_cast<const sockaddr_in6*>(&b);return x->sin6_port==y->sin6_port&&std::memcmp(&x->sin6_addr,&y->sin6_addr,sizeof(in6_addr))==0;}if(a.ss_family==AF_INET){const auto*x=reinterpret_cast<const sockaddr_in*>(&a),*y=reinterpret_cast<const sockaddr_in*>(&b);return x->sin_port==y->sin_port&&x->sin_addr.s_addr==y->sin_addr.s_addr;}return false;}
+bool same_source(const UdpEndpoint&a,const UdpEndpoint&b){return udp_endpoint_equal(a,b);}
 bool retryable_path_error(const std::string&e){return e.find("timed out")!=std::string::npos||e.find("receive")!=std::string::npos||e.find("send failed")!=std::string::npos||e.find("confirmation")!=std::string::npos;}
 bool usable_endpoint(const RendezvousEndpoint&e){return !e.host.empty()&&e.port>0;}
 bool same_endpoint(const RendezvousEndpoint&a,const RendezvousEndpoint&b){return a.host==b.host&&a.port==b.port;}
@@ -38,7 +37,7 @@ struct PeerSession::Impl {
     struct MediaSlot{std::array<std::uint8_t,kVideoMaxDatagramBytes+1>bytes{};std::size_t size=0;};
     struct ControlSlot{SessionPacketType type=SessionPacketType::ControlAck;std::string payload;};
 
-    PeerSessionOptions options;RendezvousEndpoint active_endpoint;sockaddr_storage peer{};socklen_t peer_len=0;std::uint64_t session_numeric=0;bool relay_mode=false;
+    PeerSessionOptions options;RendezvousEndpoint active_endpoint;UdpEndpoint peer{};std::uint32_t peer_len=0;std::uint64_t session_numeric=0;bool relay_mode=false;
     PeerEphemeralKey ephemeral;PeerSessionKeys keys;std::unique_ptr<VideoCipher>cipher;ReplayWindow1024 replay;
     ReliableControlSender reliable_sender;ReliableControlReceiver reliable_receiver;LatestPointerReceiver pointer_receiver;
     std::thread thread,media_thread,control_thread,pointer_thread;mutable std::mutex send_mu,state_mu,reliable_mu,media_mu,control_mu,pointer_mu;std::condition_variable media_cv,control_cv,pointer_cv;
@@ -80,7 +79,7 @@ struct PeerSession::Impl {
         if(result.result==UdpSendResult::WouldBlock&&result.sent<wires.size())media_send_backpressure_count.fetch_add(wires.size()-result.sent,std::memory_order_relaxed);
         return result;
     }
-    bool receive_wire(std::span<std::uint8_t>buffer,std::span<const std::uint8_t>&wire,int timeout_ms){sockaddr_storage source{};socklen_t source_len=sizeof(source);const int n=recv_datagram(options.socket.fd,buffer,source,source_len,timeout_ms);if(n<=0||!same_source(source,peer))return false;wire=std::span<const std::uint8_t>(buffer.data(),static_cast<std::size_t>(n));return true;}
+    bool receive_wire(std::span<std::uint8_t>buffer,std::span<const std::uint8_t>&wire,int timeout_ms){UdpEndpoint source{};std::uint32_t source_len=0;const int n=recv_datagram(options.socket.fd,buffer,source,source_len,timeout_ms);if(n<=0||!same_source(source,peer))return false;wire=std::span<const std::uint8_t>(buffer.data(),static_cast<std::size_t>(n));return true;}
     bool send_plain(SessionPacketType type,std::string_view payload,std::uint64_t packet_sequence){SessionPacketHeader h;h.type=type;h.generation=options.handshake.generation;h.session_id=session_numeric;h.packet_sequence=packet_sequence;h.payload_length=static_cast<std::uint16_t>(payload.size());const auto header=serialize_session_header(h);if(header.empty()||payload.size()>kSessionPacketMaxPayload)return false;std::vector<std::uint8_t>wire=header;if(!payload.empty())wire.insert(wire.end(),reinterpret_cast<const std::uint8_t*>(payload.data()),reinterpret_cast<const std::uint8_t*>(payload.data()+payload.size()));return send_wire(wire);}
     bool install_keys(const std::string&client_ephemeral,const std::string&host_ephemeral){if(!derive_peer_session_keys(options.handshake,ephemeral,client_ephemeral,host_ephemeral,options.client_side,keys))return false;cipher=std::make_unique<VideoCipher>(channel_video_keys(keys.control));replay.reset();return cipher&&cipher->valid();}
     bool send_encrypted(SessionPacketType type,std::uint64_t reliable_sequence,std::string_view payload){if(!cipher||payload.size()>kSessionPacketMaxPayload)return false;std::lock_guard<std::mutex>send_lock(send_mu);ReliableAckState ack;{std::lock_guard<std::mutex>lock(reliable_mu);ack=reliable_receiver.ack_state();}SessionPacketHeader h;h.type=type;h.generation=options.handshake.generation;h.session_id=session_numeric;h.packet_sequence=packet_send_sequence++;h.reliable_sequence=reliable_sequence;h.ack_sequence=ack.sequence;h.ack_bits=ack.bits;h.payload_length=static_cast<std::uint16_t>(payload.size());if(!serialize_session_header(h,send_aad))return false;std::size_t sealed_size=0;if(!cipher->seal(h.packet_sequence,send_aad,std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(payload.data()),payload.size()),send_sealed,sealed_size)||sealed_size>send_sealed.size()||kSessionPacketHeaderBytes+sealed_size>send_wire_buffer.size())return false;std::copy(send_aad.begin(),send_aad.end(),send_wire_buffer.begin());std::copy_n(send_sealed.begin(),sealed_size,send_wire_buffer.begin()+kSessionPacketHeaderBytes);if(type==SessionPacketType::ReliableControl){const char*drop=std::getenv("OPAL_TEST_DROP_FIRST_RELIABLE");if(drop&&*drop&&std::string(drop)!="0"&&!dropped_test_reliable){dropped_test_reliable=true;return true;}}return send_wire(std::span<const std::uint8_t>(send_wire_buffer.data(),kSessionPacketHeaderBytes+sealed_size));}
