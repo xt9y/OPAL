@@ -1,6 +1,7 @@
 #include <opal/capture_backend.hpp>
 
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 
@@ -36,6 +37,16 @@ PlatformError apple_error(PlatformComponent component, NSError *error, std::stri
         result.failure = PlatformFailure::PermissionDenied;
     }
     return result;
+}
+
+SCDisplay *retain_main_display(SCShareableContent *shareable)
+{
+    if (!shareable || shareable.displays.count == 0) return nil;
+    const CGDirectDisplayID main_id = CGMainDisplayID();
+    for (SCDisplay *candidate in shareable.displays) {
+        if (candidate.displayID == main_id) return [candidate retain];
+    }
+    return [shareable.displays.firstObject retain];
 }
 }
 }
@@ -90,7 +101,7 @@ public:
             return false;
         }
 
-        SCDisplay *display = [shareable.displays.firstObject retain];
+        SCDisplay *display = retain_main_display(shareable);
         [shareable release];
         [share_error release];
         if (!display) {
