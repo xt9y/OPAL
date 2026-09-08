@@ -84,10 +84,14 @@ struct VideoCapture::Impl {
 
     bool poll(EncodedMediaView& view, int video_wait_ms)
     {
-        storage = {};
-        if (video && video->next(storage, video_wait_ms)) return make_view(view);
+        // Audio must get a nonblocking service opportunity before waiting for the
+        // next video frame. Otherwise a continuously available 60/120/240 Hz
+        // video source can starve AAC indefinitely. Video capture itself is
+        // latest-only, so servicing audio first cannot create video backlog.
         storage = {};
         if (audio && audio->next(storage, 0)) return make_view(view);
+        storage = {};
+        if (video && video->next(storage, video_wait_ms)) return make_view(view);
         return false;
     }
 
