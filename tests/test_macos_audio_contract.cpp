@@ -15,6 +15,10 @@ int main()
 {
     const auto text = read_all("src/platform/macos/audio_capture_backend.mm");
     assert(text.find("SCStreamOutputTypeAudio") != std::string::npos);
+    assert(text.find("SCStreamDelegate") != std::string::npos);
+    assert(text.find("didStopWithError") != std::string::npos);
+    assert(text.find("delegate:output_") != std::string::npos);
+    assert(text.find("std::atomic<bool> running_") != std::string::npos);
     assert(text.find("capturesAudio = YES") != std::string::npos);
     assert(text.find("sampleRate = 48000") != std::string::npos);
     assert(text.find("channelCount = 2") != std::string::npos);
