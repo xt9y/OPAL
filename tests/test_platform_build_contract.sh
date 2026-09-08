@@ -38,7 +38,7 @@ grep -q -- '--libs-only-L openssl' Makefile.macos
 grep -q 'OPENSSL_LIBRARY_FLAGS' Makefile.macos
 
 # Apple's make is only the public front door. It forwards into Homebrew GNU
-# Make internally so the user always types the same make commands on both OSes.
+# Make internally so users type the same make commands on both OSes.
 grep -q 'command -v gmake' GNUmakefile
 grep -q 'exec gmake' GNUmakefile
 grep -q 'install,macos-install' GNUmakefile
@@ -48,18 +48,18 @@ grep -q 'test,macos-verify' GNUmakefile
 
 grep -q '^  make -j' README
 grep -q '^  make install$' README
-grep -q '^  make macos-verify$' README
+grep -q '^  make test$' README
 grep -q '^  make macos-runtime-test$' README
 ! grep -q '^[[:space:]]*gmake' README
-! grep -q 'sudo .*make macos-install' README
+! grep -q 'sudo .*make install' README
 
-grep -q 'Run macos-install as a normal user' Makefile.macos
+grep -q '^macos-install: macos-all$' Makefile.macos
+grep -q 'Run make install as a normal user' Makefile.macos
 grep -q 'sudo $(INSTALL) -d' Makefile.macos
 grep -q 'NSScreenCaptureUsageDescription' platform/macos/Info.plist
 grep -q 'NSAudioCaptureUsageDescription' platform/macos/Info.plist
 grep -q '<string>de.xt9y.opal</string>' platform/macos/Info.plist
 grep -q '<string>de.xt9y.opal.input</string>' platform/macos/InputHelper-Info.plist
-! grep -q '^macos-install: macos-all' Makefile.macos
 ! grep -q 'src/platform/macos/host_stub.cpp' "$tmp/macos"
 ! grep -q 'src/platform/macos/pipewire_capture_stub.cpp' "$tmp/macos"
 ! grep -q 'src/pipewire_capture.cpp' "$tmp/macos"
