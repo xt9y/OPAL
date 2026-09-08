@@ -77,9 +77,10 @@ macos-install: macos-all
 
 macos-test: test-platform-contract test-cross-platform-architecture test-platform-build-contract \
 	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
-	test-macos-clipboard-contract test-macos-capture-contract test-macos-videotoolbox-contract \
-	test-macos-audio-contract test-macos-host-permission-contract test-udp-batch-contract test-input \
-	test-udp-transport test-video-capture test-video-packet test-video-reassembly test-video-feedback \
-	test-session-packet test-reliable-control test-peer-handshake test-peer-session
+	test-macos-media-scheduler test-macos-clipboard-contract test-macos-capture-contract \
+	test-macos-videotoolbox-contract test-macos-audio-contract test-macos-host-permission-contract \
+	test-udp-batch-contract test-input test-udp-transport test-video-capture test-video-packet \
+	test-video-reassembly test-video-feedback test-session-packet test-reliable-control \
+	test-peer-handshake test-peer-session
 
 .PHONY: macos-deps-check macos-input macos-all macos-install macos-test
