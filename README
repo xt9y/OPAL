@@ -30,14 +30,15 @@ macOS build
 
 macOS host setup
   run opal and choose "Host this computer"
-  OPAL requests Screen Recording and Accessibility permission before installing the host service
+  OPAL requests Screen Recording for the host and Accessibility for the exact opal-input helper
   if macOS asks for permission, grant it and run opal again to finish setup
   host service: ~/Library/LaunchAgents/de.xt9y.opal.host.plist
   restart host service: opal restart
 
 macOS host permissions
-  System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL/your terminal
-  System Settings -> Privacy & Security -> Accessibility -> allow OPAL/your terminal
+  System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL/host process
+  System Settings -> Privacy & Security -> Accessibility -> allow opal-input
+  opal doctor checks both independently
 
 run
   setup / select host --> opal
@@ -55,10 +56,10 @@ Linux host
 
 macOS host
   capture   --> ScreenCaptureKit, latest-frame CVPixelBuffer path with WindowServer display timestamps
-  encode    --> persistent hardware VideoToolbox H.264
-  input     --> CGEvent through opal-input
+  encode    --> persistent hardware VideoToolbox H.264 low-latency rate control, zero frame delay, on-demand IDR
+  input     --> CGEvent through Accessibility-authorized opal-input
   clipboard --> NSPasteboard
-  audio     --> ScreenCaptureKit system audio + persistent in-process AAC
+  audio     --> ScreenCaptureKit system audio + persistent in-process AAC using the stream synchronization clock
   service   --> per-user launchd LaunchAgent
   UDP       --> nonblocking bounded datagram loop
 
