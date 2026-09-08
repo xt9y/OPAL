@@ -46,12 +46,17 @@ int main()
 
     const auto tailnet_header = read_all("include/opal/tailnet.hpp");
     const auto tailnet_source = read_all("src/tailnet.cpp");
+    const auto config_source = read_all("src/config.cpp");
     assert(tailnet_header.find("popen") == std::string::npos);
     assert(tailnet_header.find("pclose") == std::string::npos);
     assert(tailnet_header.find("FILE*") == std::string::npos);
     assert(tailnet_header.find("<cstdio>") == std::string::npos);
     assert(tailnet_source.find("popen") != std::string::npos);
     assert(tailnet_source.find("tailscale ip -4") != std::string::npos);
+    assert(tailnet_source.find("/Applications/Tailscale.app/Contents/MacOS/Tailscale") != std::string::npos);
+    assert(tailnet_source.find("TAILSCALE_BE_CLI=1") != std::string::npos);
+    assert(tailnet_source.find("OPAL_TAILSCALE_CLI") != std::string::npos);
+    assert(config_source.find("/Applications/Tailscale.app/Contents/MacOS/Tailscale") != std::string::npos);
 
     const auto wake = read_all("src/wake.cpp");
     assert(wake.find("SOCK_DGRAM|SOCK_CLOEXEC") == std::string::npos);
