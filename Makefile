@@ -98,7 +98,27 @@ test-latency-window: | $(BUILD)
 test-capture-probe: $(CAPTURE_PROBE)
 	$(CAPTURE_PROBE)
 
-test: test-flv-stream test-video-reorder test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe
+test-multimonitor: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_multimonitor.cpp -o $(BUILD)/test-multimonitor
+	$(BUILD)/test-multimonitor
+
+test-linux-capture-session-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linux_capture_session_contract.cpp -o $(BUILD)/test-linux-capture-session-contract
+	$(BUILD)/test-linux-capture-session-contract
+
+test-linux-capture-restart-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linux_capture_restart_contract.cpp -o $(BUILD)/test-linux-capture-restart-contract
+	$(BUILD)/test-linux-capture-restart-contract
+
+test-linux-screen-setup-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linux_screen_setup_contract.cpp -o $(BUILD)/test-linux-screen-setup-contract
+	$(BUILD)/test-linux-screen-setup-contract
+
+test-multimonitor-input-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_multimonitor_input_contract.cpp -o $(BUILD)/test-multimonitor-input-contract
+	$(BUILD)/test-multimonitor-input-contract
+
+test: test-flv-stream test-video-reorder test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-multimonitor test-linux-capture-session-contract test-linux-capture-restart-contract test-linux-screen-setup-contract test-multimonitor-input-contract
 
 SAN_COMMON := -O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
 ASAN_UBSAN := -fsanitize=address,undefined
@@ -208,7 +228,7 @@ test-soak: test-peer-session test-udp-transport test-direct-video-stress test-di
 	done
 	echo "HPI soak iterations=$$iterations seconds=$$(($$(date +%s) - start))"
 
-test-hpi: test-flv-stream test-video-reorder test-capture-probe test-linked-codec-probe test-video-capture test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session
+test-hpi: test-flv-stream test-video-reorder test-capture-probe test-linked-codec-probe test-video-capture test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session test-multimonitor test-linux-capture-session-contract test-linux-capture-restart-contract test-linux-screen-setup-contract test-multimonitor-input-contract
 
 test-sanitize:
 	$(MAKE) clean
@@ -218,7 +238,7 @@ test-sanitize:
 
 test-hpi-sanitize: test-sanitize
 
-.PHONY: native-capture-deps-check test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-thread-sanitize test-thread-sanitize-run test-thread-sanitize-session-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+.PHONY: native-capture-deps-check test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-multimonitor test-linux-capture-session-contract test-linux-capture-restart-contract test-linux-screen-setup-contract test-multimonitor-input-contract test-thread-sanitize test-thread-sanitize-run test-thread-sanitize-session-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
 
 test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
 test-integration: export OPAL_TEST_HEADLESS=1
