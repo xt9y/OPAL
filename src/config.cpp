@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace opal {
 std::string trim(std::string s) {
@@ -33,10 +34,20 @@ bool Ini::save(const std::filesystem::path &path) const {
     for(const auto &[section,values]:data_) { if(!section.empty()) f<<'['<<section<<"]\n"; for(const auto &[k,v]:values) f<<k<<'='<<v<<"\n"; f<<"\n"; }
     f.close(); chmod(path.c_str(),0600); return static_cast<bool>(f);
 }
-std::string Ini::get(const std::string&s,const std::string&k,const std::string&fb) const { auto si=data_.find(s); if(si==data_.end()) return fb; auto ki=si->second.find(k); return ki==si->second.end()?fb:ki->second; }
+std::string Ini::get(const std::string&s,const std::string&k,const std::string&fb) const { auto si=data_.find(s);if(si==data_.end()) return fb;auto ki=si->second.find(k);return ki==si->second.end()?fb:ki->second; }
 int Ini::get_int(const std::string&s,const std::string&k,int fb) const { try{return std::stoi(get(s,k,std::to_string(fb)));}catch(...){return fb;} }
-bool Ini::get_bool(const std::string&s,const std::string&k,bool fb) const { auto v=get(s,k,fb?"true":"false"); return v=="1"||v=="true"||v=="yes"||v=="on"; }
+bool Ini::get_bool(const std::string&s,const std::string&k,bool fb) const { auto v=get(s,k,fb?"true":"false");return v=="1"||v=="true"||v=="yes"||v=="on"; }
 void Ini::set(const std::string&s,const std::string&k,const std::string&v){data_[s][k]=v;}
 std::string shell_quote(const std::string&s){std::string out="'";for(char c:s){if(c=='\'') out+="'\\''";else out+=c;}return out+="'";}
-bool command_exists(const std::string &name){ auto cmd="command -v "+shell_quote(name)+" >/dev/null 2>&1"; return std::system(cmd.c_str())==0; }
+bool command_exists(const std::string &name){
+    if(name=="tailscale"){
+        if(const char*configured=std::getenv("OPAL_TAILSCALE_CLI");configured&&*configured&&access(configured,X_OK)==0)return true;
+#ifdef __APPLE__
+        for(const char*candidate:{"/usr/local/bin/tailscale","/opt/homebrew/bin/tailscale","/Applications/Tailscale.app/Contents/MacOS/Tailscale"})
+            if(access(candidate,X_OK)==0)return true;
+        if(const char*home=std::getenv("HOME");home&&*home){const std::string candidate=std::string(home)+"/Applications/Tailscale.app/Contents/MacOS/Tailscale";if(access(candidate.c_str(),X_OK)==0)return true;}
+#endif
+    }
+    auto cmd="command -v "+shell_quote(name)+" >/dev/null 2>&1";return std::system(cmd.c_str())==0;
+}
 }
