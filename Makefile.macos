@@ -1,5 +1,14 @@
 .DEFAULT_GOAL := macos-all
 
+# Homebrew openssl@3 is keg-only. Make its pkg-config metadata visible before
+# Makefile.core resolves the common FFmpeg/SDL/OpenSSL build flags.
+HOMEBREW_OPENSSL_PREFIX ?= $(shell brew --prefix openssl@3 2>/dev/null)
+ORIGINAL_PKG_CONFIG_PATH := $(PKG_CONFIG_PATH)
+ifneq ($(strip $(HOMEBREW_OPENSSL_PREFIX)),)
+PKG_CONFIG_PATH := $(HOMEBREW_OPENSSL_PREFIX)/lib/pkgconfig$(if $(strip $(ORIGINAL_PKG_CONFIG_PATH)),:$(ORIGINAL_PKG_CONFIG_PATH))
+export PKG_CONFIG_PATH
+endif
+
 include Makefile.core
 
 MACOSX_DEPLOYMENT_TARGET ?= 13.0
@@ -59,8 +68,10 @@ macos-deps-check:
 	@os=$$(uname -s); arch=$$(uname -m)
 	[ "$$os" = Darwin ] || { echo 'OPAL macOS build must run on macOS.' >&2; exit 1; }
 	[ "$$arch" = arm64 ] || { echo 'OPAL currently supports Apple Silicon macOS (arm64) only.' >&2; exit 1; }
+	command -v brew >/dev/null 2>&1 || { echo 'Homebrew is required. Install Homebrew, then: brew install make pkg-config sdl3 openssl@3 ffmpeg' >&2; exit 1; }
 	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config. Install: brew install make pkg-config sdl3 openssl@3 ffmpeg' >&2; exit 1; }
 	command -v codesign >/dev/null 2>&1 || { echo 'Missing codesign. Install the Xcode Command Line Tools: xcode-select --install' >&2; exit 1; }
+	[ -n "$(HOMEBREW_OPENSSL_PREFIX)" ] && [ -d "$(HOMEBREW_OPENSSL_PREFIX)/lib/pkgconfig" ] || { echo 'Homebrew openssl@3 pkg-config metadata unavailable. Install: brew install openssl@3' >&2; exit 1; }
 	missing=''
 	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample; do
 		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi
