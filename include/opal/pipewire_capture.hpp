@@ -1,13 +1,20 @@
 #pragma once
 
 #include <opal/media_profile.hpp>
+#include <opal/multimonitor.hpp>
 #include <opal/video_capture.hpp>
-#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
 
 namespace opal {
+
+bool native_pipewire_prepare(const StreamOptions& stream,
+                             const std::string& restore_token_file,
+                             std::string* error = nullptr);
+CompositeLayout native_pipewire_layout();
+bool native_pipewire_authorization_lost();
+std::string native_pipewire_last_error();
 
 class NativePipeWireVideoCapture {
 public:
