@@ -294,7 +294,7 @@ private:
         bool ok = true;
         ok = ok && set_bool(session_, kVTCompressionPropertyKey_RealTime, true);
         ok = ok && set_bool(session_, kVTCompressionPropertyKey_AllowFrameReordering, false);
-        ok = ok && set_bool(session_, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true);
+        (void)set_bool(session_, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true);
         ok = ok && set_i32(session_, kVTCompressionPropertyKey_AverageBitRate, bits);
         ok = ok && set_i32(session_, kVTCompressionPropertyKey_ExpectedFrameRate, fps);
         ok = ok && set_i32(session_, kVTCompressionPropertyKey_MaxFrameDelayCount, frame_delay);
