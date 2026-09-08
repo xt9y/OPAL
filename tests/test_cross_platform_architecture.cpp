@@ -18,6 +18,9 @@ int main()
 {
     const std::vector<std::string> forbidden = {
         "<linux/",
+        "<arpa/inet.h>",
+        "<ifaddrs.h>",
+        "<sys/socket.h>",
         "sockaddr_storage",
         "socklen_t",
         "CGEventRef",
