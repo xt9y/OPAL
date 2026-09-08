@@ -1,6 +1,7 @@
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
 #include <opal/platform.hpp>
+#include <opal/platform_error.hpp>
 #include <opal/system.hpp>
 
 #include <SDL3/SDL.h>
@@ -140,11 +141,34 @@ std::string input_helper_path()
     return {};
 }
 
-bool input_helper_accessible()
+struct InputHelperStatus {
+    bool present = false;
+    bool authorized = false;
+};
+
+InputHelperStatus input_helper_status()
 {
     const auto helper = input_helper_path();
-    if (helper.empty()) return false;
-    return std::system((shell_quote(helper) + " --check-access >/dev/null 2>&1").c_str()) == 0;
+    if (helper.empty()) return {};
+    return {true, std::system((shell_quote(helper) + " --check-access >/dev/null 2>&1").c_str()) == 0};
+}
+
+bool input_helper_accessible()
+{
+    const auto status = input_helper_status();
+    return status.present && status.authorized;
+}
+
+void show_doctor_item(const std::string& name, bool ok)
+{
+    std::cout << (ok ? "[ok]   " : "[warn] ") << name << "\n";
+}
+
+void show_doctor_failure(const std::string& name, PlatformComponent component, PlatformFailure failure)
+{
+    std::cout << "[warn] " << name
+              << " component=" << platform_component_name(component)
+              << " failure=" << platform_failure_name(failure) << "\n";
 }
 
 std::string launch_domain()
@@ -240,18 +264,34 @@ int doctor()
     const auto paths = Paths::load();
     std::cout << "OPAL doctor\n";
     std::cout << "[info] platform=" << platform_name(current_platform()) << "\n";
-    const auto show=[](const std::string &name,bool ok){std::cout<<(ok?"[ok]   ":"[warn] ")<<name<<"\n";};
+
     std::string driver;
     const bool sdl_ok = sdl_video_available(driver);
-    show("SDL3 client video backend (" + (sdl_ok ? driver : "unavailable") + ")", sdl_ok);
-    show("Linked FFmpeg H.264 decoder", avcodec_find_decoder(AV_CODEC_ID_H264) != nullptr);
-    show("VideoToolbox H.264 hardware encoder", videotoolbox_h264_hardware_encoder_available());
-    show("VideoToolbox H.264 hardware decoder", VTIsHardwareDecodeSupported(kCMVideoCodecType_H264));
-    show("Screen Recording permission", CGPreflightScreenCaptureAccess());
-    show("Accessibility input helper", input_helper_accessible());
-    show("Tailscale WAN underlay", command_exists("tailscale"));
-    show("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
-    show("~/.opal initialized", std::filesystem::exists(paths.root));
+    if (sdl_ok) show_doctor_item("SDL3 client video backend (" + driver + ")", true);
+    else show_doctor_failure("SDL3 client video backend unavailable", PlatformComponent::Presenter, PlatformFailure::Unavailable);
+
+    if (avcodec_find_decoder(AV_CODEC_ID_H264)) show_doctor_item("Linked FFmpeg H.264 decoder", true);
+    else show_doctor_failure("Linked FFmpeg H.264 decoder", PlatformComponent::Decoder, PlatformFailure::DependencyMissing);
+
+    if (videotoolbox_h264_hardware_encoder_available()) show_doctor_item("VideoToolbox H.264 hardware encoder", true);
+    else show_doctor_failure("VideoToolbox H.264 hardware encoder", PlatformComponent::Encoder, PlatformFailure::Unavailable);
+
+    if (VTIsHardwareDecodeSupported(kCMVideoCodecType_H264)) show_doctor_item("VideoToolbox H.264 hardware decoder", true);
+    else show_doctor_failure("VideoToolbox H.264 hardware decoder", PlatformComponent::Decoder, PlatformFailure::Unavailable);
+
+    if (CGPreflightScreenCaptureAccess()) show_doctor_item("Screen Recording permission", true);
+    else show_doctor_failure("Screen Recording permission", PlatformComponent::Capture, PlatformFailure::PermissionDenied);
+
+    const auto input_status = input_helper_status();
+    if (!input_status.present) show_doctor_failure("Accessibility input helper missing", PlatformComponent::Input, PlatformFailure::DependencyMissing);
+    else if (!input_status.authorized) show_doctor_failure("Accessibility input helper", PlatformComponent::Input, PlatformFailure::PermissionDenied);
+    else show_doctor_item("Accessibility input helper", true);
+
+    if (command_exists("tailscale")) show_doctor_item("Tailscale WAN underlay", true);
+    else show_doctor_failure("Tailscale WAN underlay", PlatformComponent::Datagram, PlatformFailure::DependencyMissing);
+
+    show_doctor_item("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
+    show_doctor_item("~/.opal initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=nspasteboard\n";
     std::cout << "[info] host capture=screencapturekit encoder=videotoolbox-hardware-lowlatency input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
     return 0;
