@@ -16,7 +16,7 @@ Commands:
                                             Connect with temporary stream overrides
   opal select                               Select a saved host
   opal new                                  Run OPAL setup / add another host
-  opal remove                               Remove OPAL state
+  opal remove                               Remove a saved host
   opal restart                              Restart OPAL services
   opal clean                                Remove OPAL state
   opal doctor                               Check local OPAL requirements
