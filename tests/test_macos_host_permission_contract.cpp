@@ -18,6 +18,8 @@ int main()
     assert(host.find("CGRequestScreenCaptureAccess") != std::string::npos);
     assert(host.find("--request-access") != std::string::npos);
     assert(host.find("--check-access") != std::string::npos);
+    assert(host.find("AXIsProcessTrusted") == std::string::npos);
+    assert(host.find("kAXTrustedCheckOptionPrompt") == std::string::npos);
     assert(host.find("Screen Recording permission") != std::string::npos);
     assert(host.find("Accessibility permission") != std::string::npos);
     assert(host.find("macos_host_setup_impl") != std::string::npos);
@@ -36,6 +38,7 @@ int main()
     assert(doctor.find("VTIsHardwareDecodeSupported") != std::string::npos);
     assert(doctor.find("Accessibility input helper") != std::string::npos);
     assert(doctor.find("--check-access") != std::string::npos);
+    assert(doctor.find("AXIsProcessTrusted") == std::string::npos);
     assert(doctor.find("de.xt9y.opal.host") != std::string::npos);
     assert(doctor.find("LaunchAgents") != std::string::npos);
     assert(doctor.find("--internal-host-daemon") != std::string::npos);
