@@ -39,6 +39,12 @@ int main()
     assert(text.find("dispatch_release(start_sem)") != std::string::npos);
     assert(text.find("dispatch_release(stop_sem)") != std::string::npos);
     assert(text.find("dispatch_release(queue_)") != std::string::npos);
+    assert(text.find("#define AVMediaType OPAL_FFmpegAVMediaType") != std::string::npos);
+    assert(text.find("#undef AVMediaType") != std::string::npos);
+    const auto define_pos = text.find("#define AVMediaType OPAL_FFmpegAVMediaType");
+    const auto avcodec_pos = text.find("#include <libavcodec/avcodec.h>");
+    const auto undef_pos = text.find("#undef AVMediaType");
+    assert(define_pos < avcodec_pos && avcodec_pos < undef_pos);
     assert(text.find("ffmpeg -") == std::string::npos);
     return 0;
 }
