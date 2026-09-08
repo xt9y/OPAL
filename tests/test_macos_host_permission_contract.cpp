@@ -44,6 +44,12 @@ int main()
     assert(doctor.find("--check-access") != std::string::npos);
     assert(doctor.find("AXIsProcessTrusted") == std::string::npos);
     assert(doctor.find("OPAL_INPUT_HELPER") != std::string::npos);
+    assert(doctor.find("platform_failure_name") != std::string::npos);
+    assert(doctor.find("platform_component_name") != std::string::npos);
+    assert(doctor.find("PlatformFailure::PermissionDenied") != std::string::npos);
+    assert(doctor.find("PlatformFailure::DependencyMissing") != std::string::npos);
+    assert(doctor.find("component=") != std::string::npos);
+    assert(doctor.find("failure=") != std::string::npos);
     assert(doctor.find("encoder=videotoolbox-hardware-lowlatency") != std::string::npos);
     assert(doctor.find("de.xt9y.opal.host") != std::string::npos);
     assert(doctor.find("LaunchAgents") != std::string::npos);
