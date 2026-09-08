@@ -41,7 +41,7 @@ std::string pointer_command_for(SessionSupervisor&session,int x,int y,int width,
 bool send_pointer(SessionSupervisor&session,int x,int y,int width,int height){auto command=pointer_command_for(session,x,y,width,height);return command.empty()||session.send_input(command);}
 bool send_key_event(SessionSupervisor&session,HeldInputState&held,unsigned long&generation,int scancode,bool down,bool&run,bool&release_capture){
     sync_generation(session,held,generation);
-    const int code=linux_keycode_from_sdl_scancode(scancode);
+    const int code=static_cast<int>(wire_keycode_from_sdl_scancode(scancode));
     if(code<=0)return true;
     if(down&&held.key_down(code))return true;
     if(!down&&!held.key_down(code))return true;
