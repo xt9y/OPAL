@@ -19,6 +19,7 @@ int main()
     assert(text.find("kVTVideoEncoderSpecification_EnableLowLatencyRateControl") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_RealTime") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_AllowFrameReordering") != std::string::npos);
+    assert(text.find("kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_AverageBitRate") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_ExpectedFrameRate") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_MaxKeyFrameInterval") == std::string::npos);
