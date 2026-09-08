@@ -28,7 +28,7 @@ The device must be authenticated into the same Tailnet as the other OPAL compute
 
 3. Clone OPAL.
 
-  git clone --branch cross-platform-macos https://github.com/xt9y/OPAL.git
+  git clone https://github.com/xt9y/OPAL.git
   cd OPAL
 
 4. Build and install.
@@ -43,11 +43,27 @@ The device must be authenticated into the same Tailnet as the other OPAL compute
   tailscale ip -4
   tailscale status
 
-6. First run.
+6. First run / Linux screen authorization.
 
   opal
 
-Choose "Host this computer" on the machine being controlled, or select/add the host on the client machine. For diagnostics:
+Choose "Host this computer" on the machine being controlled.
+
+On Wayland, OPAL asks:
+
+  Remember selected screens for automatic hosting? [Y/n]
+
+Answer Y to open the desktop screen-sharing chooser once. On KDE, select every monitor that OPAL should be allowed to share. The selection is stored through the XDG ScreenCast persistent restore token under ~/.opal and is reused by the long-lived host capture session.
+
+If multiple monitors are selected, OPAL captures all selected portal streams and presents them to the client as equal-width/equal-height tiles in one horizontal row. Mixed monitor resolutions are scaled to the same tile size. The finished combined desktop is encoded as one H.264 stream, so clients do not need a separate multi-monitor protocol.
+
+Normal bitrate changes, IDR/decode recovery, media sender restart, client reconnect and capture-stale recovery do not intentionally recreate the KDE ScreenCast portal session. They reuse the already-authorized persistent PipeWire capture session, so the monitor/window chooser should not reappear during an ordinary live session.
+
+If KDE/xdg-desktop-portal revokes or invalidates the stored authorization, OPAL reports that Linux screen authorization was lost instead of deliberately opening a new chooser from the media recovery path. Run host setup again to authorize screens again.
+
+Relative/raw mouse movement is unchanged. Absolute desktop pointer input is inverse-mapped through the combined monitor layout so clicks on each client tile target the corresponding physical KDE monitor correctly.
+
+For diagnostics:
 
   OPAL_DEBUG=1 opal
 
@@ -78,7 +94,7 @@ If you already use the normal Tailscale.app and it is signed in, OPAL also detec
 
 3. Clone OPAL.
 
-  git clone --branch cross-platform-macos https://github.com/xt9y/OPAL.git
+  git clone https://github.com/xt9y/OPAL.git
   cd OPAL
 
 4. One-step build/sign/install.
@@ -149,9 +165,9 @@ If OPAL says Tailscale is installed but disconnected:
 If OPAL cannot find a host on Tailscale, verify that both machines have 100.x addresses and appear in each other's tailscale status output before debugging OPAL itself.
 
 Linux host
-  capture   --> PipeWire + libportal + xdg-desktop-portal
+  capture   --> persistent PipeWire + libportal + xdg-desktop-portal, multi-monitor composition
   encode    --> persistent in-process FFmpeg/hardware H.264 path
-  input     --> /dev/uinput
+  input     --> /dev/uinput with combined-desktop absolute pointer mapping
   clipboard --> wl-clipboard on Wayland, SDL fallback elsewhere
   audio     --> PipeWire/PulseAudio-compatible source
   UDP       --> sendmmsg/recvmmsg batching
@@ -168,7 +184,7 @@ macOS host
 client
   window/events/input/audio output --> SDL3
   H.264 decode                     --> libavcodec
-  presentation                    --> SDL3
+  presentation                     --> SDL3
   macOS clipboard                 --> NSPasteboard
 
 network
