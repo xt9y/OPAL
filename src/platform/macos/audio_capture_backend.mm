@@ -1,6 +1,7 @@
 #include <opal/audio_capture_backend.hpp>
 
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <AudioToolbox/AudioToolbox.h>
 
@@ -61,6 +62,16 @@ AVSampleFormat pcm_format(const AudioStreamBasicDescription& asbd)
     }
     return AV_SAMPLE_FMT_NONE;
 }
+
+SCDisplay* retain_main_display(SCShareableContent* shareable)
+{
+    if (!shareable || shareable.displays.count == 0) return nil;
+    const CGDirectDisplayID main_id = CGMainDisplayID();
+    for (SCDisplay* candidate in shareable.displays) {
+        if (candidate.displayID == main_id) return [candidate retain];
+    }
+    return [shareable.displays.firstObject retain];
+}
 }
 }
 
@@ -112,7 +123,7 @@ public:
             return false;
         }
 
-        SCDisplay* display = [shareable.displays.firstObject retain];
+        SCDisplay* display = retain_main_display(shareable);
         [share_error release];
         [shareable release];
         if (!display) {
