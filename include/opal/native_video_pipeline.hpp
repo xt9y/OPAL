@@ -28,6 +28,7 @@ public:
     CaptureTimestampQuality timestamp_quality() const;
     std::string backend_name() const;
     PlatformError last_platform_error() const;
+    bool ended() const noexcept;
 
 private:
     std::unique_ptr<CaptureBackend> capture_;
@@ -35,6 +36,7 @@ private:
     MediaConfig config_{};
     std::uint64_t config_revision_ = 0;
     bool running_ = false;
+    bool terminal_ = false;
 };
 
 }
