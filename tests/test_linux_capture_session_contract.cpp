@@ -20,6 +20,11 @@ int main()
     assert(source.find("XDP_SCREENCAST_FLAG_MULTIPLE") != std::string::npos);
     assert(source.find("g_variant_n_children(streams)") != std::string::npos);
     assert(source.find("for (gsize i = 0; i < stream_count; ++i)") != std::string::npos);
+    assert(source.find("pipewire-serial") != std::string::npos);
+    assert(source.find("PW_KEY_TARGET_OBJECT") != std::string::npos);
+    assert(source.find("std::atomic<bool> started_") != std::string::npos);
+    assert(source.find("std::atomic<bool> failed_") != std::string::npos);
+    assert(source.find("std::atomic<bool> authorization_lost_") != std::string::npos);
     assert(source.find("portal-session.token.tmp") == std::string::npos);
     assert(source.find("rename(temp.c_str(), path.c_str())") != std::string::npos);
     assert(source.find("fsync(fd)") != std::string::npos);
