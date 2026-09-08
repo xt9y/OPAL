@@ -22,11 +22,19 @@ Linux build
 macOS install
 
 Apple Silicon, macOS 13+:
-  brew install pkg-config sdl3 openssl@3 ffmpeg
+  xcode-select --install
+  brew install make pkg-config sdl3 openssl@3 ffmpeg
 
-macOS build
-  make -j"$(sysctl -n hw.ncpu)"
-  sudo make macos-install
+Apple's /usr/bin/make is GNU Make 3.81 and is too old for OPAL's .ONESHELL build.
+Use Homebrew GNU Make as gmake.
+
+macOS build/sign
+  gmake -j"$(sysctl -n hw.ncpu)"
+
+macOS install
+  sudo /opt/homebrew/bin/gmake macos-install
+
+The normal macOS build embeds stable Info.plist identities and ScreenCaptureKit privacy descriptions into the single-file binaries, then ad-hoc signs them as the logged-in user. macos-install only copies/verifies those already-signed binaries; it does not rebuild or sign under sudo.
 
 macOS host setup
   run opal and choose "Host this computer"
@@ -76,7 +84,7 @@ network
 
 verify
   Linux  --> make test && make test-hpi
-  macOS  --> make macos-test && opal doctor
+  macOS  --> gmake macos-test && opal doctor
 
   host   --> OPAL_DEBUG=1 opal
   client --> OPAL_DEBUG=1 opal <connection-code>
