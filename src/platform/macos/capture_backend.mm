@@ -104,7 +104,9 @@ public:
             share_error = [error retain];
             dispatch_semaphore_signal(content_sem);
         }];
-        if (dispatch_semaphore_wait(content_sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
+        const bool content_timeout = dispatch_semaphore_wait(content_sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0;
+        if (!content_timeout) dispatch_release(content_sem);
+        if (content_timeout) {
             error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                       "ScreenCaptureKit shareable-content request timed out", false};
             return false;
@@ -167,7 +169,9 @@ public:
             start_error = [error retain];
             dispatch_semaphore_signal(start_sem);
         }];
-        if (dispatch_semaphore_wait(start_sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
+        const bool start_timeout = dispatch_semaphore_wait(start_sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0;
+        if (!start_timeout) dispatch_release(start_sem);
+        if (start_timeout) {
             error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                       "ScreenCaptureKit start timed out", false};
             stop();
@@ -210,16 +214,20 @@ public:
         if (stream_) {
             dispatch_semaphore_t stop_sem = dispatch_semaphore_create(0);
             [stream_ stopCaptureWithCompletionHandler:^(NSError *) { dispatch_semaphore_signal(stop_sem); }];
-            (void)dispatch_semaphore_wait(stop_sem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+            const bool stop_timeout = dispatch_semaphore_wait(stop_sem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0;
+            if (!stop_timeout) dispatch_release(stop_sem);
             if (output_) {
                 NSError *remove_error = nil;
                 (void)[stream_ removeStreamOutput:output_ type:SCStreamOutputTypeScreen error:&remove_error];
             }
         }
-        if (queue_) dispatch_sync(queue_, ^{});
+        if (queue_) {
+            dispatch_sync(queue_, ^{});
+            dispatch_release(queue_);
+            queue_ = nullptr;
+        }
         [stream_ release]; stream_ = nil;
         [output_ release]; output_ = nil;
-        queue_ = nullptr;
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
     }
 
