@@ -82,19 +82,6 @@ struct VideoCapture::Impl {
         return true;
     }
 
-    bool poll(EncodedMediaView& view, int video_wait_ms)
-    {
-        // Audio must get a nonblocking service opportunity before waiting for the
-        // next video frame. Otherwise a continuously available 60/120/240 Hz
-        // video source can starve AAC indefinitely. Video capture itself is
-        // latest-only, so servicing audio first cannot create video backlog.
-        storage = {};
-        if (audio && audio->next(storage, 0)) return make_view(view);
-        storage = {};
-        if (video && video->next(storage, video_wait_ms)) return make_view(view);
-        return false;
-    }
-
     void capture_error()
     {
         if (video) {
@@ -105,6 +92,36 @@ struct VideoCapture::Impl {
             const auto e = audio->last_platform_error();
             if (e) error = e.message;
         }
+    }
+
+    void mark_terminal(std::string message = {})
+    {
+        if (!message.empty()) error = std::move(message);
+        if (error.empty()) capture_error();
+        terminal = true;
+        running = false;
+    }
+
+    bool poll(EncodedMediaView& view, int video_wait_ms)
+    {
+        // Audio must get a nonblocking service opportunity before waiting for the
+        // next video frame. Otherwise a continuously available 60/120/240 Hz
+        // video source can starve AAC indefinitely. Video capture itself is
+        // latest-only, so servicing audio first cannot create video backlog.
+        storage = {};
+        if (audio) {
+            if (audio->next(storage, 0)) return make_view(view);
+            const auto audio_error = audio->last_platform_error();
+            if (audio_error) {
+                mark_terminal(audio_error.message);
+                return false;
+            }
+        }
+
+        storage = {};
+        if (video && video->next(storage, video_wait_ms)) return make_view(view);
+        if (video && video->ended()) mark_terminal();
+        return false;
     }
 };
 
@@ -161,10 +178,10 @@ bool VideoCapture::next_view(EncodedMediaView& unit, int timeout_ms)
     if (!impl_ || !impl_->running || !impl_->video) return false;
     impl_->sync_configs();
     if (impl_->poll(unit, 0)) return true;
-    if (timeout_ms <= 0) return false;
+    if (impl_->terminal || timeout_ms <= 0) return false;
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (std::chrono::steady_clock::now() < deadline && impl_->running && !impl_->terminal) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - std::chrono::steady_clock::now()).count();
         const int wait_ms = std::max(1, std::min<int>(5, static_cast<int>(remaining)));
@@ -187,14 +204,17 @@ bool VideoCapture::next(EncodedMediaUnit& unit, int timeout_ms)
 
 bool VideoCapture::request_idr()
 {
-    if (!impl_ || !impl_->running || !impl_->video) return false;
+    if (!impl_ || !impl_->running || impl_->terminal || !impl_->video) return false;
     impl_->video->request_idr();
-    return true;
+    return !impl_->video->ended();
 }
 
 bool VideoCapture::set_bitrate(int bitrate_kbps)
 {
-    return impl_ && impl_->running && impl_->video && impl_->video->set_bitrate(bitrate_kbps);
+    if (!impl_ || !impl_->running || impl_->terminal || !impl_->video) return false;
+    const bool ok = impl_->video->set_bitrate(bitrate_kbps);
+    if (!ok && impl_->video->ended()) impl_->mark_terminal();
+    return ok;
 }
 
 bool VideoCapture::ended() const
