@@ -22,6 +22,7 @@ int main()
     assert(text.find("kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_AverageBitRate") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_ExpectedFrameRate") != std::string::npos);
+    assert(text.find("const std::int32_t frame_delay = 0") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_MaxKeyFrameInterval") == std::string::npos);
     assert(text.find("kVTEncodeFrameOptionKey_ForceKeyFrame") != std::string::npos);
     assert(text.find("CMVideoFormatDescriptionGetH264ParameterSetAtIndex") != std::string::npos);
