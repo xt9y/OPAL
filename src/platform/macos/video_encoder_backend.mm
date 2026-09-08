@@ -7,10 +7,13 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -101,7 +104,9 @@ bool sample_to_annexb(CMSampleBufferRef sample, std::size_t nal_length_size, std
 }
 
 struct EncodeRequest {
-    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool completed = false;
     OSStatus status = noErr;
     bool ok = false;
     EncodedMediaUnit unit{};
@@ -164,49 +169,58 @@ public:
         const OSStatus status = VTCompressionSessionEncodeFrameWithOutputHandler(
             session_, pixel, pts, duration, frame_properties, &flags,
             ^(OSStatus output_status, VTEncodeInfoFlags output_flags, CMSampleBufferRef sample) {
-                request->status = output_status;
-                std::size_t nal_length = current_nal_length_size;
-                if (output_status == noErr && !(output_flags & kVTEncodeInfo_FrameDropped) && sample) {
-                    if (need_config) {
-                        MediaConfig discovered;
-                        if (append_parameter_sets(CMSampleBufferGetFormatDescription(sample), discovered, nal_length)) {
-                            request->discovered_config = std::move(discovered);
-                            request->discovered_nal_length_size = nal_length;
+                {
+                    std::lock_guard<std::mutex> lock(request->mutex);
+                    request->status = output_status;
+                    std::size_t nal_length = current_nal_length_size;
+                    if (output_status == noErr && !(output_flags & kVTEncodeInfo_FrameDropped) && sample) {
+                        if (need_config) {
+                            MediaConfig discovered;
+                            if (append_parameter_sets(CMSampleBufferGetFormatDescription(sample), discovered, nal_length)) {
+                                request->discovered_config = std::move(discovered);
+                                request->discovered_nal_length_size = nal_length;
+                            }
                         }
+                        request->unit.kind = MediaKind::VideoH264;
+                        request->unit.pts_us = static_cast<std::int64_t>((index * 1000000ULL) / static_cast<std::uint64_t>(fps));
+                        request->unit.capture_time_us = capture_time_us;
+                        request->unit.keyframe = keyframe_sample(sample);
+                        request->ok = sample_to_annexb(sample, nal_length, request->unit.data);
                     }
-                    request->unit.kind = MediaKind::VideoH264;
-                    request->unit.pts_us = static_cast<std::int64_t>((index * 1000000ULL) / static_cast<std::uint64_t>(fps));
-                    request->unit.capture_time_us = capture_time_us;
-                    request->unit.keyframe = keyframe_sample(sample);
-                    request->ok = sample_to_annexb(sample, nal_length, request->unit.data);
+                    request->pixel_owner.reset();
+                    request->completed = true;
                 }
-                request->pixel_owner.reset();
-                dispatch_semaphore_signal(request->done);
+                request->ready.notify_one();
             });
         if (frame_properties) CFRelease(frame_properties);
         if (status != noErr) {
+            std::lock_guard<std::mutex> lock(request->mutex);
             request->pixel_owner.reset();
             error_ = vt_error(status, "VTCompressionSessionEncodeFrame failed");
             return false;
         }
-        if (dispatch_semaphore_wait(request->done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0) {
-            error_ = {PlatformComponent::Encoder, PlatformFailure::Unavailable,
-                      "VideoToolbox encode callback timed out", true};
-            invalidate_session();
-            return false;
+        {
+            std::unique_lock<std::mutex> lock(request->mutex);
+            if (!request->ready.wait_for(lock, std::chrono::seconds(2), [&]{ return request->completed; })) {
+                error_ = {PlatformComponent::Encoder, PlatformFailure::Unavailable,
+                          "VideoToolbox encode callback timed out", true};
+                lock.unlock();
+                invalidate_session();
+                return false;
+            }
+            if (!request->ok) {
+                error_ = request->status == noErr
+                    ? PlatformError{PlatformComponent::Encoder, PlatformFailure::Unavailable,
+                                    "VideoToolbox returned no usable H.264 access unit", true}
+                    : vt_error(request->status, "VideoToolbox output callback failed");
+                return false;
+            }
+            if (!request->discovered_config.extradata.empty()) {
+                config_ = std::move(request->discovered_config);
+                nal_length_size_ = request->discovered_nal_length_size;
+            }
+            unit = std::move(request->unit);
         }
-        if (!request->ok) {
-            error_ = request->status == noErr
-                ? PlatformError{PlatformComponent::Encoder, PlatformFailure::Unavailable,
-                                "VideoToolbox returned no usable H.264 access unit", true}
-                : vt_error(request->status, "VideoToolbox output callback failed");
-            return false;
-        }
-        if (!request->discovered_config.extradata.empty()) {
-            config_ = std::move(request->discovered_config);
-            nal_length_size_ = request->discovered_nal_length_size;
-        }
-        unit = std::move(request->unit);
         return true;
     }
 
