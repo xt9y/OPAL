@@ -24,6 +24,11 @@ int main()
     assert(text.find("queueDepth = 3") != std::string::npos);
     assert(text.find("latest_ = std::move(frame)") != std::string::npos);
     assert(text.find("kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange") != std::string::npos);
+    assert(text.find("SCStreamFrameInfoDisplayTime") != std::string::npos);
+    assert(text.find("mach_absolute_time") != std::string::npos);
+    assert(text.find("mach_timebase_info") != std::string::npos);
+    assert(text.find("CaptureTimestampQuality::Exact") != std::string::npos);
+    assert(text.find("anchor_pts_") == std::string::npos);
     assert(text.find("PermissionDenied") != std::string::npos);
     return 0;
 }
