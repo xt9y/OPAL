@@ -35,7 +35,9 @@ macOS permission-free verification
   gmake macos-verify
 
 macOS install
-  sudo /opt/homebrew/bin/gmake macos-install
+  gmake macos-install
+
+Run gmake as your normal user. macos-install invokes sudo only for copying into /usr/local. This keeps Homebrew discovery and code signing outside a root process.
 
 The normal macOS build embeds stable Info.plist identities and ScreenCaptureKit privacy descriptions into the single-file binaries, then ad-hoc signs them as the logged-in user. macos-install only copies/verifies those already-signed binaries; it does not rebuild or sign under sudo.
 
@@ -71,7 +73,7 @@ Linux host
 macOS host
   capture   --> ScreenCaptureKit, latest-frame CVPixelBuffer path with WindowServer display timestamps
   encode    --> persistent hardware VideoToolbox H.264 low-latency rate control, zero frame delay, on-demand IDR
-  input     --> CGEvent through Accessibility-authorized opal-input
+  input     --> CGEvent through Accessibility-authorized opal-input, spawned with posix_spawn
   clipboard --> NSPasteboard
   audio     --> ScreenCaptureKit system audio + persistent in-process AAC using the stream synchronization clock
   service   --> per-user launchd LaunchAgent
