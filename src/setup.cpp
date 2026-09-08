@@ -2,6 +2,7 @@
 #include <opal/client.hpp>
 #include <opal/config.hpp>
 #include <opal/host.hpp>
+#include <opal/platform.hpp>
 #include <opal/rendezvous_protocol.hpp>
 #include <opal/system.hpp>
 #include <opal/wake.hpp>
@@ -23,12 +24,12 @@ std::string detect_mac(){std::error_code ec;for(const auto &entry:std::filesyste
 void configure_host_wol(){auto p=Paths::load();Ini host;host.load(p.host);host.set("host","wol","true");auto mac=detect_mac();if(!mac.empty())host.set("host","mac",mac);host.save(p.host);std::cout<<"Wake-on-LAN enabled in OPAL";if(!mac.empty())std::cout<<" (MAC "<<mac<<")";std::cout<<". Ensure WoL is enabled in firmware/NIC settings.\n";}
 void prepare_tailnet(){if(ensure_tailnet()!=0)std::cerr<<"OPAL Tailscale WAN unavailable; continuing with LAN/direct fallback.\n";}
 int connect_default(const Ini &cfg,const StreamOptions &stream){auto name=cfg.get("opal","default_host");if(name.empty())return-1;auto p=Paths::load();Ini hosts;hosts.load(p.hosts);if(!hosts.get(name,"mac").empty()){std::cout<<"Waking "<<name<<"...\n";(void)wake_named(name);}std::cout<<"Connecting to "<<name<<"...\n";return client_connect(name,"",stream);}
-int ensure_host_service(){if(host_service(true)!=0){std::cerr<<"Could not start OPAL host service. Run 'systemctl --user status opal-host.service'.\n";return 1;}std::cout<<"OPAL host service running.\n";return 0;}
+int ensure_host_service(){if(host_service(true)!=0){std::cerr<<"Could not start OPAL host service. Run 'opal doctor' for platform diagnostics.\n";return 1;}std::cout<<"OPAL host service running.\n";return 0;}
 
 int first_setup(const StreamOptions &stream={}){
     prepare_tailnet();
     std::cout<<"OPAL SETUP\n--------------------------------\n1  Host this computer\n2  Connect to another computer\n3  Quit\n> ";std::string choice;if(!std::getline(std::cin,choice))return 0;choice=trim(choice);
-    if(choice=="1"){if(init()!=0||host_setup()!=0)return 1;if(!save_role("host"))return 1;if(ask_yes_no("Enable Wake-on-LAN support? [Y/n] ",true))configure_host_wol();return ensure_host_service();}
+    if(choice=="1"){if(init()!=0||host_setup()!=0)return 1;if(!save_role("host"))return 1;if(current_platform()==PlatformKind::Linux&&ask_yes_no("Enable Wake-on-LAN support? [Y/n] ",true))configure_host_wol();return ensure_host_service();}
     if(choice=="2"){if(init()!=0)return 1;auto code=read_line("OPAL connection code: ");std::string id;if(!parse_connection_code(code,id)){std::cerr<<"Invalid OPAL connection code. Expected: XXXX-XXXX-XXXX\n";return 2;}auto name=read_line("Save as [desktop]: ","desktop");if(hosts_add(name,code)!=0||!save_role("client",name))return 1;return client_connect(name,"",stream);}return 0;
 }
 }
