@@ -28,6 +28,7 @@ MACOS_VIDEO_SRCS := \
 	src/platform/macos/audio_capture_backend.mm
 
 MACOS_PLATFORM_SRCS := \
+	src/platform/macos/host.cpp \
 	src/platform/macos/system_backend.mm \
 	src/platform/macos/clipboard_shim.mm \
 	$(MACOS_VIDEO_SRCS)
@@ -37,7 +38,7 @@ MACOS_INPUT_SRC := src/platform/macos/input_helper.mm
 
 VIDEO_CAPTURE_SRCS := $(MACOS_VIDEO_SRCS)
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
-APP_SRCS := $(filter-out src/system.cpp src/video_capture.cpp,$(APP_SRCS))
+APP_SRCS := $(filter-out src/host.cpp src/system.cpp src/video_capture.cpp,$(APP_SRCS))
 APP_SRCS += $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
 
 MACOS_FFMPEG_LIBS := $(AVLIBS) $(SWRLIBS)
@@ -57,9 +58,10 @@ macos-install: macos-all
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
 	$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 
-macos-test: test-platform-contract test-cross-platform-architecture test-native-video-pipeline \
-	test-audio-capture-backend test-macos-clipboard-contract test-macos-capture-contract \
-	test-macos-videotoolbox-contract test-udp-batch-contract test-input test-udp-transport \
+macos-test: test-platform-contract test-cross-platform-architecture test-platform-build-contract \
+	test-native-video-pipeline test-audio-capture-backend test-macos-clipboard-contract \
+	test-macos-capture-contract test-macos-videotoolbox-contract test-macos-audio-contract \
+	test-macos-host-permission-contract test-udp-batch-contract test-input test-udp-transport \
 	test-video-capture test-video-packet test-video-reassembly test-video-feedback \
 	test-session-packet test-reliable-control test-peer-handshake test-peer-session
 
