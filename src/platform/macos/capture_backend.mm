@@ -67,8 +67,9 @@ SCDisplay *retain_main_display(SCShareableContent *shareable)
 }
 
 static void opal_screen_capture_accept(void *owner, CMSampleBufferRef sample);
+static void opal_screen_capture_stopped(void *owner, NSError *error);
 
-@interface OpalScreenStreamOutput : NSObject <SCStreamOutput>
+@interface OpalScreenStreamOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, assign) void *owner;
 @end
 
@@ -77,6 +78,12 @@ static void opal_screen_capture_accept(void *owner, CMSampleBufferRef sample);
 {
     (void)stream;
     if (type == SCStreamOutputTypeScreen && self.owner) opal_screen_capture_accept(self.owner, sampleBuffer);
+}
+
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error
+{
+    (void)stream;
+    if (self.owner) opal_screen_capture_stopped(self.owner, error);
 }
 @end
 
@@ -90,8 +97,11 @@ public:
     bool start(const StreamOptions &stream) override
     {
         stop();
-        error_ = {};
-        timestamp_quality_ = CaptureTimestampQuality::Estimated;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            error_ = {};
+            timestamp_quality_ = CaptureTimestampQuality::Estimated;
+        }
         const int requested_fps = std::clamp(stream.fps, 15, 240);
 
         __block SCShareableContent *shareable = nil;
@@ -107,12 +117,16 @@ public:
         const bool content_timeout = dispatch_semaphore_wait(content_sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0;
         if (!content_timeout) dispatch_release(content_sem);
         if (content_timeout) {
+            std::lock_guard<std::mutex> lock(mu_);
             error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                       "ScreenCaptureKit shareable-content request timed out", false};
             return false;
         }
         if (share_error || !shareable || shareable.displays.count == 0) {
-            error_ = apple_error(PlatformComponent::Capture, share_error, "ScreenCaptureKit found no capturable display");
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                error_ = apple_error(PlatformComponent::Capture, share_error, "ScreenCaptureKit found no capturable display");
+            }
             [share_error release];
             [shareable release];
             return false;
@@ -122,6 +136,7 @@ public:
         [shareable release];
         [share_error release];
         if (!display) {
+            std::lock_guard<std::mutex> lock(mu_);
             error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable, "ScreenCaptureKit display unavailable", false};
             return false;
         }
@@ -152,13 +167,16 @@ public:
         output_ = [[OpalScreenStreamOutput alloc] init];
         output_.owner = this;
         queue_ = dispatch_queue_create("de.xt9y.opal.capture.video", DISPATCH_QUEUE_SERIAL);
-        stream_ = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:nil];
+        stream_ = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:output_];
         [filter release];
         [configuration release];
 
         NSError *add_error = nil;
         if (![stream_ addStreamOutput:output_ type:SCStreamOutputTypeScreen sampleHandlerQueue:queue_ error:&add_error]) {
-            error_ = apple_error(PlatformComponent::Capture, add_error, "ScreenCaptureKit could not attach screen output");
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                error_ = apple_error(PlatformComponent::Capture, add_error, "ScreenCaptureKit could not attach screen output");
+            }
             stop();
             return false;
         }
@@ -172,20 +190,29 @@ public:
         const bool start_timeout = dispatch_semaphore_wait(start_sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0;
         if (!start_timeout) dispatch_release(start_sem);
         if (start_timeout) {
-            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                      "ScreenCaptureKit start timed out", false};
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                          "ScreenCaptureKit start timed out", false};
+            }
             stop();
             return false;
         }
         if (start_error) {
-            error_ = apple_error(PlatformComponent::Capture, start_error, "ScreenCaptureKit failed to start");
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                error_ = apple_error(PlatformComponent::Capture, start_error, "ScreenCaptureKit failed to start");
+            }
             [start_error release];
             stop();
             return false;
         }
         [start_error release];
 
-        running_ = true;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            running_ = true;
+        }
         return true;
     }
 
@@ -228,12 +255,25 @@ public:
         }
         [stream_ release]; stream_ = nil;
         [output_ release]; output_ = nil;
-        timestamp_quality_ = CaptureTimestampQuality::Estimated;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            timestamp_quality_ = CaptureTimestampQuality::Estimated;
+        }
     }
 
-    CaptureTimestampQuality timestamp_quality() const override { return timestamp_quality_; }
+    CaptureTimestampQuality timestamp_quality() const override
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        return timestamp_quality_;
+    }
+
     std::string backend_name() const override { return "screencapturekit"; }
-    PlatformError last_platform_error() const override { return error_; }
+
+    PlatformError last_platform_error() const override
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        return error_;
+    }
 
     void accept(CMSampleBufferRef sample)
     {
@@ -286,6 +326,19 @@ public:
         cv_.notify_one();
     }
 
+    void stopped(NSError *error)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!running_) return;
+            error_ = apple_error(PlatformComponent::Capture, error, "ScreenCaptureKit stream stopped unexpectedly");
+            error_.fallback_possible = true;
+            running_ = false;
+            latest_ = {};
+        }
+        cv_.notify_all();
+    }
+
 private:
     mutable std::mutex mu_;
     std::condition_variable cv_;
@@ -310,4 +363,9 @@ std::unique_ptr<CaptureBackend> make_capture_backend()
 static void opal_screen_capture_accept(void *owner, CMSampleBufferRef sample)
 {
     static_cast<opal::MacCaptureBackend *>(owner)->accept(sample);
+}
+
+static void opal_screen_capture_stopped(void *owner, NSError *error)
+{
+    static_cast<opal::MacCaptureBackend *>(owner)->stopped(error);
 }
