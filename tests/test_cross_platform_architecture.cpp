@@ -57,6 +57,10 @@ int main()
     assert(tailnet_source.find("/Applications/Tailscale.app/Contents/MacOS/Tailscale") != std::string::npos);
     assert(tailnet_source.find("TAILSCALE_BE_CLI=1") != std::string::npos);
     assert(tailnet_source.find("OPAL_TAILSCALE_CLI") != std::string::npos);
+    assert(tailnet_source.find("tailscale_cli_candidates") != std::string::npos);
+    assert(tailnet_source.find("active_tailscale_cli_path") != std::string::npos);
+    assert(tailnet_source.find("first_tailnet_ipv4(read_command_text") != std::string::npos);
+    assert(tailnet_header.find("tailscale_connected()") != std::string::npos);
     assert(config_source.find("/Applications/Tailscale.app/Contents/MacOS/Tailscale") != std::string::npos);
     assert(macos_system.find("#include <opal/tailnet.hpp>") != std::string::npos);
     assert(macos_system.find("tailscale_cli_available()") != std::string::npos);
