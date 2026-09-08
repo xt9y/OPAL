@@ -1,5 +1,95 @@
 #import <CoreGraphics/CoreGraphics.h>
 
+#include <opal/media.hpp>
+
+#include <fcntl.h>
+#include <spawn.h>
+#include <string>
+#include <unistd.h>
+
+extern char **environ;
+
+namespace opal {
+
+// The host may already have SDL, ScreenCaptureKit and VideoToolbox threads when
+// the first remote input arrives. Avoid fork() in that multithreaded Cocoa
+// process; posix_spawn creates the same stdin pipe/process-group contract that
+// stop_sink()/write_sink_timeout() already expect.
+SinkProcess macos_start_sink(const std::string& command)
+{
+    if (command.empty()) return {};
+    int fds[2] = {-1, -1};
+    if (pipe(fds) != 0) return {};
+
+    const auto close_pair = [&] {
+        if (fds[0] >= 0) close(fds[0]);
+        if (fds[1] >= 0) close(fds[1]);
+        fds[0] = fds[1] = -1;
+    };
+    const auto set_cloexec = [](int fd) {
+        const int flags = fcntl(fd, F_GETFD, 0);
+        return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
+    };
+    if (!set_cloexec(fds[0]) || !set_cloexec(fds[1])) {
+        close_pair();
+        return {};
+    }
+
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        close_pair();
+        return {};
+    }
+    if (posix_spawnattr_init(&attributes) != 0) {
+        posix_spawn_file_actions_destroy(&actions);
+        close_pair();
+        return {};
+    }
+
+    bool configured = true;
+    configured = configured && posix_spawn_file_actions_adddup2(&actions, fds[0], STDIN_FILENO) == 0;
+    configured = configured && posix_spawn_file_actions_addclose(&actions, fds[0]) == 0;
+    configured = configured && posix_spawn_file_actions_addclose(&actions, fds[1]) == 0;
+    configured = configured && posix_spawnattr_setpgroup(&attributes, 0) == 0;
+    configured = configured && posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP) == 0;
+
+    pid_t pid = -1;
+    int spawn_error = -1;
+    if (configured) {
+        char* const argv[] = {
+            const_cast<char*>("sh"),
+            const_cast<char*>("-c"),
+            const_cast<char*>(command.c_str()),
+            nullptr
+        };
+        spawn_error = posix_spawn(&pid, "/bin/sh", &actions, &attributes, argv, environ);
+    }
+
+    posix_spawnattr_destroy(&attributes);
+    posix_spawn_file_actions_destroy(&actions);
+    if (!configured || spawn_error != 0 || pid <= 0) {
+        close_pair();
+        return {};
+    }
+
+    close(fds[0]);
+    fds[0] = -1;
+    const int flags = fcntl(fds[1], F_GETFL, 0);
+    if (flags < 0 || fcntl(fds[1], F_SETFL, flags | O_NONBLOCK) != 0) {
+        close(fds[1]);
+        fds[1] = -1;
+        (void)kill(-pid, SIGTERM);
+        return {};
+    }
+
+    const bool compact_input = command.find("opal-input") != std::string::npos;
+    return {pid, fds[1], compact_input};
+}
+
+}
+
+#define start_sink macos_start_sink
 #define host_setup macos_host_setup_impl
 #define host_run macos_host_run_impl
 #define host_daemon macos_host_daemon_impl
@@ -7,6 +97,7 @@
 #undef host_setup
 #undef host_run
 #undef host_daemon
+#undef start_sink
 
 namespace opal {
 namespace {
