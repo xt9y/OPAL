@@ -68,16 +68,12 @@ int main()
     assert(macos_system.find("Tailscale is installed but not connected") != std::string::npos);
     assert(macos_system.find("command_exists(\"tailscale\")") == std::string::npos);
 
-    const auto host = read_all("src/host.cpp");
-    assert(host.find("#if defined(__linux__)\n#include <opal/pipewire_capture.hpp>\n#endif") != std::string::npos);
-    const auto remap = host.find("std::string remap_pointer_line");
-    assert(remap != std::string::npos);
-    const auto input_send = host.find("bool input_send", remap);
-    assert(input_send != std::string::npos);
-    const auto remap_body = host.substr(remap, input_send - remap);
-    assert(remap_body.find("#if defined(__linux__)") != std::string::npos);
-    assert(remap_body.find("native_pipewire_layout()") != std::string::npos);
-    assert(remap_body.find("#else\n    return line;\n#endif") != std::string::npos);
+    const auto pipewire_header = read_all("include/opal/pipewire_capture.hpp");
+    assert(pipewire_header.find("#if defined(__linux__)") != std::string::npos);
+    assert(pipewire_header.find("#else\ninline bool native_pipewire_prepare") != std::string::npos);
+    assert(pipewire_header.find("inline CompositeLayout native_pipewire_layout()") != std::string::npos);
+    assert(pipewire_header.find("inline bool native_pipewire_authorization_lost()") != std::string::npos);
+    assert(pipewire_header.find("inline std::string native_pipewire_last_error()") != std::string::npos);
 
     const auto wake = read_all("src/wake.cpp");
     assert(wake.find("SOCK_DGRAM|SOCK_CLOEXEC") == std::string::npos);
