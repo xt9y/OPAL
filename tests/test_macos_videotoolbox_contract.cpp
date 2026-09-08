@@ -23,6 +23,9 @@ int main()
     assert(text.find("kVTEncodeFrameOptionKey_ForceKeyFrame") != std::string::npos);
     assert(text.find("CMVideoFormatDescriptionGetH264ParameterSetAtIndex") != std::string::npos);
     assert(text.find("std::shared_ptr<void> pixel_owner") != std::string::npos);
+    assert(text.find("std::condition_variable ready") != std::string::npos);
+    assert(text.find("ready.wait_for") != std::string::npos);
+    assert(text.find("dispatch_semaphore_create(0)") == std::string::npos);
     assert(text.find("force_idr_.exchange") != std::string::npos);
     assert(text.find("VTCompressionSessionInvalidate") != std::string::npos);
     assert(text.find("ffmpeg") == std::string::npos);
