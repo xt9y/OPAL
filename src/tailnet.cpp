@@ -69,8 +69,6 @@ std::string tailscale_command(std::string_view arguments)
 {
     const auto executable = tailscale_cli_path();
     if (executable.empty()) return {};
-    // The macOS .app binary doubles as GUI and CLI. Tailscale documents this
-    // environment variable as the deterministic way for scripts to force CLI mode.
     return "TAILSCALE_BE_CLI=1 " + shell_quote(executable) + " " + std::string(arguments) + " 2>/dev/null";
 }
 
@@ -82,6 +80,11 @@ std::string first_tailnet_ipv4(const std::string& text)
     return {};
 }
 
+}
+
+bool tailscale_cli_available()
+{
+    return !tailscale_cli_path().empty();
 }
 
 std::vector<std::string> tailnet_peer_ipv4s()
