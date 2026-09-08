@@ -72,6 +72,20 @@ SCDisplay* retain_main_display(SCShareableContent* shareable)
     }
     return [shareable.displays.firstObject retain];
 }
+
+std::uint64_t stream_capture_time_us(SCStream* stream, CMTime pts, std::uint64_t callback_us)
+{
+    if (!stream || !CMTIME_IS_VALID(pts) || CMTIME_IS_INDEFINITE(pts)) return callback_us;
+    CMClockRef synchronization_clock = [stream synchronizationClock];
+    if (!synchronization_clock) return callback_us;
+    const CMTime clock_now = CMClockGetTime(synchronization_clock);
+    if (!CMTIME_IS_VALID(clock_now) || CMTIME_IS_INDEFINITE(clock_now)) return callback_us;
+    const double age_seconds = CMTimeGetSeconds(CMTimeSubtract(clock_now, pts));
+    if (!std::isfinite(age_seconds) || age_seconds < 0.0) return callback_us;
+    const long double age_us_value = static_cast<long double>(age_seconds) * 1000000.0L;
+    if (age_us_value > static_cast<long double>(callback_us)) return callback_us;
+    return callback_us - static_cast<std::uint64_t>(std::llround(age_us_value));
+}
 }
 }
 
@@ -239,9 +253,6 @@ public:
         config_revision_ = 0;
         fifo_capture_us_ = 0;
         samples_encoded_ = 0;
-        audio_anchor_valid_ = false;
-        audio_anchor_pts_ = kCMTimeInvalid;
-        audio_anchor_us_ = 0;
     }
 
     MediaConfig config() const override { return config_; }
@@ -366,17 +377,8 @@ private:
         }
 
         const CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
-        const auto now_us = monotonic_us();
-        std::uint64_t sample_capture_us = now_us;
-        if (CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts) && !audio_anchor_valid_) {
-            audio_anchor_valid_ = true;
-            audio_anchor_pts_ = pts;
-            audio_anchor_us_ = now_us;
-        } else if (audio_anchor_valid_ && CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts)) {
-            const double seconds = CMTimeGetSeconds(CMTimeSubtract(pts, audio_anchor_pts_));
-            if (std::isfinite(seconds) && seconds >= 0.0)
-                sample_capture_us = audio_anchor_us_ + static_cast<std::uint64_t>(seconds * 1000000.0);
-        }
+        const auto callback_us = monotonic_us();
+        const std::uint64_t sample_capture_us = stream_capture_time_us(stream_, pts, callback_us);
 
         size_t list_size = 0;
         if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sample, &list_size, nullptr, 0,
@@ -479,9 +481,6 @@ private:
     std::uint64_t config_revision_ = 0;
     std::uint64_t samples_encoded_ = 0;
     std::uint64_t fifo_capture_us_ = 0;
-    bool audio_anchor_valid_ = false;
-    CMTime audio_anchor_pts_ = kCMTimeInvalid;
-    std::uint64_t audio_anchor_us_ = 0;
     PlatformError error_{};
 };
 
