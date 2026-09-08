@@ -67,5 +67,6 @@ grep -q '<string>de.xt9y.opal.input</string>' platform/macos/InputHelper-Info.pl
 ! grep -q 'libportal' "$tmp/macos"
 ! grep -q 'src/input_helper.cpp' "$tmp/macos"
 ! grep -q '70-opal-uinput.rules' "$tmp/macos"
+! grep -Fq 'return {}}' src/local_discovery.cpp
 
 echo 'platform build contract passed'
