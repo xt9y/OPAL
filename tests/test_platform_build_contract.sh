@@ -11,9 +11,11 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 "$make_bin" -Bn OPAL_OS=linux build/opal >"$tmp/linux"
 "$make_bin" -Bn OPAL_OS=macos macos-all >"$tmp/macos"
 
+grep -q 'src/tailnet.cpp' "$tmp/linux"
 grep -q 'src/pipewire_capture.cpp' "$tmp/linux"
 grep -q 'src/input_helper.cpp' "$tmp/linux" || true
 
+grep -q 'src/tailnet.cpp' "$tmp/macos"
 grep -q 'src/platform/macos/host.cpp' "$tmp/macos"
 grep -q 'src/platform/macos/system_backend.mm' "$tmp/macos"
 grep -q 'src/platform/macos/capture_backend.mm' "$tmp/macos"
