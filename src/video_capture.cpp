@@ -123,6 +123,8 @@ bool VideoCapture::next_view(EncodedMediaView&unit,int timeout_ms){
 }
 
 bool VideoCapture::next(EncodedMediaUnit&unit,int timeout_ms){EncodedMediaView view;if(!next_view(view,timeout_ms))return false;unit.kind=view.kind;unit.data.clear();unit.data.assign(view.data.begin(),view.data.end());unit.pts_us=view.pts_us;unit.capture_time_us=view.capture_time_us;unit.keyframe=view.keyframe;return !unit.data.empty();}
+bool VideoCapture::request_idr(){return false;}
+bool VideoCapture::set_bitrate(int){return false;}
 
 bool VideoCapture::ended()const{return impl_&&impl_->terminal;}
 const std::vector<MediaConfig>&VideoCapture::configs()const{static const std::vector<MediaConfig>empty;if(impl_&&impl_->native_active)impl_->sync_native_config();return impl_?impl_->configs:empty;}
