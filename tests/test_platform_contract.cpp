@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include <opal/input_wire.hpp>
 #include <opal/platform.hpp>
@@ -28,6 +29,11 @@ int main()
     static_assert(opal::wire_key::RightAlt == 100);
     static_assert(opal::wire_key::LeftMeta == 125);
     static_assert(opal::wire_key::RightMeta == 126);
+
+    static_assert(opal::platform_component_name(opal::PlatformComponent::Capture) == std::string_view("capture"));
+    static_assert(opal::platform_component_name(opal::PlatformComponent::AudioCapture) == std::string_view("audio-capture"));
+    static_assert(opal::platform_failure_name(opal::PlatformFailure::PermissionDenied) == std::string_view("permission-denied"));
+    static_assert(opal::platform_failure_name(opal::PlatformFailure::DependencyMissing) == std::string_view("dependency-missing"));
 
     opal::PlatformError error{};
     assert(!error);
