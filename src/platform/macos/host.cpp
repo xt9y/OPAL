@@ -12,9 +12,9 @@ extern char **environ;
 namespace opal {
 
 // The host may already have SDL, ScreenCaptureKit and VideoToolbox threads when
-// the first remote input arrives. Avoid fork() in that multithreaded Cocoa
-// process; posix_spawn creates the same stdin pipe/process-group contract that
-// stop_sink()/write_sink_timeout() already expect.
+// the first remote input arrives. Avoid raw process cloning in that
+// multithreaded Cocoa process; posix_spawn creates the same stdin pipe/process-
+// group contract that stop_sink()/write_sink_timeout() already expect.
 SinkProcess macos_start_sink(const std::string& command)
 {
     if (command.empty()) return {};
@@ -31,6 +31,11 @@ SinkProcess macos_start_sink(const std::string& command)
         return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
     };
     if (!set_cloexec(fds[0]) || !set_cloexec(fds[1])) {
+        close_pair();
+        return {};
+    }
+    const int write_flags = fcntl(fds[1], F_GETFL, 0);
+    if (write_flags < 0 || fcntl(fds[1], F_SETFL, write_flags | O_NONBLOCK) != 0) {
         close_pair();
         return {};
     }
@@ -75,14 +80,6 @@ SinkProcess macos_start_sink(const std::string& command)
 
     close(fds[0]);
     fds[0] = -1;
-    const int flags = fcntl(fds[1], F_GETFL, 0);
-    if (flags < 0 || fcntl(fds[1], F_SETFL, flags | O_NONBLOCK) != 0) {
-        close(fds[1]);
-        fds[1] = -1;
-        (void)kill(-pid, SIGTERM);
-        return {};
-    }
-
     const bool compact_input = command.find("opal-input") != std::string::npos;
     return {pid, fds[1], compact_input};
 }
