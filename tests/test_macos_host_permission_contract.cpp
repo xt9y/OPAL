@@ -24,6 +24,11 @@ int main()
     assert(host.find("Accessibility permission") != std::string::npos);
     assert(host.find("macos_host_setup_impl") != std::string::npos);
     assert(host.find("macos_host_run_impl") != std::string::npos);
+    assert(host.find("posix_spawn") != std::string::npos);
+    assert(host.find("POSIX_SPAWN_SETPGROUP") != std::string::npos);
+    assert(host.find("#define start_sink macos_start_sink") != std::string::npos);
+    assert(host.find("#undef start_sink") != std::string::npos);
+    assert(host.find("fork()") == std::string::npos);
 
     const auto helper = read_all("src/platform/macos/input_helper.mm");
     assert(helper.find("--request-access") != std::string::npos);
