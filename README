@@ -28,6 +28,13 @@ macOS build
   make -j"$(sysctl -n hw.ncpu)"
   sudo make macos-install
 
+macOS host setup
+  run opal and choose "Host this computer"
+  OPAL requests Screen Recording and Accessibility permission before installing the host service
+  if macOS asks for permission, grant it and run opal again to finish setup
+  host service: ~/Library/LaunchAgents/de.xt9y.opal.host.plist
+  restart host service: opal restart
+
 macOS host permissions
   System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL/your terminal
   System Settings -> Privacy & Security -> Accessibility -> allow OPAL/your terminal
@@ -47,11 +54,12 @@ Linux host
   UDP       --> sendmmsg/recvmmsg batching
 
 macOS host
-  capture   --> ScreenCaptureKit, latest-frame CVPixelBuffer path
-  encode    --> persistent VideoToolbox H.264
-  input     --> CGEvent through build/opal-input
+  capture   --> ScreenCaptureKit, latest-frame CVPixelBuffer path with WindowServer display timestamps
+  encode    --> persistent hardware VideoToolbox H.264
+  input     --> CGEvent through opal-input
   clipboard --> NSPasteboard
   audio     --> ScreenCaptureKit system audio + persistent in-process AAC
+  service   --> per-user launchd LaunchAgent
   UDP       --> nonblocking bounded datagram loop
 
 client
@@ -62,7 +70,7 @@ client
 
 network
   signed rendezvous + direct end-to-end encrypted UDP + blind encrypted relay fallback
-  Tailscale is used when available for the direct tailnet path
+  Tailscale is used when available for the direct tailnet path; local address discovery uses tailscale ip -4
   Linux keeps native UDP batching; macOS uses the same batch contract without packet-copy emulation
 
 verify
