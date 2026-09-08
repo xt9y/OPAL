@@ -4,6 +4,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#import <mach/mach_time.h>
 
 #include <algorithm>
 #include <cctype>
@@ -22,6 +23,20 @@ std::uint64_t monotonic_us()
 {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
         Clock::now().time_since_epoch()).count());
+}
+
+std::uint64_t mach_delta_us(std::uint64_t ticks)
+{
+    static const mach_timebase_info_data_t timebase = [] {
+        mach_timebase_info_data_t info{};
+        (void)mach_timebase_info(&info);
+        return info;
+    }();
+    if (timebase.denom == 0) return 0;
+    const long double nanoseconds = static_cast<long double>(ticks) *
+                                    static_cast<long double>(timebase.numer) /
+                                    static_cast<long double>(timebase.denom);
+    return nanoseconds > 0.0L ? static_cast<std::uint64_t>(nanoseconds / 1000.0L) : 0;
 }
 
 PlatformError apple_error(PlatformComponent component, NSError *error, std::string fallback)
@@ -205,9 +220,7 @@ public:
         [stream_ release]; stream_ = nil;
         [output_ release]; output_ = nil;
         queue_ = nullptr;
-        anchored_ = false;
-        anchor_pts_ = kCMTimeInvalid;
-        anchor_mono_us_ = 0;
+        timestamp_quality_ = CaptureTimestampQuality::Estimated;
     }
 
     CaptureTimestampQuality timestamp_quality() const override { return timestamp_quality_; }
@@ -220,6 +233,9 @@ public:
         CVImageBufferRef image = CMSampleBufferGetImageBuffer(sample);
         if (!image) return;
 
+        const std::uint64_t callback_us = monotonic_us();
+        std::uint64_t capture_us = callback_us;
+        CaptureTimestampQuality quality = CaptureTimestampQuality::Estimated;
         CFArrayRef attachments_ref = CMSampleBufferGetSampleAttachmentsArray(sample, false);
         if (attachments_ref && CFArrayGetCount(attachments_ref) > 0) {
             CFDictionaryRef attachment = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(attachments_ref, 0));
@@ -228,24 +244,17 @@ public:
                 int value = SCFrameStatusComplete;
                 if (CFNumberGetValue(status, kCFNumberIntType, &value) && value != SCFrameStatusComplete) return;
             }
-        }
-
-        const CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
-        std::uint64_t capture_us = monotonic_us();
-        CaptureTimestampQuality quality = CaptureTimestampQuality::Estimated;
-        if (CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts)) {
-            std::lock_guard<std::mutex> lock(mu_);
-            if (!anchored_) {
-                anchored_ = true;
-                anchor_pts_ = pts;
-                anchor_mono_us_ = capture_us;
-            }
-            const CMTime delta = CMTimeSubtract(pts, anchor_pts_);
-            const double seconds = CMTimeGetSeconds(delta);
-            if (std::isfinite(seconds) && seconds > -1.0) {
-                const auto signed_delta = static_cast<std::int64_t>(std::llround(seconds * 1000000.0));
-                if (signed_delta >= 0) capture_us = anchor_mono_us_ + static_cast<std::uint64_t>(signed_delta);
-                quality = CaptureTimestampQuality::Exact;
+            CFNumberRef display_time = static_cast<CFNumberRef>(CFDictionaryGetValue(attachment, SCStreamFrameInfoDisplayTime));
+            std::uint64_t display_ticks = 0;
+            if (display_time && CFNumberGetValue(display_time, kCFNumberSInt64Type, &display_ticks) && display_ticks != 0) {
+                const std::uint64_t now_ticks = mach_absolute_time();
+                if (now_ticks >= display_ticks) {
+                    const std::uint64_t age_us = mach_delta_us(now_ticks - display_ticks);
+                    if (age_us <= callback_us) {
+                        capture_us = callback_us - age_us;
+                        quality = CaptureTimestampQuality::Exact;
+                    }
+                }
             }
         }
 
@@ -274,9 +283,6 @@ private:
     std::condition_variable cv_;
     NativeVideoFrame latest_{};
     bool running_ = false;
-    bool anchored_ = false;
-    CMTime anchor_pts_ = kCMTimeInvalid;
-    std::uint64_t anchor_mono_us_ = 0;
     CaptureTimestampQuality timestamp_quality_ = CaptureTimestampQuality::Estimated;
     PlatformError error_{};
     SCStream *stream_ = nil;
