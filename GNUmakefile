@@ -64,7 +64,7 @@ test-macos-host-permission-contract: | $(BUILD)
 	$(BUILD)/test-macos-host-permission-contract
 
 test-platform-build-contract:
-	sh tests/test_platform_build_contract.sh
+	MAKE_BIN='$(MAKE)' sh tests/test_platform_build_contract.sh
 
 .PHONY: test-platform-contract test-cross-platform-architecture test-udp-batch-contract \
 	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
