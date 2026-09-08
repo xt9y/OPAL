@@ -4,12 +4,25 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <string>
+
+namespace {
+bool strict_runtime()
+{
+    const char* value = std::getenv("OPAL_REQUIRE_MACOS_MEDIA");
+    return value && *value && std::string(value) != "0";
+}
+}
 
 int main()
 {
     if (!CGPreflightScreenCaptureAccess()) {
+        if (strict_runtime()) {
+            std::cerr << "macOS native media smoke requires Screen Recording permission\n";
+            return 2;
+        }
         std::cout << "SKIP macOS native media smoke: Screen Recording permission is not granted\n";
         return 0;
     }
