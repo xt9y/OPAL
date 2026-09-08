@@ -30,20 +30,38 @@ inline std::vector<std::string> parse_tailnet_status_ipv4s(const std::string&sta
     return out;
 }
 
-inline std::vector<std::string> tailnet_peer_ipv4s(){
-    FILE*pipe=popen("tailscale status --peers=true --self=false 2>/dev/null","r");if(!pipe)return{};
+inline std::string first_tailnet_ipv4(const std::string&text){
+    std::istringstream values(text);std::string value;
+    while(values>>value)if(is_tailnet_ipv4(value))return value;
+    return{};
+}
+
+inline std::string read_command_text(const char*command){
+    if(!command||!*command)return{};
+    FILE*pipe=popen(command,"r");if(!pipe)return{};
     std::array<char,512>buffer{};std::string text;
     while(fgets(buffer.data(),static_cast<int>(buffer.size()),pipe))text+=buffer.data();
-    (void)pclose(pipe);return parse_tailnet_status_ipv4s(text);
+    (void)pclose(pipe);return text;
+}
+
+inline std::vector<std::string> tailnet_peer_ipv4s(){
+    return parse_tailnet_status_ipv4s(read_command_text("tailscale status --peers=true --self=false 2>/dev/null"));
 }
 
 inline std::string local_tailnet_ipv4(){
+    if(auto cli=first_tailnet_ipv4(read_command_text("tailscale ip -4 2>/dev/null"));!cli.empty())return cli;
+
+    // Linux exposes tailscale0; macOS GUI/Network Extension installs commonly
+    // surface the tunnel through a utun device. Keep this only as a fallback
+    // when the cross-platform Tailscale CLI cannot provide the local address.
     ifaddrs*interfaces=nullptr;
     if(getifaddrs(&interfaces)!=0)return {};
     std::string result;
     for(auto*it=interfaces;it;it=it->ifa_next){
         if(!it->ifa_addr||!it->ifa_name||it->ifa_addr->sa_family!=AF_INET)continue;
-        if(std::strcmp(it->ifa_name,"tailscale0")!=0)continue;
+        const bool linux_tailscale=std::strcmp(it->ifa_name,"tailscale0")==0;
+        const bool mac_tunnel=std::strncmp(it->ifa_name,"utun",4)==0;
+        if(!linux_tailscale&&!mac_tunnel)continue;
         char text[INET_ADDRSTRLEN]{};
         const auto*addr=reinterpret_cast<const sockaddr_in*>(it->ifa_addr);
         if(!inet_ntop(AF_INET,&addr->sin_addr,text,sizeof(text)))continue;
