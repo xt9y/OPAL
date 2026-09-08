@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -18,6 +19,20 @@
 #include <vector>
 
 namespace {
+
+bool accessibility_trusted(bool prompt)
+{
+    if (!prompt) return AXIsProcessTrusted();
+    const void* keys[] = {kAXTrustedCheckOptionPrompt};
+    const void* values[] = {kCFBooleanTrue};
+    CFDictionaryRef options = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1,
+                                                   &kCFTypeDictionaryKeyCallBacks,
+                                                   &kCFTypeDictionaryValueCallBacks);
+    if (!options) return AXIsProcessTrusted();
+    const bool trusted = AXIsProcessTrustedWithOptions(options);
+    CFRelease(options);
+    return trusted;
+}
 
 std::optional<CGKeyCode> mac_keycode(int code)
 {
@@ -186,10 +201,19 @@ void release_held(const std::set<int> &keys, const std::set<int> &buttons)
 
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    if (!AXIsProcessTrusted()) {
-        std::cerr << "OPAL input permission denied. Enable Accessibility for the terminal/app running OPAL in System Settings > Privacy & Security > Accessibility.\n";
+    if (argc == 2 && std::strcmp(argv[1], "--check-access") == 0)
+        return accessibility_trusted(false) ? 0 : 2;
+    if (argc == 2 && std::strcmp(argv[1], "--request-access") == 0) {
+        const bool trusted = accessibility_trusted(true);
+        if (!trusted)
+            std::cerr << "OPAL input helper requires Accessibility permission. Enable opal-input in System Settings > Privacy & Security > Accessibility, then run setup again.\n";
+        return trusted ? 0 : 2;
+    }
+    if (argc != 1) return 2;
+    if (!accessibility_trusted(false)) {
+        std::cerr << "OPAL input permission denied. Enable opal-input in System Settings > Privacy & Security > Accessibility.\n";
         return 2;
     }
 
