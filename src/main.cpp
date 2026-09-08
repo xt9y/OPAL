@@ -8,7 +8,7 @@
 #include <iostream>
 #include <string>
 
-static void help(){std::cout<<R"(OPAL - performance-first Linux remote desktop
+static void help(){std::cout<<R"(OPAL - performance-first Linux + Apple Silicon macOS remote desktop
 
 Commands:
   opal                                      Wake and connect at up to 1080p / local refresh
@@ -16,7 +16,7 @@ Commands:
                                             Connect with temporary stream overrides
   opal select                               Select a saved host
   opal new                                  Run OPAL setup / add another host
-  opal remove                               Remove a saved host
+  opal remove                               Remove OPAL state
   opal restart                              Restart OPAL services
   opal clean                                Remove OPAL state
   opal doctor                               Check local OPAL requirements
@@ -28,7 +28,7 @@ and blind encrypted relay fallback when direct NAT traversal is unavailable.
 Default FPS follows the client display refresh up to 240 Hz; --fps always overrides it.
 Stream overrides apply only to the current connection. Resolution modes never upscale the host.
 Config lives in ~/.opal/ (or OPAL_HOME for testing).
-Release remote control with Ctrl+Alt+Shift+Q.
+Release remote control with Ctrl+Alt+Shift+W; quit with Ctrl+Alt+Shift+Q.
 )";}
 static bool parse_fps(const std::string&value,int&fps){try{size_t used=0;int parsed=std::stoi(value,&used);if(used!=value.size()||parsed<15||parsed>240)return false;fps=parsed;return true;}catch(...){return false;}}
 static int run_stream_flags(int argc,char **argv){opal::StreamOptions stream;for(int i=1;i<argc;++i){std::string flag=argv[i];if(flag=="--mode"){if(i+1>=argc||!opal::stream_mode_limit(argv[++i],stream.max_width,stream.max_height)){std::cerr<<"invalid --mode; expected max, 1080p, 1440p, or 4k\n";return 2;}}else if(flag=="--fps"){if(i+1>=argc||!parse_fps(argv[++i],stream.fps)){std::cerr<<"invalid --fps; expected an integer from 15 to 240\n";return 2;}stream.automatic_fps=false;}else{std::cerr<<"Unknown option. Run 'opal help'.\n";return 2;}}return opal::interactive_run(stream);}
