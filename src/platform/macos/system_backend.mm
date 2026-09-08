@@ -5,7 +5,6 @@
 
 #include <SDL3/SDL.h>
 #import <Foundation/Foundation.h>
-#import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -120,6 +119,34 @@ std::string shell_quote(std::string_view value)
     return out;
 }
 
+std::string input_helper_path()
+{
+    if (const char* configured = std::getenv("OPAL_INPUT_HELPER"); configured && *configured && access(configured, X_OK) == 0)
+        return configured;
+
+    const auto executable = current_executable_path();
+    if (!executable.empty()) {
+        const std::filesystem::path binary(executable);
+        const auto adjacent = binary.parent_path() / "opal-input";
+        if (access(adjacent.c_str(), X_OK) == 0) return adjacent.string();
+        if (binary.parent_path().filename() == "bin") {
+            const auto installed = binary.parent_path().parent_path() / "libexec" / "opal" / "opal-input";
+            if (access(installed.c_str(), X_OK) == 0) return installed.string();
+        }
+    }
+
+    for (const char* candidate : {"/usr/local/libexec/opal/opal-input", "/opt/homebrew/libexec/opal/opal-input", "./build/opal-input"})
+        if (access(candidate, X_OK) == 0) return candidate;
+    return {};
+}
+
+bool input_helper_accessible()
+{
+    const auto helper = input_helper_path();
+    if (helper.empty()) return false;
+    return std::system((shell_quote(helper) + " --check-access >/dev/null 2>&1").c_str()) == 0;
+}
+
 std::string launch_domain()
 {
     return "gui/" + std::to_string(static_cast<unsigned long>(getuid()));
@@ -134,7 +161,8 @@ bool write_host_launch_agent(const Paths& paths)
 {
     const auto plist = launch_agent_path();
     const auto executable = current_executable_path();
-    if (plist.empty() || executable.empty() || !ensure_layout(paths)) return false;
+    const auto input_helper = input_helper_path();
+    if (plist.empty() || executable.empty() || input_helper.empty() || !ensure_layout(paths)) return false;
     std::error_code error;
     std::filesystem::create_directories(plist.parent_path(), error);
     if (error) return false;
@@ -155,6 +183,7 @@ bool write_host_launch_agent(const Paths& paths)
            "  <key>ThrottleInterval</key><integer>2</integer>\n"
            "  <key>EnvironmentVariables</key><dict>\n"
            "    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>\n"
+           "    <key>OPAL_INPUT_HELPER</key><string>" << xml_escape(input_helper) << "</string>\n"
            "  </dict>\n"
            "  <key>StandardOutPath</key><string>" << xml_escape((paths.root / "host.log").string()) << "</string>\n"
            "  <key>StandardErrorPath</key><string>" << xml_escape((paths.root / "host.err.log").string()) << "</string>\n"
@@ -219,7 +248,7 @@ int doctor()
     show("VideoToolbox H.264 hardware encoder", videotoolbox_h264_hardware_encoder_available());
     show("VideoToolbox H.264 hardware decoder", VTIsHardwareDecodeSupported(kCMVideoCodecType_H264));
     show("Screen Recording permission", CGPreflightScreenCaptureAccess());
-    show("Accessibility input permission", AXIsProcessTrusted());
+    show("Accessibility input helper", input_helper_accessible());
     show("Tailscale WAN underlay", command_exists("tailscale"));
     show("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
     show("~/.opal initialized", std::filesystem::exists(paths.root));
@@ -247,6 +276,10 @@ int host_service(bool enable)
         return error ? 1 : 0;
     }
 
+    if (!input_helper_accessible()) {
+        std::cerr << "OPAL input helper is not Accessibility-authorized. Run 'opal' setup again before enabling the host service.\n";
+        return 1;
+    }
     if (!write_host_launch_agent(paths)) {
         std::cerr << "Could not write OPAL LaunchAgent at " << plist << ".\n";
         return 1;
