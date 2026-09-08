@@ -14,7 +14,9 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -170,7 +172,7 @@ public:
         if (!running_) return false;
         const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
         for (;;) {
-            if (fifo_ && codec_ && av_audio_fifo_size(fifo_) >= codec_->frame_size) {
+            if (fifo_ && codec_ && codec_->frame_size > 0 && av_audio_fifo_size(fifo_) >= codec_->frame_size) {
                 if (encode_one(unit)) return true;
                 if (error_) return false;
             }
@@ -218,6 +220,9 @@ public:
         config_revision_ = 0;
         capture_cursor_us_ = 0;
         samples_encoded_ = 0;
+        audio_anchor_valid_ = false;
+        audio_anchor_pts_ = kCMTimeInvalid;
+        audio_anchor_us_ = 0;
     }
 
     MediaConfig config() const override { return config_; }
@@ -255,11 +260,22 @@ private:
         av_channel_layout_default(&codec_->ch_layout, channels);
         codec_->time_base = AVRational{1, sample_rate};
         codec_->bit_rate = 128000;
-        codec_->flags |= AV_CODEC_FLAG_LOW_DELAY;
-        codec_->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+        codec_->flags |= AV_CODEC_FLAG_LOW_DELAY | AV_CODEC_FLAG_GLOBAL_HEADER;
+        const AVSampleFormat* sample_formats = nullptr;
+        if (avcodec_get_supported_config(codec_, nullptr, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
+                                         reinterpret_cast<const void**>(&sample_formats), nullptr) >= 0 && sample_formats)
+            codec_->sample_fmt = sample_formats[0];
+        else
+            codec_->sample_fmt = AV_SAMPLE_FMT_FLTP;
         if (avcodec_open2(codec_, encoder, nullptr) < 0) {
             error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
                       "could not open persistent AAC encoder", false};
+            reset_encoder();
+            return false;
+        }
+        if (codec_->frame_size <= 0) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unsupported,
+                      "AAC encoder did not expose a fixed low-latency frame size", false};
             reset_encoder();
             return false;
         }
@@ -291,7 +307,13 @@ private:
         if (codec_->extradata && codec_->extradata_size > 0)
             config_.extradata.assign(codec_->extradata, codec_->extradata + codec_->extradata_size);
         ++config_revision_;
-        return !config_.extradata.empty();
+        if (config_.extradata.empty()) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
+                      "AAC encoder did not provide AudioSpecificConfig", false};
+            reset_encoder();
+            return false;
+        }
+        return true;
     }
 
     void reset_encoder()
@@ -380,7 +402,7 @@ private:
 
     bool encode_one(EncodedMediaUnit& unit)
     {
-        if (!codec_ || !fifo_ || av_audio_fifo_size(fifo_) < codec_->frame_size) return false;
+        if (!codec_ || !fifo_ || codec_->frame_size <= 0 || av_audio_fifo_size(fifo_) < codec_->frame_size) return false;
         AVFrame* frame = av_frame_alloc();
         AVPacket* packet = av_packet_alloc();
         if (!frame || !packet) { av_frame_free(&frame); av_packet_free(&packet); return false; }
