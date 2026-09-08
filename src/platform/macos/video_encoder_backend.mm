@@ -241,7 +241,7 @@ public:
     }
 
     MediaConfig config() const override { return config_; }
-    std::string backend_name() const override { return "videotoolbox-hardware"; }
+    std::string backend_name() const override { return "videotoolbox-hardware-lowlatency"; }
     PlatformError last_platform_error() const override { return error_; }
 
     void stop() override
@@ -265,9 +265,12 @@ private:
 
     bool open_session(int width, int height)
     {
-        const void *spec_keys[] = {kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder};
-        const void *spec_values[] = {kCFBooleanTrue};
-        CFDictionaryRef specification = CFDictionaryCreate(kCFAllocatorDefault, spec_keys, spec_values, 1,
+        const void *spec_keys[] = {
+            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
+            kVTVideoEncoderSpecification_EnableLowLatencyRateControl
+        };
+        const void *spec_values[] = {kCFBooleanTrue, kCFBooleanTrue};
+        CFDictionaryRef specification = CFDictionaryCreate(kCFAllocatorDefault, spec_keys, spec_values, 2,
                                                             &kCFTypeDictionaryKeyCallBacks,
                                                             &kCFTypeDictionaryValueCallBacks);
         VTCompressionSessionRef session = nullptr;
@@ -276,7 +279,7 @@ private:
             specification, nullptr, kCFAllocatorDefault, nullptr, nullptr, &session);
         if (specification) CFRelease(specification);
         if (status != noErr || !session) {
-            error_ = vt_error(status, "hardware VTCompressionSessionCreate failed");
+            error_ = vt_error(status, "low-latency hardware VTCompressionSessionCreate failed");
             error_.failure = PlatformFailure::Unavailable;
             return false;
         }
@@ -287,20 +290,19 @@ private:
         const std::int64_t requested_bits = static_cast<std::int64_t>(bitrate_kbps_) * 1000;
         const auto bits = static_cast<std::int32_t>(std::min<std::int64_t>(requested_bits, std::numeric_limits<std::int32_t>::max()));
         const std::int32_t fps = fps_;
-        const std::int32_t gop = std::max(1, fps_ * 2);
         const std::int32_t frame_delay = 1;
         bool ok = true;
         ok = ok && set_bool(session_, kVTCompressionPropertyKey_RealTime, true);
         ok = ok && set_bool(session_, kVTCompressionPropertyKey_AllowFrameReordering, false);
+        ok = ok && set_bool(session_, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true);
         ok = ok && set_i32(session_, kVTCompressionPropertyKey_AverageBitRate, bits);
         ok = ok && set_i32(session_, kVTCompressionPropertyKey_ExpectedFrameRate, fps);
-        ok = ok && set_i32(session_, kVTCompressionPropertyKey_MaxKeyFrameInterval, gop);
         ok = ok && set_i32(session_, kVTCompressionPropertyKey_MaxFrameDelayCount, frame_delay);
         (void)VTSessionSetProperty(session_, kVTCompressionPropertyKey_ProfileLevel,
                                    kVTProfileLevel_H264_High_AutoLevel);
         if (!ok) {
             error_ = {PlatformComponent::Encoder, PlatformFailure::OsError,
-                      "VideoToolbox rejected required realtime encoder properties", false};
+                      "VideoToolbox rejected required low-latency encoder properties", false};
             invalidate_session();
             return false;
         }
