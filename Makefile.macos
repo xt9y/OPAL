@@ -9,31 +9,35 @@ CPPFLAGS += $(OPENSSL_CFLAGS) -DOPAL_PLATFORM_MACOS=1
 
 MACOS_PLATFORM_SRCS := \
 	src/platform/macos/pipewire_capture_stub.cpp \
-	src/platform/macos/system_backend.mm \
-	src/platform/macos/host_stub.cpp
+	src/platform/macos/system_backend.mm
 
 FLV_STREAM_SRCS := src/flv_stream.cpp
 CLIPBOARD_SRCS := src/clipboard.cpp
+MACOS_INPUT_SRC := src/platform/macos/input_helper.mm
 
 VIDEO_CAPTURE_SRCS += $(FLV_STREAM_SRCS) src/platform/macos/pipewire_capture_stub.cpp
 DIRECT_SENDER_SRCS += $(FLV_STREAM_SRCS) src/platform/macos/pipewire_capture_stub.cpp
-APP_SRCS := $(filter-out src/host.cpp src/system.cpp,$(APP_SRCS))
+APP_SRCS := $(filter-out src/system.cpp,$(APP_SRCS))
 APP_SRCS += $(FLV_STREAM_SRCS) $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
 
 NATIVE_MEDIA_LIBS := $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS)
-LDLIBS := $(OPENSSL_LIBS) -pthread $(NATIVE_MEDIA_LIBS) \
-	-framework Foundation -framework AppKit -framework CoreGraphics
+APPLE_FRAMEWORKS := -framework Foundation -framework AppKit -framework CoreGraphics -framework ApplicationServices
+LDLIBS := $(OPENSSL_LIBS) -pthread $(NATIVE_MEDIA_LIBS) $(APPLE_FRAMEWORKS)
 
 $(PRODUCT): $(FLV_STREAM_SRCS) $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
 
-macos-all: $(PRODUCT)
+macos-input: $(MACOS_INPUT_SRC) include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fobjc-arc $(MACOS_INPUT_SRC) -framework ApplicationServices -framework CoreGraphics -o $(BUILD)/opal-input
 
-macos-install: $(PRODUCT)
-	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
+macos-all: $(PRODUCT) macos-input
+
+macos-install: macos-all
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)"
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
+	$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 
 macos-test: test-platform-contract test-udp-batch-contract test-input test-udp-transport \
 	test-video-packet test-video-reassembly test-video-feedback test-session-packet \
 	test-reliable-control test-peer-handshake test-peer-session
 
-.PHONY: macos-all macos-install macos-test
+.PHONY: macos-input macos-all macos-install macos-test
