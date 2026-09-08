@@ -42,6 +42,7 @@ MACOS_PLATFORM_SRCS := \
 
 CLIPBOARD_SRCS := src/clipboard.cpp
 MACOS_INPUT_SRC := src/platform/macos/input_helper.mm
+MACOS_NATIVE_MEDIA_TEST := $(BUILD)/test-macos-native-media-smoke
 
 VIDEO_CAPTURE_SRCS := $(MACOS_VIDEO_SRCS)
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
@@ -93,12 +94,39 @@ macos-install:
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
 	$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 
+# Permission-free suite. Linux capture/systemd/uinput fixture tests are omitted;
+# macOS-native capture is exercised separately by macos-runtime-test.
 macos-test: test-platform-contract test-cross-platform-architecture test-platform-build-contract \
 	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
 	test-macos-media-scheduler test-macos-clipboard-contract test-macos-capture-contract \
 	test-macos-videotoolbox-contract test-macos-audio-contract test-macos-host-permission-contract \
-	test-udp-batch-contract test-input test-udp-transport test-video-capture test-video-packet \
-	test-video-reassembly test-video-feedback test-session-packet test-reliable-control \
-	test-peer-handshake test-peer-session
+	test-udp-batch-contract test-core test-media-profile test-media test-input test-udp-transport \
+	test-video-crypto test-video-packet test-video-reassembly test-video-feedback \
+	test-video-receiver-architecture test-rendezvous-protocol test-rendezvous-server \
+	test-local-discovery test-peer-handshake test-session-packet test-reliable-control \
+	test-peer-session test-peer-session-relay test-relay test-daemon test-session test-hardening
 
-.PHONY: macos-deps-check macos-input macos-sign macos-all macos-install macos-test
+$(MACOS_NATIVE_MEDIA_TEST): tests/test_macos_native_media_smoke.mm $(MACOS_VIDEO_SRCS) include/opal/*.hpp | $(BUILD) macos-deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_native_media_smoke.mm $(MACOS_VIDEO_SRCS) $(MACOS_FFMPEG_LIBS) $(APPLE_FRAMEWORKS) -o $@
+
+test-macos-native-media-smoke: $(MACOS_NATIVE_MEDIA_TEST)
+	$(MACOS_NATIVE_MEDIA_TEST)
+
+macos-verify: macos-all macos-test
+	codesign --verify --strict "$(PRODUCT)"
+	codesign --verify --strict "$(BUILD)/opal-input"
+	codesign -d --verbose=4 "$(PRODUCT)" 2>&1 | grep -q 'Identifier=de.xt9y.opal'
+	codesign -d --verbose=4 "$(BUILD)/opal-input" 2>&1 | grep -q 'Identifier=de.xt9y.opal.input'
+	strings "$(PRODUCT)" | grep -q 'NSScreenCaptureUsageDescription'
+	strings "$(PRODUCT)" | grep -q 'NSAudioCaptureUsageDescription'
+	@echo 'macOS build/sign/unit verification passed'
+
+# Run this after granting Screen Recording. It exercises the real
+# ScreenCaptureKit -> VideoToolbox/AAC pipeline and treats missing permission as
+# a failure instead of a skip.
+macos-runtime-test: macos-verify $(MACOS_NATIVE_MEDIA_TEST)
+	OPAL_REQUIRE_MACOS_MEDIA=1 $(MACOS_NATIVE_MEDIA_TEST)
+	@echo 'macOS native media runtime smoke passed'
+
+.PHONY: macos-deps-check macos-input macos-sign macos-all macos-install macos-test \
+	test-macos-native-media-smoke macos-verify macos-runtime-test
