@@ -2,6 +2,7 @@
 
 #include <opal/audio_capture_backend.hpp>
 #include <opal/capture_backend.hpp>
+#include <opal/encoded_buffer_pool.hpp>
 #include <opal/native_video_pipeline.hpp>
 #include <opal/video_encoder_backend.hpp>
 
@@ -43,6 +44,13 @@ struct VideoCapture::Impl {
     bool terminal = false;
     bool audio_requested = false;
     std::string error;
+
+    void recycle_storage()
+    {
+        if (storage.kind == MediaKind::VideoH264 && !storage.data.empty())
+            encoded_buffer_pool().release(std::move(storage.data));
+        storage = {};
+    }
 
     void merge_config(const MediaConfig& incoming)
     {
@@ -104,11 +112,15 @@ struct VideoCapture::Impl {
 
     bool poll(EncodedMediaView& view, int video_wait_ms)
     {
+        // The previous view has already been consumed by VideoSender when poll()
+        // is entered again. Return its H.264 allocation to the shared encoded
+        // buffer pool before producing the next unit.
+        recycle_storage();
+
         // Audio must get a nonblocking service opportunity before waiting for the
         // next video frame. Otherwise a continuously available 60/120/240 Hz
         // video source can starve AAC indefinitely. Video capture itself is
         // latest-only, so servicing audio first cannot create video backlog.
-        storage = {};
         if (audio) {
             if (audio->next(storage, 0)) return make_view(view);
             const auto audio_error = audio->last_platform_error();
@@ -118,7 +130,7 @@ struct VideoCapture::Impl {
             }
         }
 
-        storage = {};
+        recycle_storage();
         if (video && video->next(storage, video_wait_ms)) return make_view(view);
         if (video && video->ended()) mark_terminal();
         return false;
@@ -271,7 +283,7 @@ void VideoCapture::stop()
     if (impl_->video) impl_->video->stop();
     impl_->audio.reset();
     impl_->video.reset();
-    impl_->storage = {};
+    impl_->recycle_storage();
     impl_->configs.clear();
     impl_->config_revision = 0;
     impl_->video_config_revision = 0;
