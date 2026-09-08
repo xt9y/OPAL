@@ -27,9 +27,14 @@ NativeVideoPipeline::~NativeVideoPipeline()
 bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps)
 {
     stop();
+    terminal_ = false;
     if (!capture_ || !encoder_) return false;
-    if (!capture_->start(stream)) return false;
+    if (!capture_->start(stream)) {
+        terminal_ = static_cast<bool>(capture_->last_platform_error());
+        return false;
+    }
     if (!encoder_->start(stream, bitrate_kbps)) {
+        terminal_ = static_cast<bool>(encoder_->last_platform_error());
         capture_->stop();
         return false;
     }
@@ -42,10 +47,22 @@ bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps)
 bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
 {
     unit = {};
-    if (!running_ || !capture_ || !encoder_) return false;
+    if (!running_ || terminal_ || !capture_ || !encoder_) return false;
     NativeVideoFrame frame;
-    if (!capture_->next(frame, timeout_ms)) return false;
-    if (!encoder_->encode(frame, unit)) return false;
+    if (!capture_->next(frame, timeout_ms)) {
+        if (capture_->last_platform_error()) {
+            terminal_ = true;
+            running_ = false;
+        }
+        return false;
+    }
+    if (!encoder_->encode(frame, unit)) {
+        if (encoder_->last_platform_error()) {
+            terminal_ = true;
+            running_ = false;
+        }
+        return false;
+    }
     const auto next_config = encoder_->config();
     if (!next_config.extradata.empty() && !same_config(config_, next_config)) {
         config_ = next_config;
@@ -56,12 +73,18 @@ bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
 
 void NativeVideoPipeline::request_idr()
 {
-    if (encoder_) encoder_->request_idr();
+    if (encoder_ && running_ && !terminal_) encoder_->request_idr();
 }
 
 bool NativeVideoPipeline::set_bitrate(int bitrate_kbps)
 {
-    return encoder_ && encoder_->set_bitrate(bitrate_kbps);
+    if (!encoder_ || !running_ || terminal_) return false;
+    if (encoder_->set_bitrate(bitrate_kbps)) return true;
+    if (encoder_->last_platform_error()) {
+        terminal_ = true;
+        running_ = false;
+    }
+    return false;
 }
 
 void NativeVideoPipeline::stop()
@@ -71,6 +94,7 @@ void NativeVideoPipeline::stop()
     if (capture_) capture_->stop();
     config_ = {};
     config_revision_ = 0;
+    terminal_ = false;
 }
 
 const MediaConfig& NativeVideoPipeline::config() const
@@ -101,6 +125,11 @@ PlatformError NativeVideoPipeline::last_platform_error() const
         if (error) return error;
     }
     return capture_ ? capture_->last_platform_error() : PlatformError{};
+}
+
+bool NativeVideoPipeline::ended() const noexcept
+{
+    return terminal_;
 }
 
 }
