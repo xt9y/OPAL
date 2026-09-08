@@ -1,0 +1,39 @@
+.DEFAULT_GOAL := macos-all
+
+include Makefile.core
+
+CXXFLAGS += -pthread
+OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl 2>/dev/null)
+OPENSSL_LIBS := $(shell $(PKG_CONFIG) --libs openssl 2>/dev/null)
+CPPFLAGS += $(OPENSSL_CFLAGS) -DOPAL_PLATFORM_MACOS=1
+
+MACOS_PLATFORM_SRCS := \
+	src/platform/macos/pipewire_capture_stub.cpp \
+	src/platform/macos/system_backend.mm \
+	src/platform/macos/host_stub.cpp
+
+FLV_STREAM_SRCS := src/flv_stream.cpp
+CLIPBOARD_SRCS := src/clipboard.cpp
+
+VIDEO_CAPTURE_SRCS += $(FLV_STREAM_SRCS) src/platform/macos/pipewire_capture_stub.cpp
+DIRECT_SENDER_SRCS += $(FLV_STREAM_SRCS) src/platform/macos/pipewire_capture_stub.cpp
+APP_SRCS := $(filter-out src/host.cpp src/system.cpp,$(APP_SRCS))
+APP_SRCS += $(FLV_STREAM_SRCS) $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
+
+NATIVE_MEDIA_LIBS := $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS)
+LDLIBS := $(OPENSSL_LIBS) -pthread $(NATIVE_MEDIA_LIBS) \
+	-framework Foundation -framework AppKit -framework CoreGraphics
+
+$(PRODUCT): $(FLV_STREAM_SRCS) $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
+
+macos-all: $(PRODUCT)
+
+macos-install: $(PRODUCT)
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
+	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
+
+macos-test: test-platform-contract test-udp-batch-contract test-input test-udp-transport \
+	test-video-packet test-video-reassembly test-video-feedback test-session-packet \
+	test-reliable-control test-peer-handshake test-peer-session
+
+.PHONY: macos-all macos-install macos-test
