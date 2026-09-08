@@ -20,6 +20,8 @@ int main()
     assert(text.find("kVTCompressionPropertyKey_RealTime") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_AllowFrameReordering") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality") != std::string::npos);
+    assert(text.find("(void)set_bool(session_, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true)") != std::string::npos);
+    assert(text.find("ok = ok && set_bool(session_, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality") == std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_AverageBitRate") != std::string::npos);
     assert(text.find("kVTCompressionPropertyKey_ExpectedFrameRate") != std::string::npos);
     assert(text.find("const std::int32_t frame_delay = 0") != std::string::npos);
