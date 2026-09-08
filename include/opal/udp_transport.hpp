@@ -3,8 +3,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace opal {
@@ -114,6 +116,82 @@ inline int recv_datagrams_batch(UdpNativeHandle handle, std::span<UdpReceiveSlot
     if (result > 0) {
         for (int i = 0; i < result; ++i) slots[static_cast<std::size_t>(i)].source_length = slots[static_cast<std::size_t>(i)].source.native_size;
     }
+    return result;
+}
+
+template <class NativeAddress, class NativeLength>
+requires (!std::is_same_v<std::remove_cvref_t<NativeAddress>, UdpEndpoint> &&
+          std::is_trivially_copyable_v<std::remove_cvref_t<NativeAddress>> &&
+          std::is_integral_v<std::remove_cvref_t<NativeLength>>)
+inline bool resolve_udp_endpoint(const std::string &host, std::uint16_t port,
+                                 NativeAddress &address, NativeLength &length)
+{
+    UdpEndpoint endpoint{};
+    if (!resolve_udp_endpoint(host, port, endpoint) || endpoint.native_size > sizeof(address)) {
+        length = 0;
+        return false;
+    }
+    std::memset(&address, 0, sizeof(address));
+    std::memcpy(&address, endpoint.native.data(), endpoint.native_size);
+    length = static_cast<NativeLength>(endpoint.native_size);
+    return true;
+}
+
+template <class NativeAddress, class NativeLength>
+requires (!std::is_same_v<std::remove_cvref_t<NativeAddress>, UdpEndpoint> &&
+          std::is_trivially_copyable_v<std::remove_cvref_t<NativeAddress>> &&
+          std::is_integral_v<std::remove_cvref_t<NativeLength>>)
+inline UdpEndpoint udp_endpoint_from_native(const NativeAddress &address, NativeLength length)
+{
+    UdpEndpoint endpoint{};
+    const auto bytes = static_cast<std::size_t>(length);
+    if (bytes == 0 || bytes > sizeof(address) || bytes > endpoint.native.size()) return endpoint;
+    std::memcpy(endpoint.native.data(), &address, bytes);
+    endpoint.native_size = static_cast<std::uint32_t>(bytes);
+    return endpoint;
+}
+
+template <class NativeAddress, class NativeLength>
+requires (!std::is_same_v<std::remove_cvref_t<NativeAddress>, UdpEndpoint>)
+inline UdpSendResult send_datagram_result(UdpNativeHandle handle, const NativeAddress &address,
+                                          NativeLength length, std::span<const std::uint8_t> data)
+{
+    return send_datagram_result(UdpSocket{handle, 0}, udp_endpoint_from_native(address, length), data);
+}
+
+template <class NativeAddress, class NativeLength>
+requires (!std::is_same_v<std::remove_cvref_t<NativeAddress>, UdpEndpoint>)
+inline UdpSendBatchResult send_datagrams_batch(UdpNativeHandle handle, const NativeAddress &address,
+                                               NativeLength length,
+                                               std::span<const std::span<const std::uint8_t>> datagrams)
+{
+    return send_datagrams_batch(UdpSocket{handle, 0}, udp_endpoint_from_native(address, length), datagrams);
+}
+
+template <class NativeAddress, class NativeLength>
+requires (!std::is_same_v<std::remove_cvref_t<NativeAddress>, UdpEndpoint>)
+inline bool send_datagram(UdpNativeHandle handle, const NativeAddress &address, NativeLength length,
+                          std::span<const std::uint8_t> data)
+{
+    return send_datagram(UdpSocket{handle, 0}, udp_endpoint_from_native(address, length), data);
+}
+
+template <class NativeAddress, class NativeLength>
+requires (!std::is_same_v<std::remove_cvref_t<NativeAddress>, UdpEndpoint> &&
+          std::is_trivially_copyable_v<std::remove_cvref_t<NativeAddress>> &&
+          std::is_integral_v<std::remove_cvref_t<NativeLength>>)
+inline int recv_datagram(UdpNativeHandle handle, std::span<std::uint8_t> data,
+                         NativeAddress &source, NativeLength &source_length, int timeout_ms)
+{
+    UdpEndpoint endpoint{};
+    const int result = recv_datagram(UdpSocket{handle, 0}, data, endpoint, timeout_ms);
+    if (result < 0 || !endpoint.valid() || endpoint.native_size > sizeof(source)) {
+        source_length = 0;
+        return result;
+    }
+    std::memset(&source, 0, sizeof(source));
+    std::memcpy(&source, endpoint.native.data(), endpoint.native_size);
+    source_length = static_cast<NativeLength>(endpoint.native_size);
     return result;
 }
 
