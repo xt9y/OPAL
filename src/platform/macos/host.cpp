@@ -1,4 +1,3 @@
-#import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 
 #define host_setup macos_host_setup_impl
@@ -19,7 +18,17 @@ void print_screen_permission_help()
 
 void print_accessibility_permission_help()
 {
-    std::cerr << "OPAL macOS host requires Accessibility permission for keyboard and pointer injection. Enable it in System Settings > Privacy & Security > Accessibility.\n";
+    std::cerr << "OPAL macOS host requires Accessibility permission for the opal-input helper. Enable opal-input in System Settings > Privacy & Security > Accessibility.\n";
+}
+
+bool input_helper_access(const char* mode, bool quiet)
+{
+    if (!mode || !*mode) return false;
+    const std::string helper = input_helper_command();
+    if (helper.empty()) return false;
+    std::string command = helper + " " + mode;
+    if (quiet) command += " >/dev/null 2>&1";
+    return std::system(command.c_str()) == 0;
 }
 
 bool macos_host_permissions()
@@ -29,7 +38,7 @@ bool macos_host_permissions()
         print_screen_permission_help();
         ok = false;
     }
-    if (!AXIsProcessTrusted()) {
+    if (!input_helper_access("--check-access", true)) {
         print_accessibility_permission_help();
         ok = false;
     }
@@ -41,18 +50,7 @@ bool request_macos_host_permissions()
     bool screen_ok = CGPreflightScreenCaptureAccess();
     if (!screen_ok) screen_ok = CGRequestScreenCaptureAccess();
 
-    bool accessibility_ok = AXIsProcessTrusted();
-    if (!accessibility_ok) {
-        const void* keys[] = {kAXTrustedCheckOptionPrompt};
-        const void* values[] = {kCFBooleanTrue};
-        CFDictionaryRef options = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1,
-                                                       &kCFTypeDictionaryKeyCallBacks,
-                                                       &kCFTypeDictionaryValueCallBacks);
-        if (options) {
-            accessibility_ok = AXIsProcessTrustedWithOptions(options);
-            CFRelease(options);
-        }
-    }
+    const bool accessibility_ok = input_helper_access("--request-access", false);
 
     if (!screen_ok) print_screen_permission_help();
     if (!accessibility_ok) print_accessibility_permission_help();
