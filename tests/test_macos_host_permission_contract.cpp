@@ -39,6 +39,8 @@ int main()
     assert(doctor.find("Accessibility input helper") != std::string::npos);
     assert(doctor.find("--check-access") != std::string::npos);
     assert(doctor.find("AXIsProcessTrusted") == std::string::npos);
+    assert(doctor.find("OPAL_INPUT_HELPER") != std::string::npos);
+    assert(doctor.find("encoder=videotoolbox-hardware-lowlatency") != std::string::npos);
     assert(doctor.find("de.xt9y.opal.host") != std::string::npos);
     assert(doctor.find("LaunchAgents") != std::string::npos);
     assert(doctor.find("--internal-host-daemon") != std::string::npos);
