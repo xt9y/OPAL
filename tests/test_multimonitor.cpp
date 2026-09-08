@@ -78,7 +78,9 @@ int main()
         const std::vector<MonitorGeometry> monitors;
         const auto layout = build_composite_layout(monitors, 1920, 1080);
         assert(!layout.valid());
-        assert(map_composite_pointer(layout, 100, 100) == std::pair<int, int>{100, 100});
+        const auto passthrough = map_composite_pointer(layout, 100, 100);
+        assert(passthrough.first == 100);
+        assert(passthrough.second == 100);
     }
 
     return 0;
