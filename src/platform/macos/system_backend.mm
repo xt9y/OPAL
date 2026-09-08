@@ -29,15 +29,26 @@ bool sdl_video_available(std::string &driver)
     return !driver.empty();
 }
 
-bool videotoolbox_h264_encoder_available()
+bool videotoolbox_h264_hardware_encoder_available()
 {
-    CFStringRef encoder_id = nullptr;
-    CFDictionaryRef properties = nullptr;
-    const OSStatus status = VTCopySupportedPropertyDictionaryForEncoder(
-        1280, 720, kCMVideoCodecType_H264, nullptr, &encoder_id, &properties);
-    if (encoder_id) CFRelease(encoder_id);
-    if (properties) CFRelease(properties);
-    return status == noErr;
+    CFArrayRef encoders = nullptr;
+    if (VTCopyVideoEncoderList(nullptr, &encoders) != noErr || !encoders) return false;
+    bool available = false;
+    const CFIndex count = CFArrayGetCount(encoders);
+    for (CFIndex i = 0; i < count && !available; ++i) {
+        auto dictionary = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(encoders, i));
+        if (!dictionary) continue;
+        auto codec = static_cast<CFNumberRef>(CFDictionaryGetValue(dictionary, kVTVideoEncoderList_CodecType));
+        auto hardware = static_cast<CFBooleanRef>(CFDictionaryGetValue(dictionary, kVTVideoEncoderList_IsHardwareAccelerated));
+        std::int32_t codec_type = 0;
+        if (codec && hardware && CFGetTypeID(codec) == CFNumberGetTypeID() &&
+            CFGetTypeID(hardware) == CFBooleanGetTypeID() &&
+            CFNumberGetValue(codec, kCFNumberSInt32Type, &codec_type) &&
+            static_cast<CMVideoCodecType>(codec_type) == kCMVideoCodecType_H264 &&
+            CFBooleanGetValue(hardware)) available = true;
+    }
+    CFRelease(encoders);
+    return available;
 }
 
 void write_default_config(const Paths &paths)
@@ -80,14 +91,14 @@ int doctor()
     const bool sdl_ok = sdl_video_available(driver);
     show("SDL3 client video backend (" + (sdl_ok ? driver : "unavailable") + ")", sdl_ok);
     show("Linked FFmpeg H.264 decoder", avcodec_find_decoder(AV_CODEC_ID_H264) != nullptr);
-    show("VideoToolbox H.264 encoder", videotoolbox_h264_encoder_available());
+    show("VideoToolbox H.264 hardware encoder", videotoolbox_h264_hardware_encoder_available());
     show("VideoToolbox H.264 hardware decoder", VTIsHardwareDecodeSupported(kCMVideoCodecType_H264));
     show("Screen Recording permission", CGPreflightScreenCaptureAccess());
     show("Accessibility input permission", AXIsProcessTrusted());
     show("Tailscale WAN underlay", command_exists("tailscale"));
     show("~/.opal initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=nspasteboard\n";
-    std::cout << "[info] host capture=screencapturekit encoder=videotoolbox input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
+    std::cout << "[info] host capture=screencapturekit encoder=videotoolbox-hardware input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
     return 0;
 }
 
