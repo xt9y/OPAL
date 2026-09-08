@@ -30,6 +30,10 @@ int main()
     assert(helper.find("--check-access") != std::string::npos);
     assert(helper.find("AXIsProcessTrustedWithOptions") != std::string::npos);
     assert(helper.find("kAXTrustedCheckOptionPrompt") != std::string::npos);
+    assert(helper.find("case SysRq: return 105") != std::string::npos);
+    assert(helper.find("case ScrollLock: return 107") != std::string::npos);
+    assert(helper.find("case Pause: return 113") != std::string::npos);
+    assert(helper.find("case Compose: return 110") != std::string::npos);
 
     const auto doctor = read_all("src/platform/macos/system_backend.mm");
     assert(doctor.find("VTCopyVideoEncoderList") != std::string::npos);
