@@ -34,6 +34,7 @@ inline std::vector<std::string> parse_tailnet_status_ipv4s(const std::string&sta
 }
 
 bool tailscale_cli_available();
+bool tailscale_connected();
 std::vector<std::string> tailnet_peer_ipv4s();
 std::string local_tailnet_ipv4();
 }
