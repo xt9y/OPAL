@@ -5,6 +5,11 @@
 #import <CoreMedia/CoreMedia.h>
 #import <AudioToolbox/AudioToolbox.h>
 
+// AVFoundation (pulled in by ScreenCaptureKit on current macOS SDKs) defines
+// AVMediaType as an NSString typedef, while FFmpeg defines enum AVMediaType.
+// Rename only FFmpeg's compile-time token while parsing its C headers. This
+// does not change ABI, symbols, encoded data, or any Apple framework type.
+#define AVMediaType OPAL_FFmpegAVMediaType
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/audio_fifo.h>
@@ -13,6 +18,7 @@ extern "C" {
 #include <libavutil/mem.h>
 #include <libswresample/swresample.h>
 }
+#undef AVMediaType
 
 #include <algorithm>
 #include <atomic>
