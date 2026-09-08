@@ -290,7 +290,7 @@ private:
         const std::int64_t requested_bits = static_cast<std::int64_t>(bitrate_kbps_) * 1000;
         const auto bits = static_cast<std::int32_t>(std::min<std::int64_t>(requested_bits, std::numeric_limits<std::int32_t>::max()));
         const std::int32_t fps = fps_;
-        const std::int32_t frame_delay = 1;
+        const std::int32_t frame_delay = 0;
         bool ok = true;
         ok = ok && set_bool(session_, kVTCompressionPropertyKey_RealTime, true);
         ok = ok && set_bool(session_, kVTCompressionPropertyKey_AllowFrameReordering, false);
