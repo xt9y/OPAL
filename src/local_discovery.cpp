@@ -31,7 +31,7 @@ int socket_fd(const UdpSocket& socket){return socket.valid()?static_cast<int>(so
 bool set_nonblocking_cloexec(int fd){const int flags=fcntl(fd,F_GETFL,0);if(flags<0||fcntl(fd,F_SETFL,flags|O_NONBLOCK)!=0)return false;const int fd_flags=fcntl(fd,F_GETFD,0);return fd_flags>=0&&fcntl(fd,F_SETFD,fd_flags|FD_CLOEXEC)==0;}
 
 UdpSocket open_dual_stack_listener(std::uint16_t port,const std::string&bind_host,std::string&error){
-    error.clear();const int fd=socket(AF_INET6,SOCK_DGRAM,0);if(fd<0){error="local discovery socket failed";return {}};if(!set_nonblocking_cloexec(fd)){close(fd);error="local discovery socket flags unavailable";return {};}
+    error.clear();const int fd=socket(AF_INET6,SOCK_DGRAM,0);if(fd<0){error="local discovery socket failed";return {};}if(!set_nonblocking_cloexec(fd)){close(fd);error="local discovery socket flags unavailable";return {};}
     int off=0;if(setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&off,sizeof(off))!=0){close(fd);error="local discovery dual-stack unavailable";return {};}
     int one=1;(void)setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
     int queue_bytes=kUdpQueueBufferBytes;if(setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&queue_bytes,sizeof(queue_bytes))!=0||setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&queue_bytes,sizeof(queue_bytes))!=0){close(fd);error="local discovery socket buffers unavailable";return {};}
