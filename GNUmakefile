@@ -13,8 +13,42 @@ test-platform-contract: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_platform_contract.cpp -o $(BUILD)/test-platform-contract
 	$(BUILD)/test-platform-contract
 
+test-cross-platform-architecture: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_cross_platform_architecture.cpp -o $(BUILD)/test-cross-platform-architecture
+	$(BUILD)/test-cross-platform-architecture
+
 test-udp-batch-contract: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_udp_batch_contract.cpp -o $(BUILD)/test-udp-batch-contract
 	$(BUILD)/test-udp-batch-contract
 
-.PHONY: test-platform-contract test-udp-batch-contract
+test-native-video-pipeline: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_native_video_pipeline.cpp src/native_video_pipeline.cpp -o $(BUILD)/test-native-video-pipeline
+	$(BUILD)/test-native-video-pipeline
+
+test-audio-capture-backend: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_audio_capture_backend.cpp -o $(BUILD)/test-audio-capture-backend
+	$(BUILD)/test-audio-capture-backend
+
+test-macos-clipboard-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_clipboard_contract.cpp -o $(BUILD)/test-macos-clipboard-contract
+	$(BUILD)/test-macos-clipboard-contract
+
+test-macos-capture-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_capture_contract.cpp -o $(BUILD)/test-macos-capture-contract
+	$(BUILD)/test-macos-capture-contract
+
+test-macos-videotoolbox-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_videotoolbox_contract.cpp -o $(BUILD)/test-macos-videotoolbox-contract
+	$(BUILD)/test-macos-videotoolbox-contract
+
+test-macos-audio-contract: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_audio_contract.cpp -o $(BUILD)/test-macos-audio-contract
+	$(BUILD)/test-macos-audio-contract
+
+test-platform-build-contract:
+	sh tests/test_platform_build_contract.sh
+
+.PHONY: test-platform-contract test-cross-platform-architecture test-udp-batch-contract \
+	test-native-video-pipeline test-audio-capture-backend test-macos-clipboard-contract \
+	test-macos-capture-contract test-macos-videotoolbox-contract test-macos-audio-contract \
+	test-platform-build-contract
