@@ -16,19 +16,26 @@ int main()
     const auto host = read_all("src/platform/macos/host.cpp");
     assert(host.find("CGPreflightScreenCaptureAccess") != std::string::npos);
     assert(host.find("CGRequestScreenCaptureAccess") != std::string::npos);
-    assert(host.find("AXIsProcessTrusted") != std::string::npos);
-    assert(host.find("AXIsProcessTrustedWithOptions") != std::string::npos);
-    assert(host.find("kAXTrustedCheckOptionPrompt") != std::string::npos);
+    assert(host.find("--request-access") != std::string::npos);
+    assert(host.find("--check-access") != std::string::npos);
     assert(host.find("Screen Recording permission") != std::string::npos);
     assert(host.find("Accessibility permission") != std::string::npos);
     assert(host.find("macos_host_setup_impl") != std::string::npos);
     assert(host.find("macos_host_run_impl") != std::string::npos);
+
+    const auto helper = read_all("src/platform/macos/input_helper.mm");
+    assert(helper.find("--request-access") != std::string::npos);
+    assert(helper.find("--check-access") != std::string::npos);
+    assert(helper.find("AXIsProcessTrustedWithOptions") != std::string::npos);
+    assert(helper.find("kAXTrustedCheckOptionPrompt") != std::string::npos);
 
     const auto doctor = read_all("src/platform/macos/system_backend.mm");
     assert(doctor.find("VTCopyVideoEncoderList") != std::string::npos);
     assert(doctor.find("kVTVideoEncoderList_IsHardwareAccelerated") != std::string::npos);
     assert(doctor.find("VideoToolbox H.264 hardware encoder") != std::string::npos);
     assert(doctor.find("VTIsHardwareDecodeSupported") != std::string::npos);
+    assert(doctor.find("Accessibility input helper") != std::string::npos);
+    assert(doctor.find("--check-access") != std::string::npos);
     assert(doctor.find("de.xt9y.opal.host") != std::string::npos);
     assert(doctor.find("LaunchAgents") != std::string::npos);
     assert(doctor.find("--internal-host-daemon") != std::string::npos);
