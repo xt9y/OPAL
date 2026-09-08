@@ -5,26 +5,47 @@ include Makefile.core
 CXXFLAGS += -pthread
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl 2>/dev/null)
 OPENSSL_LIBS := $(shell $(PKG_CONFIG) --libs openssl 2>/dev/null)
-CPPFLAGS += $(OPENSSL_CFLAGS) -DOPAL_PLATFORM_MACOS=1
+CPPFLAGS += $(OPENSSL_CFLAGS) -DOPAL_PLATFORM_MACOS=1 \
+	-DSDL_GetClipboardText=opal_macos_get_clipboard_text \
+	-DSDL_SetClipboardText=opal_macos_set_clipboard_text
+
+APPLE_FRAMEWORKS := \
+	-framework Foundation \
+	-framework AppKit \
+	-framework CoreGraphics \
+	-framework ApplicationServices \
+	-framework ScreenCaptureKit \
+	-framework CoreMedia \
+	-framework CoreVideo \
+	-framework VideoToolbox \
+	-framework AudioToolbox
+
+MACOS_VIDEO_SRCS := \
+	src/platform/macos/video_capture.cpp \
+	src/native_video_pipeline.cpp \
+	src/platform/macos/capture_backend.mm \
+	src/platform/macos/video_encoder_backend.mm \
+	src/platform/macos/audio_capture_backend.mm
 
 MACOS_PLATFORM_SRCS := \
-	src/platform/macos/pipewire_capture_stub.cpp \
-	src/platform/macos/system_backend.mm
+	src/platform/macos/system_backend.mm \
+	src/platform/macos/clipboard_shim.mm \
+	$(MACOS_VIDEO_SRCS)
 
-FLV_STREAM_SRCS := src/flv_stream.cpp
 CLIPBOARD_SRCS := src/clipboard.cpp
 MACOS_INPUT_SRC := src/platform/macos/input_helper.mm
 
-VIDEO_CAPTURE_SRCS += $(FLV_STREAM_SRCS) src/platform/macos/pipewire_capture_stub.cpp
-DIRECT_SENDER_SRCS += $(FLV_STREAM_SRCS) src/platform/macos/pipewire_capture_stub.cpp
-APP_SRCS := $(filter-out src/system.cpp,$(APP_SRCS))
-APP_SRCS += $(FLV_STREAM_SRCS) $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
+VIDEO_CAPTURE_SRCS := $(MACOS_VIDEO_SRCS)
+DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
+APP_SRCS := $(filter-out src/system.cpp src/video_capture.cpp,$(APP_SRCS))
+APP_SRCS += $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
 
-NATIVE_MEDIA_LIBS := $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS)
-APPLE_FRAMEWORKS := -framework Foundation -framework AppKit -framework CoreGraphics -framework ApplicationServices
-LDLIBS := $(OPENSSL_LIBS) -pthread $(NATIVE_MEDIA_LIBS) $(APPLE_FRAMEWORKS)
+MACOS_FFMPEG_LIBS := $(AVLIBS) $(SWRLIBS)
+AVLIBS := $(MACOS_FFMPEG_LIBS) $(APPLE_FRAMEWORKS)
+NATIVE_MEDIA_LIBS := $(MACOS_FFMPEG_LIBS) $(SDL3_LIBS) $(APPLE_FRAMEWORKS)
+LDLIBS := $(OPENSSL_LIBS) -pthread $(NATIVE_MEDIA_LIBS)
 
-$(PRODUCT): $(FLV_STREAM_SRCS) $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
+$(PRODUCT): $(CLIPBOARD_SRCS) $(MACOS_PLATFORM_SRCS)
 
 macos-input: $(MACOS_INPUT_SRC) include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fobjc-arc $(MACOS_INPUT_SRC) -framework ApplicationServices -framework CoreGraphics -o $(BUILD)/opal-input
@@ -36,8 +57,10 @@ macos-install: macos-all
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"
 	$(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(DESTDIR)$(LIBEXECDIR)/opal-input"
 
-macos-test: test-platform-contract test-udp-batch-contract test-input test-udp-transport \
-	test-video-packet test-video-reassembly test-video-feedback test-session-packet \
-	test-reliable-control test-peer-handshake test-peer-session
+macos-test: test-platform-contract test-cross-platform-architecture test-native-video-pipeline \
+	test-audio-capture-backend test-macos-clipboard-contract test-macos-capture-contract \
+	test-macos-videotoolbox-contract test-udp-batch-contract test-input test-udp-transport \
+	test-video-capture test-video-packet test-video-reassembly test-video-feedback \
+	test-session-packet test-reliable-control test-peer-handshake test-peer-session
 
 .PHONY: macos-input macos-all macos-install macos-test
