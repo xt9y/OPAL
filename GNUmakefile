@@ -1,12 +1,33 @@
 UNAME_S := $(shell uname -s)
 OPAL_OS ?= $(if $(filter Darwin,$(UNAME_S)),macos,$(if $(filter Linux,$(UNAME_S)),linux,unsupported))
 
+# Apple's /usr/bin/make is GNU Make 3.81. Keep it as the public entrypoint, but
+# transparently hand the requested goals to Homebrew GNU Make before any file
+# using .ONESHELL is included. Once gmake re-enters this file, its `oneshell`
+# feature is present and the normal macOS build below is selected.
 ifeq ($(UNAME_S),Darwin)
 ifeq ($(filter oneshell,$(.FEATURES)),)
-$(error OPAL macOS requires GNU Make 3.82+ because the build uses .ONESHELL. Install it with 'brew install make' and run 'gmake' instead of Apple's /usr/bin/make)
+opal_macos_forward_goal = $(if $(filter install,$1),macos-install,$(if $(filter all,$1),macos-all,$(if $(filter test,$1),macos-verify,$1)))
+OPAL_GMAKE_GOALS := $(foreach goal,$(MAKECMDGOALS),$(call opal_macos_forward_goal,$(goal)))
+
+.PHONY: __opal_gmake_forward $(MAKECMDGOALS)
+__opal_gmake_forward:
+	@command -v gmake >/dev/null 2>&1 || { echo "OPAL macOS requires Homebrew GNU Make. Install it once with: brew install make" >&2; exit 1; }
+	@exec gmake $(OPAL_GMAKE_GOALS)
+
+ifneq ($(strip $(MAKECMDGOALS)),)
+$(MAKECMDGOALS): __opal_gmake_forward ;
+else
+.DEFAULT_GOAL := __opal_gmake_forward
 endif
+else
+OPAL_NATIVE_MAKE := 1
+endif
+else
+OPAL_NATIVE_MAKE := 1
 endif
 
+ifeq ($(OPAL_NATIVE_MAKE),1)
 ifeq ($(OPAL_OS),linux)
 include Makefile
 else ifeq ($(OPAL_OS),macos)
@@ -75,3 +96,4 @@ test-platform-build-contract:
 	test-macos-media-scheduler test-macos-clipboard-contract test-macos-capture-contract \
 	test-macos-videotoolbox-contract test-macos-audio-contract \
 	test-macos-host-permission-contract test-platform-build-contract
+endif
