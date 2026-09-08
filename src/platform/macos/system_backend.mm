@@ -246,9 +246,15 @@ void write_default_config(const Paths &paths)
 
 int ensure_tailnet()
 {
-    if (tailscale_cli_available()) return 0;
-    std::cerr << "Tailscale is not installed; continuing with LAN/rendezvous/relay connectivity.\n";
-    return 1;
+    if (!tailscale_cli_available()) {
+        std::cerr << "Tailscale is not installed; continuing with LAN/rendezvous/relay connectivity.\n";
+        return 1;
+    }
+    if (!tailscale_connected()) {
+        std::cerr << "Tailscale is installed but not connected. Run 'sudo tailscale up' (Homebrew daemon) or connect Tailscale.app, then retry.\n";
+        return 1;
+    }
+    return 0;
 }
 
 int init()
@@ -288,7 +294,8 @@ int doctor()
     else if (!input_status.authorized) show_doctor_failure("Accessibility input helper", PlatformComponent::Input, PlatformFailure::PermissionDenied);
     else show_doctor_item("Accessibility input helper", true);
 
-    if (tailscale_cli_available()) show_doctor_item("Tailscale WAN underlay", true);
+    if (tailscale_connected()) show_doctor_item("Tailscale WAN underlay connected", true);
+    else if (tailscale_cli_available()) show_doctor_failure("Tailscale WAN underlay installed but disconnected", PlatformComponent::Datagram, PlatformFailure::Unavailable);
     else show_doctor_failure("Tailscale WAN underlay", PlatformComponent::Datagram, PlatformFailure::DependencyMissing);
 
     show_doctor_item("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
