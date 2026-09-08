@@ -31,6 +31,10 @@ int main()
     assert(text.find("std::shared_ptr<void> pixel_owner") != std::string::npos);
     assert(text.find("std::condition_variable ready") != std::string::npos);
     assert(text.find("ready.wait_for") != std::string::npos);
+    assert(text.find("std::shared_ptr<EncodeRequest> request_ = std::make_shared<EncodeRequest>()") != std::string::npos);
+    assert(text.find("auto request = request_") != std::string::npos);
+    assert(text.find("auto request = std::make_shared<EncodeRequest>()") == std::string::npos);
+    assert(text.find("request_ = std::make_shared<EncodeRequest>()") != std::string::npos);
     assert(text.find("dispatch_semaphore_create(0)") == std::string::npos);
     assert(text.find("force_idr_.exchange") != std::string::npos);
     assert(text.find("VTCompressionSessionInvalidate") != std::string::npos);
