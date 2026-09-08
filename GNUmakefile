@@ -1,6 +1,12 @@
 UNAME_S := $(shell uname -s)
 OPAL_OS ?= $(if $(filter Darwin,$(UNAME_S)),macos,$(if $(filter Linux,$(UNAME_S)),linux,unsupported))
 
+ifeq ($(UNAME_S),Darwin)
+ifeq ($(filter oneshell,$(.FEATURES)),)
+$(error OPAL macOS requires GNU Make 3.82+ because the build uses .ONESHELL. Install it with 'brew install make' and run 'gmake' instead of Apple's /usr/bin/make)
+endif
+endif
+
 ifeq ($(OPAL_OS),linux)
 include Makefile
 else ifeq ($(OPAL_OS),macos)
