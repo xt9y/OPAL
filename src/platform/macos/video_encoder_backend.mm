@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -98,6 +100,16 @@ bool sample_to_annexb(CMSampleBufferRef sample, std::size_t nal_length_size, std
     return offset == total_length && !out.empty();
 }
 
+struct EncodeRequest {
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    OSStatus status = noErr;
+    bool ok = false;
+    EncodedMediaUnit unit{};
+    MediaConfig discovered_config{};
+    std::size_t discovered_nal_length_size = 0;
+    std::shared_ptr<void> pixel_owner;
+};
+
 class MacVideoEncoderBackend final : public VideoEncoderBackend {
 public:
     ~MacVideoEncoderBackend() override { stop(); }
@@ -129,10 +141,14 @@ public:
 
         CVPixelBufferRef pixel = static_cast<CVPixelBufferRef>(frame.opaque);
         const std::uint64_t index = frame_index_++;
-        const CMTime pts = CMTimeMake(static_cast<std::int64_t>(index), fps_);
-        const CMTime duration = CMTimeMake(1, fps_);
-        const bool force_idr = force_idr_;
-        force_idr_ = false;
+        const std::uint64_t capture_time_us = frame.capture_time_us;
+        const int fps = fps_;
+        const CMTime pts = CMTimeMake(static_cast<std::int64_t>(index), fps);
+        const CMTime duration = CMTimeMake(1, fps);
+        const bool force_idr = force_idr_.exchange(false, std::memory_order_acq_rel);
+        const bool need_config = config_.extradata.empty();
+        const std::size_t current_nal_length_size = nal_length_size_;
+
         CFDictionaryRef frame_properties = nullptr;
         if (force_idr) {
             const void *keys[] = {kVTEncodeFrameOptionKey_ForceKeyFrame};
@@ -142,61 +158,66 @@ public:
                                                    &kCFTypeDictionaryValueCallBacks);
         }
 
-        __block EncodedMediaUnit encoded{};
-        __block bool callback_ok = false;
-        __block OSStatus callback_status = noErr;
-        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        auto request = std::make_shared<EncodeRequest>();
+        request->pixel_owner = frame.owner;
         VTEncodeInfoFlags flags = 0;
         const OSStatus status = VTCompressionSessionEncodeFrameWithOutputHandler(
             session_, pixel, pts, duration, frame_properties, &flags,
             ^(OSStatus output_status, VTEncodeInfoFlags output_flags, CMSampleBufferRef sample) {
-                callback_status = output_status;
+                request->status = output_status;
+                std::size_t nal_length = current_nal_length_size;
                 if (output_status == noErr && !(output_flags & kVTEncodeInfo_FrameDropped) && sample) {
-                    if (config_.extradata.empty()) {
-                        std::size_t header = nal_length_size_;
+                    if (need_config) {
                         MediaConfig discovered;
-                        if (append_parameter_sets(CMSampleBufferGetFormatDescription(sample), discovered, header)) {
-                            config_ = std::move(discovered);
-                            nal_length_size_ = header;
+                        if (append_parameter_sets(CMSampleBufferGetFormatDescription(sample), discovered, nal_length)) {
+                            request->discovered_config = std::move(discovered);
+                            request->discovered_nal_length_size = nal_length;
                         }
                     }
-                    encoded.kind = MediaKind::VideoH264;
-                    encoded.pts_us = static_cast<std::int64_t>((index * 1000000ULL) / static_cast<std::uint64_t>(fps_));
-                    encoded.capture_time_us = frame.capture_time_us;
-                    encoded.keyframe = keyframe_sample(sample);
-                    callback_ok = sample_to_annexb(sample, nal_length_size_, encoded.data);
+                    request->unit.kind = MediaKind::VideoH264;
+                    request->unit.pts_us = static_cast<std::int64_t>((index * 1000000ULL) / static_cast<std::uint64_t>(fps));
+                    request->unit.capture_time_us = capture_time_us;
+                    request->unit.keyframe = keyframe_sample(sample);
+                    request->ok = sample_to_annexb(sample, nal_length, request->unit.data);
                 }
-                dispatch_semaphore_signal(done);
+                request->pixel_owner.reset();
+                dispatch_semaphore_signal(request->done);
             });
         if (frame_properties) CFRelease(frame_properties);
         if (status != noErr) {
+            request->pixel_owner.reset();
             error_ = vt_error(status, "VTCompressionSessionEncodeFrame failed");
             return false;
         }
-        if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0) {
+        if (dispatch_semaphore_wait(request->done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0) {
             error_ = {PlatformComponent::Encoder, PlatformFailure::Unavailable,
                       "VideoToolbox encode callback timed out", true};
+            invalidate_session();
             return false;
         }
-        if (!callback_ok) {
-            error_ = callback_status == noErr
+        if (!request->ok) {
+            error_ = request->status == noErr
                 ? PlatformError{PlatformComponent::Encoder, PlatformFailure::Unavailable,
                                 "VideoToolbox returned no usable H.264 access unit", true}
-                : vt_error(callback_status, "VideoToolbox output callback failed");
+                : vt_error(request->status, "VideoToolbox output callback failed");
             return false;
         }
-        unit = std::move(encoded);
+        if (!request->discovered_config.extradata.empty()) {
+            config_ = std::move(request->discovered_config);
+            nal_length_size_ = request->discovered_nal_length_size;
+        }
+        unit = std::move(request->unit);
         return true;
     }
 
-    void request_idr() override { force_idr_ = true; }
+    void request_idr() override { force_idr_.store(true, std::memory_order_release); }
 
     bool set_bitrate(int bitrate_kbps) override
     {
         bitrate_kbps_ = std::max(1000, bitrate_kbps);
         if (!session_) return true;
-        const std::int32_t bits = static_cast<std::int32_t>(std::min<std::int64_t>(
-            static_cast<std::int64_t>(bitrate_kbps_) * 1000, INT32_MAX));
+        const std::int64_t requested_bits = static_cast<std::int64_t>(bitrate_kbps_) * 1000;
+        const auto bits = static_cast<std::int32_t>(std::min<std::int64_t>(requested_bits, std::numeric_limits<std::int32_t>::max()));
         if (!set_i32(session_, kVTCompressionPropertyKey_AverageBitRate, bits)) {
             error_ = {PlatformComponent::Encoder, PlatformFailure::OsError,
                       "VideoToolbox rejected bitrate update", false};
@@ -206,41 +227,51 @@ public:
     }
 
     MediaConfig config() const override { return config_; }
-    std::string backend_name() const override { return "videotoolbox"; }
+    std::string backend_name() const override { return "videotoolbox-hardware"; }
     PlatformError last_platform_error() const override { return error_; }
 
     void stop() override
     {
-        if (session_) {
-            (void)VTCompressionSessionCompleteFrames(session_, kCMTimeInvalid);
-            VTCompressionSessionInvalidate(session_);
-            CFRelease(session_);
-            session_ = nullptr;
-        }
+        invalidate_session();
         config_ = {};
         nal_length_size_ = 4;
         width_ = height_ = 0;
         frame_index_ = 0;
-        force_idr_ = false;
+        force_idr_.store(false, std::memory_order_release);
     }
 
 private:
+    void invalidate_session()
+    {
+        if (!session_) return;
+        VTCompressionSessionInvalidate(session_);
+        CFRelease(session_);
+        session_ = nullptr;
+    }
+
     bool open_session(int width, int height)
     {
+        const void *spec_keys[] = {kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder};
+        const void *spec_values[] = {kCFBooleanTrue};
+        CFDictionaryRef specification = CFDictionaryCreate(kCFAllocatorDefault, spec_keys, spec_values, 1,
+                                                            &kCFTypeDictionaryKeyCallBacks,
+                                                            &kCFTypeDictionaryValueCallBacks);
         VTCompressionSessionRef session = nullptr;
         const OSStatus status = VTCompressionSessionCreate(
             kCFAllocatorDefault, width, height, kCMVideoCodecType_H264,
-            nullptr, nullptr, kCFAllocatorDefault, nullptr, nullptr, &session);
+            specification, nullptr, kCFAllocatorDefault, nullptr, nullptr, &session);
+        if (specification) CFRelease(specification);
         if (status != noErr || !session) {
-            error_ = vt_error(status, "VTCompressionSessionCreate failed");
+            error_ = vt_error(status, "hardware VTCompressionSessionCreate failed");
+            error_.failure = PlatformFailure::Unavailable;
             return false;
         }
         session_ = session;
         width_ = width;
         height_ = height;
 
-        const std::int32_t bits = static_cast<std::int32_t>(std::min<std::int64_t>(
-            static_cast<std::int64_t>(bitrate_kbps_) * 1000, INT32_MAX));
+        const std::int64_t requested_bits = static_cast<std::int64_t>(bitrate_kbps_) * 1000;
+        const auto bits = static_cast<std::int32_t>(std::min<std::int64_t>(requested_bits, std::numeric_limits<std::int32_t>::max()));
         const std::int32_t fps = fps_;
         const std::int32_t gop = std::max(1, fps_ * 2);
         const std::int32_t frame_delay = 1;
@@ -256,13 +287,13 @@ private:
         if (!ok) {
             error_ = {PlatformComponent::Encoder, PlatformFailure::OsError,
                       "VideoToolbox rejected required realtime encoder properties", false};
-            stop();
+            invalidate_session();
             return false;
         }
         const OSStatus prepare = VTCompressionSessionPrepareToEncodeFrames(session_);
         if (prepare != noErr) {
             error_ = vt_error(prepare, "VTCompressionSessionPrepareToEncodeFrames failed");
-            stop();
+            invalidate_session();
             return false;
         }
         return true;
@@ -275,7 +306,7 @@ private:
     int fps_ = 60;
     int bitrate_kbps_ = 30000;
     std::uint64_t frame_index_ = 0;
-    bool force_idr_ = false;
+    std::atomic<bool> force_idr_{false};
     std::size_t nal_length_size_ = 4;
     MediaConfig config_{};
     PlatformError error_{};
