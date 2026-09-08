@@ -26,6 +26,9 @@ int main()
     assert(text.find("avcodec_get_supported_config") != std::string::npos);
     assert(text.find("swr_alloc_set_opts2") != std::string::npos);
     assert(text.find("AudioSpecificConfig") != std::string::npos);
+    assert(text.find("fifo_capture_us_") != std::string::npos);
+    assert(text.find("fifo_samples_before") != std::string::npos);
+    assert(text.find("unit.capture_time_us = fifo_capture_us_") != std::string::npos);
     assert(text.find("ffmpeg -") == std::string::npos);
     return 0;
 }
