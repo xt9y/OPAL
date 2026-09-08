@@ -229,7 +229,7 @@ public:
         reset_encoder();
         config_ = {};
         config_revision_ = 0;
-        capture_cursor_us_ = 0;
+        fifo_capture_us_ = 0;
         samples_encoded_ = 0;
         audio_anchor_valid_ = false;
         audio_anchor_pts_ = kCMTimeInvalid;
@@ -336,6 +336,7 @@ private:
         input_format_ = AV_SAMPLE_FMT_NONE;
         input_rate_ = 0;
         input_channels_ = 0;
+        fifo_capture_us_ = 0;
     }
 
     bool ingest(CMSampleBufferRef sample)
@@ -354,6 +355,19 @@ private:
         }
         if (!codec_ || format != input_format_ || sample_rate != input_rate_ || channels != input_channels_) {
             if (!open_encoder(sample_rate, channels, format)) return false;
+        }
+
+        const CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
+        const auto now_us = monotonic_us();
+        std::uint64_t sample_capture_us = now_us;
+        if (CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts) && !audio_anchor_valid_) {
+            audio_anchor_valid_ = true;
+            audio_anchor_pts_ = pts;
+            audio_anchor_us_ = now_us;
+        } else if (audio_anchor_valid_ && CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts)) {
+            const double seconds = CMTimeGetSeconds(CMTimeSubtract(pts, audio_anchor_pts_));
+            if (std::isfinite(seconds) && seconds >= 0.0)
+                sample_capture_us = audio_anchor_us_ + static_cast<std::uint64_t>(seconds * 1000000.0);
         }
 
         size_t list_size = 0;
@@ -389,25 +403,13 @@ private:
                                                   input.data(), input_samples);
         if (block) CFRelease(block);
         if (converted_samples <= 0) { av_frame_free(&converted); return false; }
-        if (av_audio_fifo_realloc(fifo_, av_audio_fifo_size(fifo_) + converted_samples) < 0 ||
+        const int fifo_samples_before = av_audio_fifo_size(fifo_);
+        if (av_audio_fifo_realloc(fifo_, fifo_samples_before + converted_samples) < 0 ||
             av_audio_fifo_write(fifo_, reinterpret_cast<void**>(converted->data), converted_samples) != converted_samples) {
             av_frame_free(&converted); return false;
         }
         av_frame_free(&converted);
-
-        const CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
-        const auto now_us = monotonic_us();
-        if (capture_cursor_us_ == 0) capture_cursor_us_ = now_us;
-        if (CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts) && !audio_anchor_valid_) {
-            audio_anchor_valid_ = true;
-            audio_anchor_pts_ = pts;
-            audio_anchor_us_ = now_us;
-            capture_cursor_us_ = now_us;
-        } else if (audio_anchor_valid_ && CMTIME_IS_VALID(pts) && !CMTIME_IS_INDEFINITE(pts)) {
-            const double seconds = CMTimeGetSeconds(CMTimeSubtract(pts, audio_anchor_pts_));
-            if (std::isfinite(seconds) && seconds >= 0.0)
-                capture_cursor_us_ = audio_anchor_us_ + static_cast<std::uint64_t>(seconds * 1000000.0);
-        }
+        if (fifo_samples_before == 0) fifo_capture_us_ = sample_capture_us;
         return true;
     }
 
@@ -440,12 +442,13 @@ private:
         unit.data.assign(packet->data, packet->data + packet->size);
         unit.pts_us = static_cast<std::int64_t>((samples_encoded_ * 1000000ULL) /
                                                static_cast<std::uint64_t>(codec_->sample_rate));
-        unit.capture_time_us = capture_cursor_us_ ? capture_cursor_us_ : monotonic_us();
+        unit.capture_time_us = fifo_capture_us_ ? fifo_capture_us_ : monotonic_us();
         unit.keyframe = false;
         samples_encoded_ += static_cast<std::uint64_t>(codec_->frame_size);
-        if (capture_cursor_us_)
-            capture_cursor_us_ += static_cast<std::uint64_t>(codec_->frame_size) * 1000000ULL /
-                                  static_cast<std::uint64_t>(codec_->sample_rate);
+        if (fifo_capture_us_)
+            fifo_capture_us_ += static_cast<std::uint64_t>(codec_->frame_size) * 1000000ULL /
+                                static_cast<std::uint64_t>(codec_->sample_rate);
+        if (av_audio_fifo_size(fifo_) == 0) fifo_capture_us_ = 0;
         av_packet_free(&packet);
         return !unit.data.empty();
     }
@@ -467,7 +470,7 @@ private:
     MediaConfig config_{};
     std::uint64_t config_revision_ = 0;
     std::uint64_t samples_encoded_ = 0;
-    std::uint64_t capture_cursor_us_ = 0;
+    std::uint64_t fifo_capture_us_ = 0;
     bool audio_anchor_valid_ = false;
     CMTime audio_anchor_pts_ = kCMTimeInvalid;
     std::uint64_t audio_anchor_us_ = 0;
