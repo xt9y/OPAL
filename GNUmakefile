@@ -25,6 +25,10 @@ test-native-video-pipeline: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_native_video_pipeline.cpp src/native_video_pipeline.cpp -o $(BUILD)/test-native-video-pipeline
 	$(BUILD)/test-native-video-pipeline
 
+test-video-sender-encoder-control: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_sender_encoder_control.cpp -o $(BUILD)/test-video-sender-encoder-control
+	$(BUILD)/test-video-sender-encoder-control
+
 test-audio-capture-backend: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_audio_capture_backend.cpp -o $(BUILD)/test-audio-capture-backend
 	$(BUILD)/test-audio-capture-backend
@@ -53,6 +57,6 @@ test-platform-build-contract:
 	sh tests/test_platform_build_contract.sh
 
 .PHONY: test-platform-contract test-cross-platform-architecture test-udp-batch-contract \
-	test-native-video-pipeline test-audio-capture-backend test-macos-clipboard-contract \
-	test-macos-capture-contract test-macos-videotoolbox-contract test-macos-audio-contract \
-	test-macos-host-permission-contract test-platform-build-contract
+	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
+	test-macos-clipboard-contract test-macos-capture-contract test-macos-videotoolbox-contract \
+	test-macos-audio-contract test-macos-host-permission-contract test-platform-build-contract
