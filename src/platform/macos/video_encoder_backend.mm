@@ -163,8 +163,18 @@ public:
                                                    &kCFTypeDictionaryValueCallBacks);
         }
 
-        auto request = std::make_shared<EncodeRequest>();
-        request->pixel_owner = frame.owner;
+        auto request = request_;
+        {
+            std::lock_guard<std::mutex> lock(request->mutex);
+            request->completed = false;
+            request->status = noErr;
+            request->ok = false;
+            request->unit = {};
+            request->discovered_config = {};
+            request->discovered_nal_length_size = 0;
+            request->pixel_owner = frame.owner;
+        }
+
         VTEncodeInfoFlags flags = 0;
         const OSStatus status = VTCompressionSessionEncodeFrameWithOutputHandler(
             session_, pixel, pts, duration, frame_properties, &flags,
@@ -206,6 +216,7 @@ public:
                           "VideoToolbox encode callback timed out", true};
                 lock.unlock();
                 invalidate_session();
+                request_ = std::make_shared<EncodeRequest>();
                 return false;
             }
             if (!request->ok) {
@@ -252,6 +263,7 @@ public:
         width_ = height_ = 0;
         frame_index_ = 0;
         force_idr_.store(false, std::memory_order_release);
+        request_ = std::make_shared<EncodeRequest>();
     }
 
 private:
@@ -326,6 +338,7 @@ private:
     std::size_t nal_length_size_ = 4;
     MediaConfig config_{};
     PlatformError error_{};
+    std::shared_ptr<EncodeRequest> request_ = std::make_shared<EncodeRequest>();
 };
 
 }
