@@ -13,11 +13,17 @@ static std::string read_all(const char* path)
 
 int main()
 {
-    const auto text = read_all("src/platform/macos/host.cpp");
-    assert(text.find("CGPreflightScreenCaptureAccess") != std::string::npos);
-    assert(text.find("AXIsProcessTrusted") != std::string::npos);
-    assert(text.find("Screen Recording permission") != std::string::npos);
-    assert(text.find("Accessibility permission") != std::string::npos);
-    assert(text.find("macos_host_run_impl") != std::string::npos);
+    const auto host = read_all("src/platform/macos/host.cpp");
+    assert(host.find("CGPreflightScreenCaptureAccess") != std::string::npos);
+    assert(host.find("AXIsProcessTrusted") != std::string::npos);
+    assert(host.find("Screen Recording permission") != std::string::npos);
+    assert(host.find("Accessibility permission") != std::string::npos);
+    assert(host.find("macos_host_run_impl") != std::string::npos);
+
+    const auto doctor = read_all("src/platform/macos/system_backend.mm");
+    assert(doctor.find("VTCopyVideoEncoderList") != std::string::npos);
+    assert(doctor.find("kVTVideoEncoderList_IsHardwareAccelerated") != std::string::npos);
+    assert(doctor.find("VideoToolbox H.264 hardware encoder") != std::string::npos);
+    assert(doctor.find("VTIsHardwareDecodeSupported") != std::string::npos);
     return 0;
 }
