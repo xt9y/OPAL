@@ -99,11 +99,11 @@ macos-sign: $(PRODUCT) macos-input
 
 macos-all: macos-sign
 
-# Deliberately install-only: build/sign as the logged-in user first. This keeps
-# codesign out of root execution and preserves the exact binaries TCC saw.
-macos-install:
-	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run macos-install as a normal user; the target invokes sudo only for installation.' >&2; exit 2; fi
-	@test -x "$(PRODUCT)" -a -x "$(BUILD)/opal-input" || { echo 'Build first as your user: gmake -j"$$(sysctl -n hw.ncpu)"' >&2; exit 1; }
+# One-step install: the build and code signing still run as the logged-in user;
+# only the final copies into PREFIX are elevated. The public `make install`
+# entrypoint is mapped to this target by GNUmakefile on macOS.
+macos-install: macos-all
+	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run make install as a normal user; the target invokes sudo only for installation.' >&2; exit 2; fi
 	codesign --verify --strict "$(PRODUCT)"
 	codesign --verify --strict "$(BUILD)/opal-input"
 	@if [ -n "$(DESTDIR)" ]; then \
@@ -116,6 +116,7 @@ macos-install:
 		sudo $(INSTALL) -m 0755 "$(PRODUCT)" "$(BINDIR)/opal"; \
 		sudo $(INSTALL) -m 0755 "$(BUILD)/opal-input" "$(LIBEXECDIR)/opal-input"; \
 	fi
+	@echo 'Installed OPAL.'
 
 # Permission-free suite. Linux capture/systemd/uinput fixture tests are omitted;
 # macOS-native capture is exercised separately by macos-runtime-test.
