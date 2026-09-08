@@ -15,12 +15,14 @@ extern "C" {
 }
 
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits.h>
 #include <string>
+#include <string_view>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
