@@ -90,6 +90,14 @@ inline CompositeLayout build_composite_layout(std::span<const MonitorGeometry> i
     layout.tile_height = std::max(1, static_cast<int>((static_cast<std::int64_t>(base_tile_height) * scale_num) / scale_den));
     if (max_width > 0) layout.tile_width = std::min(layout.tile_width, std::max(1, max_width / static_cast<int>(monitors.size())));
     if (max_height > 0) layout.tile_height = std::min(layout.tile_height, max_height);
+
+    // H.264/NV12 paths are most reliable with even frame dimensions. Keep every tile
+    // identical by rounding the shared tile size, not individual monitors.
+    if (layout.tile_width > 1) layout.tile_width &= ~1;
+    if (layout.tile_height > 1) layout.tile_height &= ~1;
+    layout.tile_width = std::max(1, layout.tile_width);
+    layout.tile_height = std::max(1, layout.tile_height);
+
     layout.canvas_width = layout.tile_width * static_cast<int>(monitors.size());
     layout.canvas_height = layout.tile_height;
 
