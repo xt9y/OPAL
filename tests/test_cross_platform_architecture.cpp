@@ -64,6 +64,8 @@ int main()
     assert(config_source.find("/Applications/Tailscale.app/Contents/MacOS/Tailscale") != std::string::npos);
     assert(macos_system.find("#include <opal/tailnet.hpp>") != std::string::npos);
     assert(macos_system.find("tailscale_cli_available()") != std::string::npos);
+    assert(macos_system.find("tailscale_connected()") != std::string::npos);
+    assert(macos_system.find("Tailscale is installed but not connected") != std::string::npos);
     assert(macos_system.find("command_exists(\"tailscale\")") == std::string::npos);
 
     const auto wake = read_all("src/wake.cpp");
