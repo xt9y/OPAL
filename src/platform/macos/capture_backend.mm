@@ -5,7 +5,9 @@
 #import <CoreVideo/CoreVideo.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
