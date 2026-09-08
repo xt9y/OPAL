@@ -253,7 +253,7 @@ int doctor()
     show("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
     show("~/.opal initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=nspasteboard\n";
-    std::cout << "[info] host capture=screencapturekit encoder=videotoolbox-hardware input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
+    std::cout << "[info] host capture=screencapturekit encoder=videotoolbox-hardware-lowlatency input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
     return 0;
 }
 
