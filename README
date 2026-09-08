@@ -15,7 +15,7 @@ Debian 13+ / Ubuntu with SDL3
   sudo apt-get update
   sudo apt-get install -y build-essential pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
-Linux build
+Linux build/install
   make -j"$(nproc)"
   sudo make install
 
@@ -25,21 +25,18 @@ Apple Silicon, macOS 13+:
   xcode-select --install
   brew install make pkg-config sdl3 openssl@3 ffmpeg
 
-Apple's /usr/bin/make is GNU Make 3.81 and is too old for OPAL's .ONESHELL build.
-Use Homebrew GNU Make as gmake.
+You still use the normal make command on macOS. OPAL detects Apple's older /usr/bin/make and transparently forwards the requested target to Homebrew GNU Make internally.
 
-macOS build/sign
-  gmake -j"$(sysctl -n hw.ncpu)"
+macOS one-step build/sign/install
+  make install
 
 macOS permission-free verification
-  gmake macos-verify
+  make test
 
-macOS install
-  gmake macos-install
+macOS native media verification after Screen Recording is granted
+  make macos-runtime-test
 
-Run gmake as your normal user. macos-install invokes sudo only for copying into /usr/local. This keeps Homebrew discovery and code signing outside a root process.
-
-The normal macOS build embeds stable Info.plist identities and ScreenCaptureKit privacy descriptions into the single-file binaries, then ad-hoc signs them as the logged-in user. macos-install only copies/verifies those already-signed binaries; it does not rebuild or sign under sudo.
+The macOS build embeds stable Info.plist identities and ScreenCaptureKit privacy descriptions into the single-file binaries, then ad-hoc signs them as the logged-in user. make install builds and signs as your normal user and invokes sudo only for the final copies into /usr/local.
 
 macOS host setup
   run opal and choose "Host this computer"
@@ -52,9 +49,6 @@ macOS host permissions
   System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL/host process
   System Settings -> Privacy & Security -> Accessibility -> allow opal-input
   opal doctor checks both independently
-
-macOS native media verification after Screen Recording is granted
-  gmake macos-runtime-test
 
 run
   setup / select host --> opal
@@ -92,8 +86,8 @@ network
 
 verify
   Linux  --> make test && make test-hpi
-  macOS build/unit/sign --> gmake macos-verify
-  macOS native media   --> gmake macos-runtime-test
+  macOS build/unit/sign --> make test
+  macOS native media   --> make macos-runtime-test
   macOS host readiness --> opal doctor
 
   host   --> OPAL_DEBUG=1 opal
