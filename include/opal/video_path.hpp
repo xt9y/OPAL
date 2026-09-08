@@ -10,7 +10,6 @@ namespace opal {
 struct DirectVideoPath {
     UdpSocket socket;
     UdpEndpoint peer{};
-    std::uint32_t peer_len=0; // compatibility mirror of peer.native_size
     VideoKeys keys;
     std::uint64_t session_id=0;
     std::uint32_t generation=0;
@@ -25,7 +24,6 @@ struct DirectVideoPath {
             close_udp_socket(socket);
             socket=other.socket;other.socket={};
             peer=other.peer;other.peer={};
-            peer_len=other.peer_len;other.peer_len=0;
             keys=other.keys;
             session_id=other.session_id;other.session_id=0;
             generation=other.generation;other.generation=0;
