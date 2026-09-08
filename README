@@ -31,6 +31,9 @@ Use Homebrew GNU Make as gmake.
 macOS build/sign
   gmake -j"$(sysctl -n hw.ncpu)"
 
+macOS permission-free verification
+  gmake macos-verify
+
 macOS install
   sudo /opt/homebrew/bin/gmake macos-install
 
@@ -47,6 +50,9 @@ macOS host permissions
   System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL/host process
   System Settings -> Privacy & Security -> Accessibility -> allow opal-input
   opal doctor checks both independently
+
+macOS native media verification after Screen Recording is granted
+  gmake macos-runtime-test
 
 run
   setup / select host --> opal
@@ -84,7 +90,9 @@ network
 
 verify
   Linux  --> make test && make test-hpi
-  macOS  --> gmake macos-test && opal doctor
+  macOS build/unit/sign --> gmake macos-verify
+  macOS native media   --> gmake macos-runtime-test
+  macOS host readiness --> opal doctor
 
   host   --> OPAL_DEBUG=1 opal
   client --> OPAL_DEBUG=1 opal <connection-code>
