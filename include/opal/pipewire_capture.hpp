@@ -9,12 +9,28 @@
 
 namespace opal {
 
+#if defined(__linux__)
 bool native_pipewire_prepare(const StreamOptions& stream,
                              const std::string& restore_token_file,
                              std::string* error = nullptr);
 CompositeLayout native_pipewire_layout();
 bool native_pipewire_authorization_lost();
 std::string native_pipewire_last_error();
+#else
+inline bool native_pipewire_prepare(const StreamOptions&,
+                                    const std::string&,
+                                    std::string* error = nullptr)
+{
+    if (error) *error = "native PipeWire capture is only available on Linux";
+    return false;
+}
+inline CompositeLayout native_pipewire_layout() { return {}; }
+inline bool native_pipewire_authorization_lost() { return false; }
+inline std::string native_pipewire_last_error()
+{
+    return "native PipeWire capture is only available on Linux";
+}
+#endif
 
 class NativePipeWireVideoCapture {
 public:
