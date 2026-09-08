@@ -35,5 +35,10 @@ int main()
     assert(doctor.find("bootstrap ") != std::string::npos);
     assert(doctor.find("kickstart -k") != std::string::npos);
     assert(doctor.find("systemctl") == std::string::npos);
+
+    const auto setup = read_all("src/setup.cpp");
+    assert(setup.find("opal doctor") != std::string::npos);
+    assert(setup.find("systemctl --user status") == std::string::npos);
+    assert(setup.find("current_platform()==PlatformKind::Linux") != std::string::npos);
     return 0;
 }
