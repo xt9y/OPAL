@@ -20,6 +20,9 @@ int main()
     assert(text.find("channelCount = 2") != std::string::npos);
     assert(text.find("CGMainDisplayID") != std::string::npos);
     assert(text.find("candidate.displayID == main_id") != std::string::npos);
+    assert(text.find("synchronizationClock") != std::string::npos);
+    assert(text.find("CMClockGetTime") != std::string::npos);
+    assert(text.find("audio_anchor_") == std::string::npos);
     assert(text.find("AVAudioFifo") != std::string::npos);
     assert(text.find("avcodec_find_encoder(AV_CODEC_ID_AAC)") != std::string::npos);
     assert(text.find("AV_CODEC_FLAG_GLOBAL_HEADER") != std::string::npos);
