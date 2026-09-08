@@ -2,59 +2,151 @@ OPAL
 
 Performance-first Linux + Apple Silicon macOS remote desktop.
 
-Linux install
+Fresh install - Linux
+
+1. Install build/runtime dependencies.
 
 Fedora 44+ / Fedora Asahi
   sudo dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
-  sudo dnf install -y --allowerasing gcc-c++ make pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire pipewire-devel pipewire-pulseaudio libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo dnf install -y --allowerasing gcc-c++ make git pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire pipewire-devel pipewire-pulseaudio libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
 CachyOS / Arch Linux
-  sudo pacman -S --needed base-devel pkgconf sdl3 openssl ffmpeg pipewire pipewire-pulse libportal xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo pacman -S --needed base-devel git pkgconf sdl3 openssl ffmpeg pipewire pipewire-pulse libportal xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
 Debian 13+ / Ubuntu with SDL3
   sudo apt-get update
-  sudo apt-get install -y build-essential pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo apt-get install -y build-essential git pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
-Linux build/install
+2. Install and join Tailscale.
+
+  curl -fsSL https://tailscale.com/install.sh | sh
+  sudo tailscale up
+  tailscale ip -4
+  tailscale status
+
+The device must be authenticated into the same Tailnet as the other OPAL computer. tailscale ip -4 should print a 100.x.x.x address before testing OPAL. OPAL can still use LAN/rendezvous/relay without Tailscale, but direct Tailnet discovery requires a connected Tailscale client.
+
+3. Clone OPAL.
+
+  git clone --branch cross-platform-macos https://github.com/xt9y/OPAL.git
+  cd OPAL
+
+4. Build and install.
+
   make -j"$(nproc)"
   sudo make install
+  hash -r
 
-macOS install
+5. Verify.
 
-Apple Silicon, macOS 13+:
+  opal doctor
+  tailscale ip -4
+  tailscale status
+
+6. First run.
+
+  opal
+
+Choose "Host this computer" on the machine being controlled, or select/add the host on the client machine. For diagnostics:
+
+  OPAL_DEBUG=1 opal
+
+Fresh install - macOS
+
+Requirements: Apple Silicon, macOS 13+ and Homebrew.
+
+1. Install Xcode Command Line Tools and dependencies.
+
   xcode-select --install
-  brew install make pkg-config sdl3 openssl@3 ffmpeg
+  brew install make pkg-config sdl3 openssl@3 ffmpeg git
 
-You still use the normal make command on macOS. OPAL detects Apple's older /usr/bin/make and transparently forwards the requested target to Homebrew GNU Make internally.
+Apple's /usr/bin/make is older than OPAL's build requires. You still use the normal make command: OPAL automatically forwards macOS builds to Homebrew gmake internally.
 
-macOS one-step build/sign/install
+2. Install and join Tailscale.
+
+Recommended for a new OPAL CLI/headless installation:
+
+  brew install tailscale
+  sudo brew services start tailscale
+  sudo tailscale up
+  tailscale ip -4
+  tailscale status
+
+sudo tailscale up opens/authenticates the machine into your Tailnet. Starting tailscaled alone is not enough. tailscale ip -4 should print a 100.x.x.x address and tailscale status should show the other OPAL machine before testing Tailnet connectivity.
+
+If you already use the normal Tailscale.app and it is signed in, OPAL also detects its bundled CLI at /Applications/Tailscale.app/Contents/MacOS/Tailscale. A separate Homebrew Tailscale installation is not required in that case. OPAL prefers a Tailscale instance that is actually connected, so an installed-but-logged-out CLI should not mask a connected app.
+
+3. Clone OPAL.
+
+  git clone --branch cross-platform-macos https://github.com/xt9y/OPAL.git
+  cd OPAL
+
+4. One-step build/sign/install.
+
   make install
+  hash -r
 
-macOS permission-free verification
+Do not run sudo make install on macOS. make install builds and signs as your normal user and invokes sudo only for the final copies into /usr/local.
+
+5. Verify the installation and Tailscale.
+
+  opal doctor
+  tailscale ip -4
+  tailscale status
+
+6. macOS host permissions.
+
+Run:
+
+  opal
+
+Choose "Host this computer". OPAL requests permission for the exact processes that need it.
+
+System Settings -> Privacy & Security -> Screen & System Audio Recording
+  allow OPAL / opal
+
+System Settings -> Privacy & Security -> Accessibility
+  allow opal-input
+
+If macOS asks for permission, grant it and run opal again to finish host setup.
+
+The host service is installed as:
+
+  ~/Library/LaunchAgents/de.xt9y.opal.host.plist
+
+Restart it with:
+
+  opal restart
+
+Re-check everything with:
+
+  opal doctor
+
+7. Optional macOS verification.
+
+Permission-free build/unit/sign verification:
+
   make test
 
-macOS native media verification after Screen Recording is granted
+Native ScreenCaptureKit -> VideoToolbox/AAC verification after Screen Recording is granted:
+
   make macos-runtime-test
 
-The macOS build embeds stable Info.plist identities and ScreenCaptureKit privacy descriptions into the single-file binaries, then ad-hoc signs them as the logged-in user. make install builds and signs as your normal user and invokes sudo only for the final copies into /usr/local.
+Run / connect
 
-macOS host setup
-  run opal and choose "Host this computer"
-  OPAL requests Screen Recording for the host and Accessibility for the exact opal-input helper
-  if macOS asks for permission, grant it and run opal again to finish setup
-  host service: ~/Library/LaunchAgents/de.xt9y.opal.host.plist
-  restart host service: opal restart
-
-macOS host permissions
-  System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL/host process
-  System Settings -> Privacy & Security -> Accessibility -> allow opal-input
-  opal doctor checks both independently
-
-run
   setup / select host --> opal
   connect             --> opal <connection-code>
   debug               --> OPAL_DEBUG=1 opal <connection-code>
   doctor              --> opal doctor
+  restart host        --> opal restart
+
+If OPAL says Tailscale is installed but disconnected:
+
+  sudo tailscale up
+  tailscale ip -4
+  tailscale status
+
+If OPAL cannot find a host on Tailscale, verify that both machines have 100.x addresses and appear in each other's tailscale status output before debugging OPAL itself.
 
 Linux host
   capture   --> PipeWire + libportal + xdg-desktop-portal
