@@ -33,6 +33,10 @@ test-audio-capture-backend: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_audio_capture_backend.cpp -o $(BUILD)/test-audio-capture-backend
 	$(BUILD)/test-audio-capture-backend
 
+test-macos-media-scheduler: | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_media_scheduler.cpp -o $(BUILD)/test-macos-media-scheduler
+	$(BUILD)/test-macos-media-scheduler
+
 test-macos-clipboard-contract: | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_macos_clipboard_contract.cpp -o $(BUILD)/test-macos-clipboard-contract
 	$(BUILD)/test-macos-clipboard-contract
@@ -58,5 +62,6 @@ test-platform-build-contract:
 
 .PHONY: test-platform-contract test-cross-platform-architecture test-udp-batch-contract \
 	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
-	test-macos-clipboard-contract test-macos-capture-contract test-macos-videotoolbox-contract \
-	test-macos-audio-contract test-macos-host-permission-contract test-platform-build-contract
+	test-macos-media-scheduler test-macos-clipboard-contract test-macos-capture-contract \
+	test-macos-videotoolbox-contract test-macos-audio-contract \
+	test-macos-host-permission-contract test-platform-build-contract
