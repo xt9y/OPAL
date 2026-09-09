@@ -10,6 +10,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 "$make_bin" -Bn OPAL_OS=linux build/opal >"$tmp/linux"
 "$make_bin" -Bn OPAL_OS=macos macos-all >"$tmp/macos"
+"$make_bin" -Bn OPAL_OS=windows windows-all >"$tmp/windows"
 
 grep -q 'src/tailnet.cpp' "$tmp/linux"
 grep -q 'src/pipewire_capture.cpp' "$tmp/linux"
@@ -36,6 +37,25 @@ grep -q 'brew --prefix openssl@3' Makefile.macos
 grep -q 'PKG_CONFIG_PATH' Makefile.macos
 grep -q -- '--libs-only-L openssl' Makefile.macos
 grep -q 'OPENSSL_LIBRARY_FLAGS' Makefile.macos
+
+# Windows is a native third backend. It must not inherit Linux capture/input
+# sources or Apple frameworks.
+grep -q 'src/platform/windows/capture_backend.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/video_encoder_backend.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/audio_capture_backend.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/clipboard_shim.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/input_helper.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/system_backend.cpp' "$tmp/windows"
+grep -q -- '-lws2_32' "$tmp/windows"
+grep -q -- '-ld3d11' "$tmp/windows"
+grep -q -- '-ldxgi' "$tmp/windows"
+grep -q -- '-lmfplat' "$tmp/windows"
+grep -q -- '-lmfuuid' "$tmp/windows"
+grep -q -- '-lmmdevapi' "$tmp/windows"
+grep -q -- '-luser32' "$tmp/windows"
+! grep -q 'src/pipewire_capture.cpp' "$tmp/windows"
+! grep -q 'src/input_helper.cpp' "$tmp/windows"
+! grep -q -- '-framework ' "$tmp/windows"
 
 # Apple's make is only the public front door. It forwards into Homebrew GNU
 # Make internally so users type the same make commands on both OSes.
