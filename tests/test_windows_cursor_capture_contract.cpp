@@ -13,8 +13,13 @@ static std::string read_all(const char* path)
 
 int main()
 {
-    const auto source = read_all("src/platform/windows/capture_backend.cpp");
+    const auto capture = read_all("src/platform/windows/capture_backend.cpp");
+    const auto cursor = read_all("src/platform/windows/cursor_compositor.hpp");
+    const auto source = capture + cursor;
 
+    assert(capture.find("CursorUpdate::PointerUpdated") != std::string::npos);
+    assert(capture.find("cursor_.update") != std::string::npos);
+    assert(capture.find("cursor_.draw") != std::string::npos);
     assert(source.find("LastMouseUpdateTime") != std::string::npos);
     assert(source.find("PointerPosition.Visible") != std::string::npos);
     assert(source.find("PointerShapeBufferSize") != std::string::npos);
@@ -27,7 +32,6 @@ int main()
     assert(source.find("cursor_target_texture_") != std::string::npos);
     assert(source.find("cursor_ops_texture_") != std::string::npos);
     assert(source.find("UpdateSubresource(cursor_constants_") != std::string::npos);
-    assert(source.find("PointerUpdated") != std::string::npos);
     assert(source.find("D3D11_USAGE_STAGING") == std::string::npos);
     assert(source.find("D3D11_CPU_ACCESS_READ") == std::string::npos);
 
