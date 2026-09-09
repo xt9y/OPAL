@@ -49,40 +49,14 @@ void release(T*& value)
     value = nullptr;
 }
 
-std::wstring utf8_to_wide(std::string_view text)
-{
-    if (text.empty()) return {};
-    const int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                                           static_cast<int>(text.size()), nullptr, 0);
-    if (needed <= 0) return {};
-    std::wstring out(static_cast<std::size_t>(needed), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
-                            out.data(), needed) != needed) return {};
-    return out;
-}
-
-std::string wide_to_utf8(std::wstring_view text)
-{
-    if (text.empty()) return {};
-    const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
-                                           static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    if (needed <= 0) return {};
-    std::string out(static_cast<std::size_t>(needed), '\0');
-    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
-                            out.data(), needed, nullptr, nullptr) != needed) return {};
-    return out;
-}
-
 std::filesystem::path current_executable_path()
 {
     std::vector<wchar_t> buffer(1024);
     for (;;) {
         const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
         if (length == 0) return {};
-        if (length < buffer.size() - 1) {
-            const auto utf8 = wide_to_utf8(std::wstring_view(buffer.data(), length));
-            return utf8.empty() ? std::filesystem::path{} : std::filesystem::path(utf8);
-        }
+        if (length < buffer.size() - 1)
+            return std::filesystem::path(std::wstring(buffer.data(), length));
         if (buffer.size() >= 32768) return {};
         buffer.resize(buffer.size() * 2);
     }
@@ -225,8 +199,8 @@ bool register_host_task()
 
     const auto executable_path = current_executable_path();
     if (executable_path.empty()) return false;
-    const std::wstring executable = utf8_to_wide(executable_path.string());
-    const std::wstring working = utf8_to_wide(executable_path.parent_path().string());
+    const std::wstring executable = executable_path.native();
+    const std::wstring working = executable_path.parent_path().native();
     if (executable.empty()) return false;
 
     ITaskDefinition* definition = nullptr;
