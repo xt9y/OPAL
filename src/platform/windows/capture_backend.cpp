@@ -666,6 +666,15 @@ private:
             return AcquireResult::None;
         }
 
+        if (!desktop_updated && output.ready) {
+            texture->Release();
+            (void)output.duplication->ReleaseFrame();
+            output.capture_us = cursor_.capture_time_us() ? cursor_.capture_time_us() : monotonic_us();
+            output.timestamp_quality = CaptureTimestampQuality::Exact;
+            if (needs_composite_ && !ensure_output_pipeline(output)) return AcquireResult::Fatal;
+            return AcquireResult::PointerUpdated;
+        }
+
         if (!ensure_latest_texture(output, texture)) {
             texture->Release();
             (void)output.duplication->ReleaseFrame();
@@ -746,7 +755,21 @@ private:
             const bool pointer_updated = cursor_update == CursorUpdate::PointerUpdated;
             if (cursor_.visible()) {
                 needs_composite_ = true;
-                if (!ensure_composite_surface() || !ensure_latest_texture(output, texture)) {
+                if (!ensure_composite_surface()) {
+                    texture->Release();
+                    (void)output.duplication->ReleaseFrame();
+                    running_ = false;
+                    return false;
+                }
+                if (!desktop_updated && output.ready) {
+                    texture->Release();
+                    (void)output.duplication->ReleaseFrame();
+                    output.capture_us = cursor_.capture_time_us() ? cursor_.capture_time_us() : monotonic_us();
+                    output.timestamp_quality = CaptureTimestampQuality::Exact;
+                    if (!ensure_output_pipeline(output)) { running_ = false; return false; }
+                    return compose(frame, output.capture_us, output.timestamp_quality);
+                }
+                if (!ensure_latest_texture(output, texture)) {
                     texture->Release();
                     (void)output.duplication->ReleaseFrame();
                     running_ = false;
