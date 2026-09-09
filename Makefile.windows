@@ -150,6 +150,8 @@ WINDOWS_CONTRACT_TESTS := \
 	test-windows-clipboard-contract \
 	test-windows-config-contract \
 	test-windows-process-contract \
+	test-windows-posix-leak-contract \
+	test-windows-sink-timeout-contract \
 	test-windows-tailnet-contract \
 	test-windows-system-contract \
 	test-local-discovery-platform-contract \
@@ -181,6 +183,8 @@ $(eval $(call WINDOWS_TEXT_TEST,test-windows-input-contract,tests/test_windows_i
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-clipboard-contract,tests/test_windows_clipboard_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-config-contract,tests/test_windows_config_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-process-contract,tests/test_windows_process_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-posix-leak-contract,tests/test_windows_posix_leak_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-sink-timeout-contract,tests/test_windows_sink_timeout_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-tailnet-contract,tests/test_windows_tailnet_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-system-contract,tests/test_windows_system_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-local-discovery-platform-contract,tests/test_local_discovery_platform_contract.cpp))
