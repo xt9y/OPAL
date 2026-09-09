@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,33 @@ std::filesystem::path windows_executable_path()
         buffer.resize(buffer.size() * 2);
     }
 }
+
+bool windows_debug_enabled()
+{
+    const char* value = std::getenv("OPAL_DEBUG");
+    return value && *value && std::string(value) != "0";
+}
+
+class WindowsHostPowerGuard {
+public:
+    WindowsHostPowerGuard()
+    {
+        previous_ = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+        if (previous_ == 0 && windows_debug_enabled())
+            std::cerr << "OPAL Windows power hold failed error=" << GetLastError() << '\n';
+    }
+
+    ~WindowsHostPowerGuard()
+    {
+        (void)SetThreadExecutionState(ES_CONTINUOUS);
+    }
+
+    WindowsHostPowerGuard(const WindowsHostPowerGuard&) = delete;
+    WindowsHostPowerGuard& operator=(const WindowsHostPowerGuard&) = delete;
+
+private:
+    EXECUTION_STATE previous_ = 0;
+};
 
 void ensure_windows_input_helper_environment()
 {
@@ -122,6 +150,7 @@ int host_setup()
 int host_run()
 {
     ensure_windows_input_helper_environment();
+    WindowsHostPowerGuard power_guard;
     return windows_host_run_impl();
 }
 
@@ -143,6 +172,7 @@ int host_daemon()
         return 1;
     }
 
+    WindowsHostPowerGuard power_guard;
     const int result = windows_host_daemon_impl();
     clear_windows_host_pid(pid);
     ReleaseMutex(single_instance);
