@@ -15,7 +15,7 @@ WINDOWS_UDP_SRCS := \
 	src/platform/windows/udp_socket_ops.cpp
 
 WINDOWS_VIDEO_SRCS := \
-	src/platform/macos/video_capture.cpp \
+	src/native_video_capture.cpp \
 	src/native_video_pipeline.cpp \
 	src/platform/windows/capture_backend.cpp \
 	src/platform/windows/video_encoder_backend.cpp \
@@ -140,6 +140,8 @@ WINDOWS_CONTRACT_TESTS := \
 	test-windows-capture-hardening-contract \
 	test-windows-cursor-capture-contract \
 	test-windows-cursor-only-fastpath-contract \
+	test-windows-virtual-desktop-contract \
+	test-native-video-capture-platform-contract \
 	test-windows-media-foundation-contract \
 	test-windows-audio-contract \
 	test-windows-audio-steady-state-contract \
@@ -168,6 +170,8 @@ $(eval $(call WINDOWS_TEXT_TEST,test-windows-multimonitor-capture-contract,tests
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-hardening-contract,tests/test_windows_capture_hardening_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-cursor-capture-contract,tests/test_windows_cursor_capture_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-cursor-only-fastpath-contract,tests/test_windows_cursor_only_fastpath_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-virtual-desktop-contract,tests/test_windows_virtual_desktop_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-native-video-capture-platform-contract,tests/test_native_video_capture_platform_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-media-foundation-contract,tests/test_windows_media_foundation_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-contract,tests/test_windows_audio_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-steady-state-contract,tests/test_windows_audio_steady_state_contract.cpp))
