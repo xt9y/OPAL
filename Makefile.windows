@@ -45,7 +45,7 @@ WINDOWS_DIRECT_BASE_SRCS := \
 WINDOWS_DIRECT_RECEIVER_SRCS := \
 	$(VIDEO_RECEIVER_SRCS) \
 	$(VIDEO_REASSEMBLY_SRCS) \
-	$(VIDEO_DECODER_SRCS) \
+	src/platform/windows/video_decoder.cpp \
 	$(AUDIO_OUTPUT_SRCS)
 
 WINDOWS_DIRECT_SENDER_SRCS := \
@@ -79,7 +79,7 @@ WINDOWS_APP_SRCS := \
 	$(DIRECT_MEDIA_COMMON_SRCS) \
 	$(WINDOWS_DIRECT_RECEIVER_SRCS) \
 	$(WINDOWS_DIRECT_SENDER_SRCS) \
-	$(DIRECT_PRESENT_SRCS) \
+	src/platform/windows/video_present.cpp \
 	$(WINDOWS_CONTROL_SRCS) \
 	$(INPUT_SRCS) \
 	src/clipboard.cpp \
@@ -146,7 +146,8 @@ WINDOWS_CONTRACT_TESTS := \
 	test-local-discovery-platform-contract \
 	test-windows-wake-contract \
 	test-windows-host-contract \
-	test-windows-main-contract
+	test-windows-main-contract \
+	test-windows-d3d11-decode-present-contract
 
 define WINDOWS_TEXT_TEST
 $1: | $$(BUILD)
@@ -169,6 +170,7 @@ $(eval $(call WINDOWS_TEXT_TEST,test-local-discovery-platform-contract,tests/tes
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-wake-contract,tests/test_windows_wake_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-host-contract,tests/test_windows_host_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-main-contract,tests/test_windows_main_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-d3d11-decode-present-contract,tests/test_windows_d3d11_decode_present_contract.cpp))
 
 windows-test: $(WINDOWS_CONTRACT_TESTS) test-platform-contract test-cross-platform-architecture \
 	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
