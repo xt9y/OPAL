@@ -157,7 +157,7 @@ Run
   opal.exe <connection-code>
   opal.exe doctor
 
-The executable is linked as a console application so CLI output remains visible. Hosting persists through an interactive-user Task Scheduler task rather than a Windows service.
+The executable is linked as a console application so CLI output remains visible. Hosting starts immediately in the current user session and persists across future logins through the current user's Windows Run registry key. No Administrator rights or Task Scheduler setup is required.
 
 Backend
 
@@ -169,7 +169,7 @@ Backend
   input        SendInput
   clipboard    CF_UNICODETEXT + event-driven clipboard listener/cache
   audio        WASAPI loopback + persistent AAC + SDL3 playback
-  service      interactive-user Task Scheduler task
+  service      per-user Run registry auto-start + detached host daemon
   network      Winsock2 + LAN/direct/relay/Tailscale paths
 
 Windows multi-monitor capture supports displays on the selected D3D11 adapter. A desktop spanning multiple DXGI adapters is rejected rather than silently dropping displays.
