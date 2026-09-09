@@ -1,5 +1,5 @@
-UNAME_S := $(shell uname -s)
-OPAL_OS ?= $(if $(filter Darwin,$(UNAME_S)),macos,$(if $(filter Linux,$(UNAME_S)),linux,unsupported))
+UNAME_S := $(shell uname -s 2>/dev/null || echo unknown)
+OPAL_OS ?= $(if $(filter Windows_NT,$(OS)),windows,$(if $(filter MINGW% MSYS% CYGWIN%,$(UNAME_S)),windows,$(if $(filter Darwin,$(UNAME_S)),macos,$(if $(filter Linux,$(UNAME_S)),linux,unsupported))))
 
 # Apple's /usr/bin/make is GNU Make 3.81. Keep it as the public entrypoint, but
 # transparently hand the requested goals to Homebrew GNU Make before any file
@@ -27,16 +27,42 @@ else
 OPAL_NATIVE_MAKE := 1
 endif
 
+# Makefile.core contains Linux-era public targets named all/test/install.
+# On Windows, forward those three front-door goals to explicit Windows targets
+# before Makefile.core is parsed, so they cannot accidentally build/install the
+# Linux service/input layout. Direct windows-* goals skip this wrapper.
+ifeq ($(OPAL_OS),windows)
+WINDOWS_PUBLIC_GOALS := $(filter all test install,$(MAKECMDGOALS))
+ifneq ($(strip $(WINDOWS_PUBLIC_GOALS)),)
+OPAL_NATIVE_MAKE := 0
+opal_windows_forward_goal = $(if $(filter install,$1),windows-install,$(if $(filter test,$1),windows-test,windows-all))
+OPAL_WINDOWS_GOALS := $(foreach goal,$(WINDOWS_PUBLIC_GOALS),$(call opal_windows_forward_goal,$(goal)))
+.PHONY: __opal_windows_forward $(WINDOWS_PUBLIC_GOALS)
+__opal_windows_forward:
+	@$(MAKE) OPAL_OS=windows $(OPAL_WINDOWS_GOALS)
+$(WINDOWS_PUBLIC_GOALS): __opal_windows_forward ;
+endif
+endif
+
 ifeq ($(OPAL_NATIVE_MAKE),1)
 ifeq ($(OPAL_OS),linux)
 include Makefile
 else ifeq ($(OPAL_OS),macos)
 include Makefile.macos
+else ifeq ($(OPAL_OS),windows)
+include Makefile.windows
 else
-$(error Unsupported platform '$(UNAME_S)'; OPAL currently supports Linux and macOS)
+$(error Unsupported platform '$(UNAME_S)'; OPAL currently supports Linux, macOS, and Windows)
 endif
 
+ifeq ($(OPAL_OS),windows)
+TAILNET_SRCS := src/platform/windows/tailnet.cpp
+else
 TAILNET_SRCS := src/tailnet.cpp
+LOCAL_DISCOVERY_SRCS += src/udp_socket_ops.cpp
+APP_SRCS += src/udp_socket_ops.cpp
+$(PRODUCT): src/udp_socket_ops.cpp
+endif
 APP_SRCS += $(TAILNET_SRCS)
 $(PRODUCT): $(TAILNET_SRCS)
 
