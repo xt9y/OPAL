@@ -15,6 +15,7 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mmdeviceapi.h>
+#include <tlhelp32.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -34,6 +35,8 @@ namespace {
 
 constexpr wchar_t kHostRunKeyPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kHostRunValueName[] = L"OPAL Host";
+constexpr wchar_t kHostMutexName[] = L"Local\\xt9y.OPAL.HostDaemon";
+constexpr wchar_t kHostStopEventName[] = L"Local\\xt9y.OPAL.HostStop";
 
 struct ComScope {
     HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -53,6 +56,12 @@ struct RegistryKey {
     HKEY value = nullptr;
     ~RegistryKey() { if (value) RegCloseKey(value); }
 };
+
+bool debug_enabled()
+{
+    const char* value = std::getenv("OPAL_DEBUG");
+    return value && *value && std::string(value) != "0";
+}
 
 std::filesystem::path current_executable_path()
 {
@@ -223,6 +232,25 @@ void clear_host_pid()
     std::filesystem::remove(host_pid_path(), error);
 }
 
+void clear_host_pid_if(DWORD expected_pid)
+{
+    std::ifstream input(host_pid_path());
+    unsigned long long pid = 0;
+    if (!(input >> pid) || pid != expected_pid) return;
+    input.close();
+    clear_host_pid();
+}
+
+bool write_host_pid(DWORD pid)
+{
+    const auto paths = Paths::load();
+    if (!ensure_layout(paths)) return false;
+    std::ofstream output(paths.root / "host.pid", std::ios::out | std::ios::trunc);
+    if (!output) return false;
+    output << pid << '\n';
+    return output.good();
+}
+
 bool read_host_pid(DWORD& pid)
 {
     std::ifstream input(host_pid_path());
@@ -232,75 +260,142 @@ bool read_host_pid(DWORD& pid)
     return true;
 }
 
-bool process_is_opal(HANDLE process)
+bool process_is_current_opal(HANDLE process)
 {
     std::vector<wchar_t> buffer(32768);
     DWORD length = static_cast<DWORD>(buffer.size());
     if (!QueryFullProcessImageNameW(process, 0, buffer.data(), &length) || length == 0) return false;
     const std::filesystem::path image(std::wstring(buffer.data(), length));
-    return CompareStringOrdinal(image.filename().c_str(), -1, L"opal.exe", -1, TRUE) == CSTR_EQUAL;
+    const auto current = current_executable_path();
+    if (current.empty()) return false;
+    return CompareStringOrdinal(image.native().c_str(), -1, current.native().c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+bool host_mutex_running()
+{
+    HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, kHostMutexName);
+    if (!mutex) return false;
+    const DWORD wait = WaitForSingleObject(mutex, 0);
+    const bool running = wait == WAIT_TIMEOUT;
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) (void)ReleaseMutex(mutex);
+    CloseHandle(mutex);
+    return running;
+}
+
+bool wait_for_host_mutex_release(DWORD timeout_ms)
+{
+    HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, kHostMutexName);
+    if (!mutex) return true;
+    const DWORD wait = WaitForSingleObject(mutex, timeout_ms);
+    const bool released = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
+    if (released) (void)ReleaseMutex(mutex);
+    CloseHandle(mutex);
+    return released;
+}
+
+bool running_process(DWORD pid, DWORD access, HANDLE& process)
+{
+    process = OpenProcess(access | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return false;
+    DWORD exit_code = 0;
+    if (!process_is_current_opal(process) ||
+        !GetExitCodeProcess(process, &exit_code) || exit_code != STILL_ACTIVE) {
+        CloseHandle(process);
+        process = nullptr;
+        return false;
+    }
+    return true;
+}
+
+bool recover_host_pid(DWORD& pid)
+{
+    DWORD stored = 0;
+    HANDLE process = nullptr;
+    if (read_host_pid(stored) && running_process(stored, 0, process)) {
+        CloseHandle(process);
+        pid = stored;
+        return true;
+    }
+    if (process) CloseHandle(process);
+    clear_host_pid();
+    if (!host_mutex_running()) return false;
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    DWORD candidate = 0;
+    unsigned matches = 0;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ProcessID == GetCurrentProcessId()) continue;
+            if (CompareStringOrdinal(entry.szExeFile, -1, L"opal.exe", -1, TRUE) != CSTR_EQUAL) continue;
+            HANDLE candidate_process = nullptr;
+            if (!running_process(entry.th32ProcessID, 0, candidate_process)) continue;
+            CloseHandle(candidate_process);
+            candidate = entry.th32ProcessID;
+            ++matches;
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+
+    if (matches != 1 || candidate == 0) return false;
+    (void)write_host_pid(candidate);
+    pid = candidate;
+    return true;
 }
 
 bool host_daemon_running()
 {
-    DWORD pid = 0;
-    if (!read_host_pid(pid)) return false;
-
-    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process) {
-        if (GetLastError() == ERROR_INVALID_PARAMETER) clear_host_pid();
-        return false;
-    }
-
-    DWORD exit_code = 0;
-    const bool running = process_is_opal(process) &&
-                         GetExitCodeProcess(process, &exit_code) &&
-                         exit_code == STILL_ACTIVE;
-    CloseHandle(process);
-    if (!running) clear_host_pid();
-    return running;
+    return host_mutex_running();
 }
 
 bool stop_host_daemon()
 {
-    DWORD pid = 0;
-    if (!read_host_pid(pid)) {
+    if (!host_mutex_running()) {
         clear_host_pid();
         return true;
     }
 
-    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process) {
-        if (GetLastError() == ERROR_INVALID_PARAMETER) {
+    HANDLE stop_event = OpenEventW(EVENT_MODIFY_STATE, FALSE, kHostStopEventName);
+    if (stop_event) {
+        const bool signaled = SetEvent(stop_event) != FALSE;
+        CloseHandle(stop_event);
+        if (signaled && wait_for_host_mutex_release(3000)) {
             clear_host_pid();
             return true;
         }
+    }
+
+    if (!host_mutex_running()) {
+        clear_host_pid();
+        return true;
+    }
+
+    DWORD pid = 0;
+    if (!recover_host_pid(pid)) {
+        if (debug_enabled())
+            std::cerr << "OPAL host daemon is alive but its process could not be identified safely.\n";
         return false;
     }
 
-    if (!process_is_opal(process)) {
-        CloseHandle(process);
-        clear_host_pid();
-        return true;
-    }
-
-    const DWORD wait = WaitForSingleObject(process, 0);
-    if (wait == WAIT_OBJECT_0) {
-        CloseHandle(process);
-        clear_host_pid();
-        return true;
+    HANDLE process = nullptr;
+    if (!running_process(pid, PROCESS_TERMINATE, process)) {
+        clear_host_pid_if(pid);
+        return !host_mutex_running();
     }
 
     const bool terminated = TerminateProcess(process, 0) != FALSE;
     if (terminated) (void)WaitForSingleObject(process, 3000);
     CloseHandle(process);
-    if (terminated) clear_host_pid();
-    return terminated;
+    if (terminated) clear_host_pid_if(pid);
+    return terminated && wait_for_host_mutex_release(3000);
 }
 
 bool launch_host_daemon()
 {
-    if (host_daemon_running()) return true;
+    if (host_mutex_running()) return true;
 
     const auto executable_path = current_executable_path();
     if (executable_path.empty()) return false;
@@ -318,23 +413,42 @@ bool launch_host_daemon()
         CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr,
         working.empty() ? nullptr : working.c_str(), &startup, &process);
     if (!created) {
-        if (const char* debug = std::getenv("OPAL_DEBUG"); debug && *debug && std::string(debug) != "0")
+        if (debug_enabled())
             std::cerr << "OPAL host daemon CreateProcessW failed error=" << GetLastError() << '\n';
         return false;
     }
 
     CloseHandle(process.hThread);
-    const DWORD wait = WaitForSingleObject(process.hProcess, 300);
-    bool running = wait == WAIT_TIMEOUT;
-    if (!running && wait == WAIT_OBJECT_0) {
-        DWORD exit_code = 0;
-        if (GetExitCodeProcess(process.hProcess, &exit_code)) {
-            if (const char* debug = std::getenv("OPAL_DEBUG"); debug && *debug && std::string(debug) != "0")
-                std::cerr << "OPAL host daemon exited during startup code=" << exit_code << '\n';
+    const ULONGLONG deadline = GetTickCount64() + 1500;
+    for (;;) {
+        if (host_mutex_running()) {
+            if (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT)
+                (void)write_host_pid(process.dwProcessId);
+            CloseHandle(process.hProcess);
+            return true;
         }
+
+        if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
+            DWORD exit_code = 0;
+            (void)GetExitCodeProcess(process.hProcess, &exit_code);
+            CloseHandle(process.hProcess);
+            clear_host_pid_if(process.dwProcessId);
+            if (host_mutex_running()) return true;
+            if (debug_enabled())
+                std::cerr << "OPAL host daemon exited during startup code=" << exit_code << '\n';
+            return false;
+        }
+
+        if (GetTickCount64() >= deadline) break;
+        Sleep(10);
     }
+
+    if (debug_enabled()) std::cerr << "OPAL host daemon did not publish its ready mutex in time.\n";
+    (void)TerminateProcess(process.hProcess, 1);
+    (void)WaitForSingleObject(process.hProcess, 3000);
     CloseHandle(process.hProcess);
-    return running;
+    clear_host_pid_if(process.dwProcessId);
+    return false;
 }
 
 void write_default_config(const Paths& paths)
@@ -450,8 +564,8 @@ int host_service(bool enable)
 
 int restart_services()
 {
-    if (!host_autostart_registered()) {
-        std::cerr << "OPAL host auto-start is not installed. Run host setup first.\n";
+    if (!register_host_autostart()) {
+        std::cerr << "Could not register OPAL Windows auto-start entry.\n";
         return 1;
     }
     if (!stop_host_daemon()) {
@@ -468,7 +582,10 @@ int restart_services()
 
 int clean()
 {
-    (void)host_service(false);
+    if (host_service(false) != 0) {
+        std::cerr << "Could not clean OPAL while the host daemon is still running.\n";
+        return 1;
+    }
     const auto paths = Paths::load();
     std::error_code error;
     std::filesystem::remove_all(paths.root, error);
