@@ -132,12 +132,15 @@ In the MSYS2 UCRT64 shell:
   make verify
   make install
 
-The Windows build produces:
+make install copies opal.exe and opal-input.exe into the active MSYS2 UCRT64 bin directory, normally C:\msys64\ucrt64\bin. It also puts that directory first in the current user's PATH if needed, so OPAL no longer depends on the repository build directory.
 
-  build/opal.exe
-  build/opal-input.exe
+After installation, use OPAL normally from PowerShell, Command Prompt, or MSYS2:
 
-make install currently leaves the binaries in build/. Keep opal.exe and opal-input.exe together when copying them to another directory.
+  opal.exe
+  opal.exe <connection-code>
+  opal.exe doctor
+
+If UCRT64 was not already in the Windows user PATH, open a new terminal once after installation so Windows picks up the PATH change. No manual PATH command is required.
 
 Tailscale
 
@@ -150,11 +153,9 @@ Tailscale is optional. OPAL can still use LAN discovery, signed rendezvous, dire
 
 Run
 
-From PowerShell, Command Prompt, or the MSYS2 shell:
-
-  build\opal.exe
-  build\opal.exe <connection-code>
-  build\opal.exe doctor
+  opal.exe
+  opal.exe <connection-code>
+  opal.exe doctor
 
 The executable is linked as a console application so CLI output remains visible. Hosting persists through an interactive-user Task Scheduler task rather than a Windows service.
 
