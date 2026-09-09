@@ -236,7 +236,7 @@ int read_capture(CaptureProcess& capture, void* buffer, std::size_t size, int ti
 {
     HANDLE process = native_process(capture.process);
     HANDLE pipe = native_io(capture.io);
-    if (!process || !pipe || !buffer || size == 0 || size > static_cast<std::size_t>(DWORD_MAX)) return -1;
+    if (!process || !pipe || !buffer || size == 0 || size > static_cast<std::size_t>(MAXDWORD)) return -1;
 
     const ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(std::max(0, timeout_ms));
     for (;;) {
@@ -281,7 +281,7 @@ bool write_sink_timeout(SinkProcess& sink, const void* data, std::size_t size, i
     HANDLE pipe = native_io(sink.io);
     HANDLE event = native_io(sink.wait_io);
     if (!process || !pipe || !event || (!data && size != 0) ||
-        size > static_cast<std::size_t>(DWORD_MAX)) return false;
+        size > static_cast<std::size_t>(MAXDWORD)) return false;
     if (!process_running(process)) return false;
     if (size == 0) return true;
 
