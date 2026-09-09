@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include <SDL3/SDL.h>
+#include <sys/stat.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -59,6 +60,13 @@ const SDL_DisplayMode* windows_virtual_desktop_mode(SDL_DisplayID display)
     return mode.w > 0 && mode.h > 0 ? &mode : native;
 }
 
+int windows_ignore_posix_mode(const wchar_t*, int)
+{
+    // Files live below the interactive user's profile and inherit its Windows
+    // ACL. POSIX chmod mode bits have no useful equivalent here.
+    return 0;
+}
+
 }
 }
 
@@ -66,7 +74,9 @@ const SDL_DisplayMode* windows_virtual_desktop_mode(SDL_DisplayID display)
 #define host_run windows_host_run_impl
 #define host_daemon windows_host_daemon_impl
 #define SDL_GetDesktopDisplayMode windows_virtual_desktop_mode
+#define chmod(path, mode) windows_ignore_posix_mode(path, mode)
 #include "../../host.cpp"
+#undef chmod
 #undef SDL_GetDesktopDisplayMode
 #undef host_setup
 #undef host_run
