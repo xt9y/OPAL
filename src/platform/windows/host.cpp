@@ -1,3 +1,5 @@
+#include <opal/config.hpp>
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -6,6 +8,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -67,6 +70,32 @@ int windows_ignore_posix_mode(const wchar_t*, int)
     return 0;
 }
 
+std::filesystem::path windows_host_pid_path()
+{
+    return Paths::load().root / "host.pid";
+}
+
+bool write_windows_host_pid()
+{
+    const auto paths = Paths::load();
+    if (!ensure_layout(paths)) return false;
+    std::ofstream output(paths.root / "host.pid", std::ios::out | std::ios::trunc);
+    if (!output) return false;
+    output << GetCurrentProcessId() << '\n';
+    return output.good();
+}
+
+void clear_windows_host_pid(DWORD expected_pid)
+{
+    const auto path = windows_host_pid_path();
+    std::ifstream input(path);
+    unsigned long long pid = 0;
+    if (!(input >> pid) || pid != expected_pid) return;
+    input.close();
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 }
 }
 
@@ -99,7 +128,26 @@ int host_run()
 int host_daemon()
 {
     ensure_windows_input_helper_environment();
-    return windows_host_daemon_impl();
+
+    HANDLE single_instance = CreateMutexW(nullptr, TRUE, L"Local\\xt9y.OPAL.HostDaemon");
+    if (!single_instance) return 1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(single_instance);
+        return 0;
+    }
+
+    const DWORD pid = GetCurrentProcessId();
+    if (!write_windows_host_pid()) {
+        ReleaseMutex(single_instance);
+        CloseHandle(single_instance);
+        return 1;
+    }
+
+    const int result = windows_host_daemon_impl();
+    clear_windows_host_pid(pid);
+    ReleaseMutex(single_instance);
+    CloseHandle(single_instance);
+    return result;
 }
 
 }
