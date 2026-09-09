@@ -41,7 +41,7 @@ MACOS_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INFO_PLIST)
 MACOS_INPUT_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INPUT_INFO_PLIST)
 
 MACOS_VIDEO_SRCS := \
-	src/platform/macos/video_capture.cpp \
+	src/native_video_capture.cpp \
 	src/native_video_pipeline.cpp \
 	src/platform/macos/capture_backend.mm \
 	src/platform/macos/video_encoder_backend.mm \
@@ -56,6 +56,7 @@ MACOS_PLATFORM_SRCS := \
 CLIPBOARD_SRCS := src/clipboard.cpp
 MACOS_INPUT_SRC := src/platform/macos/input_helper.mm
 MACOS_NATIVE_MEDIA_TEST := $(BUILD)/test-macos-native-media-smoke
+NATIVE_VIDEO_CAPTURE_PLATFORM_TEST := $(BUILD)/test-native-video-capture-platform-contract
 
 VIDEO_CAPTURE_SRCS := $(MACOS_VIDEO_SRCS)
 DIRECT_SENDER_SRCS := $(VIDEO_SENDER_SRCS) $(VIDEO_CAPTURE_SRCS)
@@ -99,9 +100,6 @@ macos-sign: $(PRODUCT) macos-input
 
 macos-all: macos-sign
 
-# One-step install: the build and code signing still run as the logged-in user;
-# only the final copies into PREFIX are elevated. The public `make install`
-# entrypoint is mapped to this target by GNUmakefile on macOS.
 macos-install: macos-all
 	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run make install as a normal user; the target invokes sudo only for installation.' >&2; exit 2; fi
 	codesign --verify --strict "$(PRODUCT)"
@@ -118,10 +116,14 @@ macos-install: macos-all
 	fi
 	@echo 'Installed OPAL.'
 
-# Permission-free suite. Linux capture/systemd/uinput fixture tests are omitted;
-# macOS-native capture is exercised separately by macos-runtime-test.
+$(NATIVE_VIDEO_CAPTURE_PLATFORM_TEST): tests/test_native_video_capture_platform_contract.cpp | $(BUILD)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Wpedantic tests/test_native_video_capture_platform_contract.cpp -o $@
+
+test-native-video-capture-platform-contract: $(NATIVE_VIDEO_CAPTURE_PLATFORM_TEST)
+	$(NATIVE_VIDEO_CAPTURE_PLATFORM_TEST)
+
 macos-test: test-platform-contract test-cross-platform-architecture test-platform-build-contract \
-	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
+	test-native-video-capture-platform-contract test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
 	test-macos-media-scheduler test-macos-clipboard-contract test-macos-capture-contract \
 	test-macos-videotoolbox-contract test-macos-audio-contract test-macos-host-permission-contract \
 	test-udp-batch-contract test-core test-media-profile test-media test-input test-udp-transport \
@@ -145,12 +147,9 @@ macos-verify: macos-all macos-test
 	strings "$(PRODUCT)" | grep -q 'NSAudioCaptureUsageDescription'
 	@echo 'macOS build/sign/unit verification passed'
 
-# Run this after granting Screen Recording. It exercises the real
-# ScreenCaptureKit -> VideoToolbox/AAC pipeline and treats missing permission as
-# a failure instead of a skip.
 macos-runtime-test: macos-verify $(MACOS_NATIVE_MEDIA_TEST)
 	OPAL_REQUIRE_MACOS_MEDIA=1 $(MACOS_NATIVE_MEDIA_TEST)
 	@echo 'macOS native media runtime smoke passed'
 
 .PHONY: macos-deps-check macos-input macos-sign macos-all macos-install macos-test \
-	test-macos-native-media-smoke macos-verify macos-runtime-test
+	test-native-video-capture-platform-contract test-macos-native-media-smoke macos-verify macos-runtime-test
