@@ -137,6 +137,7 @@ WINDOWS_CONTRACT_TESTS := \
 	test-windows-capture-contract \
 	test-windows-media-foundation-contract \
 	test-windows-audio-contract \
+	test-windows-audio-steady-state-contract \
 	test-windows-input-contract \
 	test-windows-clipboard-contract \
 	test-windows-config-contract \
@@ -160,6 +161,7 @@ $(eval $(call WINDOWS_TEXT_TEST,test-windows-udp-contract,tests/test_windows_udp
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-contract,tests/test_windows_capture_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-media-foundation-contract,tests/test_windows_media_foundation_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-contract,tests/test_windows_audio_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-steady-state-contract,tests/test_windows_audio_steady_state_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-input-contract,tests/test_windows_input_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-clipboard-contract,tests/test_windows_clipboard_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-config-contract,tests/test_windows_config_contract.cpp))
