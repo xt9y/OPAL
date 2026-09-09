@@ -20,6 +20,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace opal {
@@ -72,6 +73,32 @@ void release_com(T*& value)
 {
     if (value) value->Release();
     value = nullptr;
+}
+
+bool same_rect(const RECT& a, const RECT& b)
+{
+    return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+}
+
+bool rotation_value(DXGI_MODE_ROTATION dxgi, D3D11_VIDEO_PROCESSOR_ROTATION& d3d)
+{
+    switch (dxgi) {
+        case DXGI_MODE_ROTATION_UNSPECIFIED:
+        case DXGI_MODE_ROTATION_IDENTITY:
+            d3d = D3D11_VIDEO_PROCESSOR_ROTATION_IDENTITY;
+            return true;
+        case DXGI_MODE_ROTATION_ROTATE90:
+            d3d = D3D11_VIDEO_PROCESSOR_ROTATION_90;
+            return true;
+        case DXGI_MODE_ROTATION_ROTATE180:
+            d3d = D3D11_VIDEO_PROCESSOR_ROTATION_180;
+            return true;
+        case DXGI_MODE_ROTATION_ROTATE270:
+            d3d = D3D11_VIDEO_PROCESSOR_ROTATION_270;
+            return true;
+        default:
+            return false;
+    }
 }
 
 struct AcquiredDesktopFrame {
@@ -133,11 +160,21 @@ public:
         error_ = {};
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
 
-        if (!select_adapter()) return false;
-        if (!create_device()) return false;
-        if (!open_outputs()) return false;
-        if (!build_virtual_desktop()) return false;
-        if (outputs_.size() > 1 && !create_composite_surface()) return false;
+        if (!select_adapter()) return fail_start();
+        if (selected_attached_outputs_ != total_attached_outputs_) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "desktop spans multiple DXGI adapters; cross-adapter capture is not supported", false};
+            return fail_start();
+        }
+        if (!create_device()) return fail_start();
+        if (!open_outputs()) return fail_start();
+        if (!build_virtual_desktop()) return fail_start();
+
+        needs_composite_ = outputs_.size() > 1;
+        for (const auto& output : outputs_)
+            needs_composite_ |= output.desc.Rotation != DXGI_MODE_ROTATION_IDENTITY &&
+                                output.desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED;
+        if (needs_composite_ && !create_composite_surface()) return fail_start();
 
         running_ = true;
         return true;
@@ -147,7 +184,7 @@ public:
     {
         frame = {};
         if (!running_ || outputs_.empty()) return false;
-        return outputs_.size() == 1 ? next_single(frame, timeout_ms) : next_composite(frame, timeout_ms);
+        return needs_composite_ ? next_composite(frame, timeout_ms) : next_single(frame, timeout_ms);
     }
 
     void stop() override
@@ -167,7 +204,9 @@ public:
         release_com(device_);
         release_com(adapter_);
         virtual_desktop_ = {};
+        selected_attached_outputs_ = 0;
         total_attached_outputs_ = 0;
+        needs_composite_ = false;
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
     }
 
@@ -177,13 +216,21 @@ public:
     {
         std::string name = "dxgi-desktop-duplication+d3d11";
         if (outputs_.size() > 1) name += "+multimonitor-gpu";
-        if (total_attached_outputs_ > outputs_.size()) name += "+single-adapter";
+        if (needs_composite_ && outputs_.size() == 1) name += "+rotation-gpu";
         return name;
     }
 
     PlatformError last_platform_error() const override { return error_; }
 
 private:
+    bool fail_start()
+    {
+        PlatformError failure = error_;
+        stop();
+        error_ = std::move(failure);
+        return false;
+    }
+
     bool select_adapter()
     {
         IDXGIFactory1* factory = nullptr;
@@ -247,6 +294,7 @@ private:
             return false;
         }
         adapter_ = best;
+        selected_attached_outputs_ = best_outputs;
         return true;
     }
 
@@ -421,6 +469,24 @@ private:
         return true;
     }
 
+    bool refresh_output_after_access_loss(OutputCapture& output)
+    {
+        if (!output.output) return false;
+        DXGI_OUTPUT_DESC next{};
+        const HRESULT hr = output.output->GetDesc(&next);
+        if (FAILED(hr) || !next.AttachedToDesktop) {
+            error_ = dxgi_error(hr, "DXGI output disappeared after access loss", true);
+            return false;
+        }
+        if (!same_rect(next.DesktopCoordinates, output.desc.DesktopCoordinates) || next.Rotation != output.desc.Rotation) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::InvalidState,
+                      "DXGI desktop topology changed; restart the media generation", true};
+            return false;
+        }
+        output.desc = next;
+        return open_duplication(output);
+    }
+
     void release_pipeline(OutputCapture& output)
     {
         release_com(output.output_view);
@@ -513,6 +579,25 @@ private:
             return false;
         }
 
+        D3D11_VIDEO_PROCESSOR_ROTATION rotation = D3D11_VIDEO_PROCESSOR_ROTATION_IDENTITY;
+        if (!rotation_value(output.desc.Rotation, rotation)) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "DXGI output uses an unknown display rotation", false};
+            release_pipeline(output);
+            return false;
+        }
+        if (rotation != D3D11_VIDEO_PROCESSOR_ROTATION_IDENTITY) {
+            D3D11_VIDEO_PROCESSOR_CAPS caps{};
+            hr = output.video_enumerator->GetVideoProcessorCaps(&caps);
+            if (FAILED(hr) || (caps.FeatureCaps & D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ROTATION) == 0) {
+                error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                          "D3D11 video processor cannot rotate a captured display", false};
+                release_pipeline(output);
+                return false;
+            }
+            video_context_->VideoProcessorSetStreamRotation(output.video_processor, 0, TRUE, rotation);
+        }
+
         RECT source_rect{0, 0, output.frame_width, output.frame_height};
         video_context_->VideoProcessorSetStreamSourceRect(output.video_processor, 0, TRUE, &source_rect);
         video_context_->VideoProcessorSetStreamDestRect(output.video_processor, 0, TRUE, &output.destination);
@@ -528,7 +613,7 @@ private:
         const HRESULT hr = output.duplication->AcquireNextFrame(static_cast<UINT>(std::max(0, timeout_ms)), &info, &resource);
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) return AcquireResult::None;
         if (hr == DXGI_ERROR_ACCESS_LOST) {
-            if (!open_duplication(output)) return AcquireResult::Fatal;
+            if (!refresh_output_after_access_loss(output)) return AcquireResult::Fatal;
             return AcquireResult::None;
         }
         if (FAILED(hr) || !resource) {
@@ -564,7 +649,7 @@ private:
         const std::uint64_t callback_us = monotonic_us();
         output.capture_us = present_time_us(info.LastPresentTime, callback_us, output.timestamp_quality);
         output.ready = true;
-        if (outputs_.size() > 1 && !ensure_output_pipeline(output)) return AcquireResult::Fatal;
+        if (needs_composite_ && !ensure_output_pipeline(output)) return AcquireResult::Fatal;
         return AcquireResult::Updated;
     }
 
@@ -580,7 +665,7 @@ private:
             const HRESULT hr = output.duplication->AcquireNextFrame(static_cast<UINT>(remaining), &info, &resource);
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
             if (hr == DXGI_ERROR_ACCESS_LOST) {
-                if (!open_duplication(output)) { running_ = false; return false; }
+                if (!refresh_output_after_access_loss(output)) { running_ = false; return false; }
                 if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
                 continue;
             }
@@ -732,7 +817,9 @@ private:
     VirtualDesktopLayout virtual_desktop_{};
     ID3D11Texture2D* composite_texture_ = nullptr;
     ID3D11RenderTargetView* composite_rtv_ = nullptr;
+    std::size_t selected_attached_outputs_ = 0;
     std::size_t total_attached_outputs_ = 0;
+    bool needs_composite_ = false;
     bool running_ = false;
     CaptureTimestampQuality timestamp_quality_ = CaptureTimestampQuality::Estimated;
     PlatformError error_{};
