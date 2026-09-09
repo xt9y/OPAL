@@ -15,6 +15,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 grep -q 'src/tailnet.cpp' "$tmp/linux"
 grep -q 'src/pipewire_capture.cpp' "$tmp/linux"
 grep -q 'src/input_helper.cpp' "$tmp/linux" || true
+grep -q 'src/udp_socket_ops.cpp' "$tmp/linux"
 
 grep -q 'src/tailnet.cpp' "$tmp/macos"
 grep -q 'src/platform/macos/host.cpp' "$tmp/macos"
@@ -24,6 +25,7 @@ grep -q 'src/platform/macos/video_encoder_backend.mm' "$tmp/macos"
 grep -q 'src/platform/macos/audio_capture_backend.mm' "$tmp/macos"
 grep -q 'src/platform/macos/clipboard_shim.mm' "$tmp/macos"
 grep -q 'src/platform/macos/input_helper.mm' "$tmp/macos"
+grep -q 'src/udp_socket_ops.cpp' "$tmp/macos"
 grep -q -- '-framework ScreenCaptureKit' "$tmp/macos"
 grep -q -- '-framework VideoToolbox' "$tmp/macos"
 grep -q -- '-mmacosx-version-min=13.0' "$tmp/macos"
@@ -38,14 +40,22 @@ grep -q 'PKG_CONFIG_PATH' Makefile.macos
 grep -q -- '--libs-only-L openssl' Makefile.macos
 grep -q 'OPENSSL_LIBRARY_FLAGS' Makefile.macos
 
-# Windows is a native third backend. It must not inherit Linux capture/input
-# sources or Apple frameworks.
+# Windows is a native third backend. It must not inherit Linux capture/input,
+# the generic CPU-readback decoder/presenter, or Apple frameworks.
+grep -q 'src/platform/windows/host.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/system_backend.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/media.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/wake.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/tailnet.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/udp_transport.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/udp_socket_ops.cpp' "$tmp/windows"
 grep -q 'src/platform/windows/capture_backend.cpp' "$tmp/windows"
 grep -q 'src/platform/windows/video_encoder_backend.cpp' "$tmp/windows"
 grep -q 'src/platform/windows/audio_capture_backend.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/video_decoder.cpp' "$tmp/windows"
+grep -q 'src/platform/windows/video_present.cpp' "$tmp/windows"
 grep -q 'src/platform/windows/clipboard_shim.cpp' "$tmp/windows"
 grep -q 'src/platform/windows/input_helper.cpp' "$tmp/windows"
-grep -q 'src/platform/windows/system_backend.cpp' "$tmp/windows"
 grep -q -- '-lws2_32' "$tmp/windows"
 grep -q -- '-ld3d11' "$tmp/windows"
 grep -q -- '-ldxgi' "$tmp/windows"
@@ -53,8 +63,11 @@ grep -q -- '-lmfplat' "$tmp/windows"
 grep -q -- '-lmfuuid' "$tmp/windows"
 grep -q -- '-lmmdevapi' "$tmp/windows"
 grep -q -- '-luser32' "$tmp/windows"
+grep -q -- '-ltaskschd' "$tmp/windows"
 ! grep -q 'src/pipewire_capture.cpp' "$tmp/windows"
 ! grep -q 'src/input_helper.cpp' "$tmp/windows"
+! grep -q 'src/video_decoder.cpp' "$tmp/windows"
+! grep -q 'src/video_present.cpp' "$tmp/windows"
 ! grep -q -- '-framework ' "$tmp/windows"
 
 # Apple's make is only the public front door. It forwards into Homebrew GNU
@@ -65,6 +78,13 @@ grep -q 'install,macos-install' GNUmakefile
 grep -q 'all,macos-all' GNUmakefile
 grep -q 'test,macos-verify' GNUmakefile
 ! grep -q 'run .gmake. instead' GNUmakefile
+
+# Windows public all/test/install goals are forwarded before the Linux-era
+# Makefile.core public targets are parsed.
+grep -q 'WINDOWS_PUBLIC_GOALS' GNUmakefile
+grep -q 'windows-install' GNUmakefile
+grep -q 'windows-test' GNUmakefile
+grep -q 'windows-all' GNUmakefile
 
 grep -q '^  make -j' README
 grep -q '^  make install$' README
