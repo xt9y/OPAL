@@ -19,11 +19,13 @@ extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
+#include <libavutil/mathematics.h>
 #include <libswresample/swresample.h>
 }
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -140,11 +142,14 @@ public:
         const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
                             AUDCLNT_STREAMFLAGS_NOPERSIST;
         hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, mix_format_, nullptr);
-        if (FAILED(hr)) {
-            error_ = audio_error(hr, "WASAPI loopback initialization failed", true);
+        if (SUCCEEDED(hr)) hr = audio_client_->GetBufferSize(&buffer_frame_count_);
+        if (FAILED(hr) || buffer_frame_count_ == 0) {
+            error_ = audio_error(hr, "WASAPI loopback initialization or buffer query failed", true);
             stop();
             return false;
         }
+
+        silence_.resize(static_cast<std::size_t>(buffer_frame_count_) * static_cast<std::size_t>(input_block_align_));
 
         event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (!event_) {
@@ -179,8 +184,12 @@ public:
 
     bool next(EncodedMediaUnit& unit, int timeout_ms) override
     {
-        unit = {};
-        if (!running_ || !capture_client_ || !codec_ || !fifo_) return false;
+        unit.data.clear();
+        unit.kind = MediaKind::AudioAac;
+        unit.pts_us = 0;
+        unit.capture_time_us = 0;
+        unit.keyframe = false;
+        if (!running_ || !capture_client_ || !codec_ || !fifo_ || !encode_frame_) return false;
         const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
 
         for (;;) {
@@ -221,12 +230,14 @@ public:
         release_com(enumerator_);
         if (com_initialized_) { CoUninitialize(); com_initialized_ = false; }
         input_rate_ = input_channels_ = input_block_align_ = 0;
+        buffer_frame_count_ = 0;
         input_format_ = AV_SAMPLE_FMT_NONE;
         config_ = {};
         config_revision_ = 0;
         pending_capture_times_.clear();
         fifo_capture_us_ = 0;
         samples_submitted_ = 0;
+        silence_.clear();
     }
 
     MediaConfig config() const override { return config_; }
@@ -235,6 +246,42 @@ public:
     PlatformError last_platform_error() const override { return error_; }
 
 private:
+    bool allocate_resample_buffer(int capacity)
+    {
+        if (capacity <= 0) return false;
+        std::uint8_t** replacement = nullptr;
+        int linesize = 0;
+        if (av_samples_alloc_array_and_samples(&replacement, &linesize,
+                                               codec_->ch_layout.nb_channels, capacity,
+                                               codec_->sample_fmt, 0) < 0 || !replacement) {
+            if (replacement) av_freep(&replacement);
+            return false;
+        }
+        if (resample_data_) {
+            av_freep(&resample_data_[0]);
+            av_freep(&resample_data_);
+        }
+        resample_data_ = replacement;
+        resample_linesize_ = linesize;
+        resample_capacity_ = capacity;
+        return true;
+    }
+
+    bool ensure_resample_capacity(int capacity)
+    {
+        if (capacity <= resample_capacity_) return true;
+        return allocate_resample_buffer(std::max(capacity, resample_capacity_ * 2));
+    }
+
+    bool ensure_fifo_space(int samples)
+    {
+        if (!fifo_ || samples <= 0) return samples <= 0;
+        if (av_audio_fifo_space(fifo_) >= samples) return true;
+        const int required = av_audio_fifo_size(fifo_) + samples;
+        const int grown = std::max(required, std::max(8192, required * 2));
+        return av_audio_fifo_realloc(fifo_, grown) >= 0;
+    }
+
     bool open_encoder()
     {
         const AVCodec* encoder = avcodec_find_encoder(AV_CODEC_ID_AAC);
@@ -265,13 +312,25 @@ private:
             reset_encoder();
             return false;
         }
+
         packet_ = av_packet_alloc();
-        if (!packet_) {
+        encode_frame_ = av_frame_alloc();
+        if (!packet_ || !encode_frame_) {
             reset_encoder();
             return false;
         }
-        fifo_ = av_audio_fifo_alloc(codec_->sample_fmt, codec_->ch_layout.nb_channels,
-                                    std::max(4096, codec_->frame_size * 4));
+        encode_frame_->nb_samples = codec_->frame_size;
+        encode_frame_->format = codec_->sample_fmt;
+        encode_frame_->sample_rate = codec_->sample_rate;
+        if (av_channel_layout_copy(&encode_frame_->ch_layout, &codec_->ch_layout) < 0 ||
+            av_frame_get_buffer(encode_frame_, 0) < 0) {
+            reset_encoder();
+            return false;
+        }
+
+        const int fifo_capacity = std::max({8192, codec_->frame_size * 8,
+                                            static_cast<int>(buffer_frame_count_) * 8});
+        fifo_ = av_audio_fifo_alloc(codec_->sample_fmt, codec_->ch_layout.nb_channels, fifo_capacity);
         if (!fifo_) {
             reset_encoder();
             return false;
@@ -289,6 +348,16 @@ private:
             return false;
         }
         av_channel_layout_uninit(&input_layout);
+
+        const int initial_resample_capacity = static_cast<int>(av_rescale_rnd(
+            static_cast<std::int64_t>(buffer_frame_count_) + codec_->frame_size,
+            codec_->sample_rate, input_rate_, AV_ROUND_UP));
+        if (!allocate_resample_buffer(std::max(initial_resample_capacity, codec_->frame_size * 2))) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
+                      "could not allocate persistent WASAPI resample buffer", false};
+            reset_encoder();
+            return false;
+        }
 
         config_ = {};
         config_.kind = MediaKind::AudioAac;
@@ -323,20 +392,28 @@ private:
                 running_ = false;
                 return false;
             }
+
             const std::uint64_t callback_us = monotonic_us();
             const std::uint64_t capture_us = qpc_capture_time_us(qpc_position, callback_us);
-            const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
             bool ok = true;
             if (frames > 0) {
-                if (silent || !data) {
-                    silence_.assign(static_cast<std::size_t>(frames) * static_cast<std::size_t>(input_block_align_), 0);
+                if (frames > buffer_frame_count_) {
+                    error_ = {PlatformComponent::AudioCapture, PlatformFailure::InvalidState,
+                              "WASAPI returned a packet larger than its advertised shared buffer", true};
+                    ok = false;
+                } else if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !data) {
+                    const auto bytes = static_cast<std::size_t>(frames) * static_cast<std::size_t>(input_block_align_);
+                    std::fill_n(silence_.data(), bytes, std::uint8_t{0});
                     ok = ingest_pcm(silence_.data(), static_cast<int>(frames), capture_us);
                 } else {
                     ok = ingest_pcm(data, static_cast<int>(frames), capture_us);
                 }
             }
             const HRESULT release_hr = capture_client_->ReleaseBuffer(frames);
-            if (!ok) return false;
+            if (!ok) {
+                running_ = false;
+                return false;
+            }
             if (FAILED(release_hr)) {
                 error_ = audio_error(release_hr, "WASAPI ReleaseBuffer failed", true);
                 running_ = false;
@@ -347,71 +424,55 @@ private:
 
     bool ingest_pcm(const std::uint8_t* data, int frames, std::uint64_t capture_us)
     {
-        if (!data || frames <= 0 || !swr_ || !fifo_) return false;
+        if (!data || frames <= 0 || !swr_ || !fifo_ || !resample_data_) return false;
         const int capacity = static_cast<int>(av_rescale_rnd(
-            swr_get_delay(swr_, input_rate_) + frames, codec_->sample_rate, input_rate_, AV_ROUND_UP));
+            swr_get_delay(swr_, input_rate_) + frames,
+            codec_->sample_rate, input_rate_, AV_ROUND_UP));
         if (capacity <= 0) return true;
-
-        std::uint8_t** converted = nullptr;
-        int converted_linesize = 0;
-        if (av_samples_alloc_array_and_samples(&converted, &converted_linesize,
-                                               codec_->ch_layout.nb_channels, capacity,
-                                               codec_->sample_fmt, 0) < 0 || !converted) {
-            if (converted) av_freep(&converted);
+        if (!ensure_resample_capacity(capacity)) {
             error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
-                      "could not allocate WASAPI resample buffer", false};
+                      "could not grow persistent WASAPI resample buffer", false};
             return false;
         }
+
         const std::uint8_t* input[1] = {data};
-        const int produced = swr_convert(swr_, converted, capacity, input, frames);
+        const int produced = swr_convert(swr_, resample_data_, resample_capacity_, input, frames);
         if (produced < 0) {
-            av_freep(&converted[0]);
-            av_freep(&converted);
             error_ = {PlatformComponent::AudioCapture, PlatformFailure::OsError,
                       "WASAPI audio resampling failed", false};
             return false;
         }
+        if (produced == 0) return true;
 
         const bool fifo_was_empty = av_audio_fifo_size(fifo_) == 0;
-        if (av_audio_fifo_realloc(fifo_, av_audio_fifo_size(fifo_) + produced) < 0 ||
-            av_audio_fifo_write(fifo_, reinterpret_cast<void**>(converted), produced) < produced) {
-            av_freep(&converted[0]);
-            av_freep(&converted);
+        if (!ensure_fifo_space(produced) ||
+            av_audio_fifo_write(fifo_, reinterpret_cast<void**>(resample_data_), produced) < produced) {
             error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
                       "could not queue resampled WASAPI audio", false};
             return false;
         }
         if (fifo_was_empty) fifo_capture_us_ = capture_us;
-        av_freep(&converted[0]);
-        av_freep(&converted);
         return true;
     }
 
     bool encode_one(EncodedMediaUnit& unit)
     {
-        unit = {};
-        if (!codec_ || !fifo_ || av_audio_fifo_size(fifo_) < codec_->frame_size) return true;
-        AVFrame* frame = av_frame_alloc();
-        if (!frame) return false;
-        frame->nb_samples = codec_->frame_size;
-        frame->format = codec_->sample_fmt;
-        frame->sample_rate = codec_->sample_rate;
-        if (av_channel_layout_copy(&frame->ch_layout, &codec_->ch_layout) < 0 || av_frame_get_buffer(frame, 0) < 0) {
-            av_frame_free(&frame);
+        if (!codec_ || !fifo_ || !encode_frame_ || av_audio_fifo_size(fifo_) < codec_->frame_size) return true;
+        if (av_frame_make_writable(encode_frame_) < 0) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
+                      "persistent AAC frame could not be made writable", false};
             return false;
         }
-        if (av_audio_fifo_read(fifo_, reinterpret_cast<void**>(frame->data), codec_->frame_size) < codec_->frame_size) {
-            av_frame_free(&frame);
+        if (av_audio_fifo_read(fifo_, reinterpret_cast<void**>(encode_frame_->data), codec_->frame_size) < codec_->frame_size)
             return false;
-        }
-        frame->pts = static_cast<std::int64_t>(samples_submitted_);
+
+        encode_frame_->pts = static_cast<std::int64_t>(samples_submitted_);
         pending_capture_times_.push_back(fifo_capture_us_);
         fifo_capture_us_ += static_cast<std::uint64_t>(codec_->frame_size) * 1000000ULL /
                             static_cast<std::uint64_t>(codec_->sample_rate);
         samples_submitted_ += static_cast<std::uint64_t>(codec_->frame_size);
 
-        const int send_rc = avcodec_send_frame(codec_, frame);
-        av_frame_free(&frame);
+        const int send_rc = avcodec_send_frame(codec_, encode_frame_);
         if (send_rc < 0) {
             error_ = {PlatformComponent::AudioCapture, PlatformFailure::OsError,
                       "AAC encoder rejected WASAPI audio frame", false};
@@ -443,6 +504,13 @@ private:
 
     void reset_encoder()
     {
+        if (resample_data_) {
+            av_freep(&resample_data_[0]);
+            av_freep(&resample_data_);
+        }
+        resample_linesize_ = 0;
+        resample_capacity_ = 0;
+        if (encode_frame_) av_frame_free(&encode_frame_);
         if (fifo_) av_audio_fifo_free(fifo_);
         fifo_ = nullptr;
         if (swr_) swr_free(&swr_);
@@ -456,6 +524,7 @@ private:
     IAudioCaptureClient* capture_client_ = nullptr;
     WAVEFORMATEX* mix_format_ = nullptr;
     HANDLE event_ = nullptr;
+    UINT32 buffer_frame_count_ = 0;
     bool com_initialized_ = false;
     bool started_client_ = false;
     bool running_ = false;
@@ -464,6 +533,10 @@ private:
     SwrContext* swr_ = nullptr;
     AVAudioFifo* fifo_ = nullptr;
     AVPacket* packet_ = nullptr;
+    AVFrame* encode_frame_ = nullptr;
+    std::uint8_t** resample_data_ = nullptr;
+    int resample_linesize_ = 0;
+    int resample_capacity_ = 0;
     AVSampleFormat input_format_ = AV_SAMPLE_FMT_NONE;
     int input_rate_ = 0;
     int input_channels_ = 0;
