@@ -292,6 +292,7 @@ CPPFLAGS += -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DOPAL_PLATFORM_WINDOWS=1 \
 	-DSDL_GetClipboardText=opal_windows_get_clipboard_text \
 	-DSDL_SetClipboardText=opal_windows_set_clipboard_text
 CXXFLAGS += -pthread
+WINDOWS_BINDIR ?= $(if $(strip $(MINGW_PREFIX)),$(MINGW_PREFIX)/bin,/ucrt64/bin)
 
 WINDOWS_VIDEO_SRCS := \
 	src/native_video_capture.cpp \
@@ -344,12 +345,19 @@ $(INPUT): src/platform/windows/input_helper.cpp include/opal/input_record.hpp in
 all: $(PRODUCT) $(INPUT)
 
 install: all
-	@echo "Windows binaries:"
-	@echo "  $(PRODUCT)"
-	@echo "  $(INPUT)"
+	@set -e; \
+	command -v cygpath >/dev/null 2>&1 || { echo 'cygpath is required; run make install from the MSYS2 UCRT64 shell.' >&2; exit 1; }; \
+	command -v powershell.exe >/dev/null 2>&1 || { echo 'PowerShell is required for Windows PATH registration.' >&2; exit 1; }; \
+	$(INSTALL) -d "$(WINDOWS_BINDIR)"; \
+	$(INSTALL) -m 0755 "$(PRODUCT)" "$(WINDOWS_BINDIR)/opal.exe"; \
+	$(INSTALL) -m 0755 "$(INPUT)" "$(WINDOWS_BINDIR)/opal-input.exe"; \
+	win_bin="$$(cygpath -w "$(WINDOWS_BINDIR)")"; \
+	OPAL_INSTALL_BIN="$$win_bin" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$bin = $$env:OPAL_INSTALL_BIN; $$path = [Environment]::GetEnvironmentVariable("Path", "User"); $$parts = @($$path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) -and $$_ -ne $$bin -and $$_ -notmatch "(?i)\\opal\\build$$" }); $$newPath = (@($$bin) + $$parts) -join ";"; [Environment]::SetEnvironmentVariable("Path", $$newPath, "User"); Write-Host "Installed OPAL to $$bin"'; \
+	"$(WINDOWS_BINDIR)/opal.exe" version
 
 uninstall:
-	@echo 'Windows make install does not copy files; nothing to uninstall.'
+	@rm -f "$(WINDOWS_BINDIR)/opal.exe" "$(WINDOWS_BINDIR)/opal-input.exe"
+	@echo "Removed OPAL from $(WINDOWS_BINDIR)."
 
 else
 
