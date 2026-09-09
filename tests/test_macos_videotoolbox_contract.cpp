@@ -41,7 +41,7 @@ int main()
     assert(text.find("VTCompressionSessionInvalidate") != std::string::npos);
     assert(text.find("ffmpeg") == std::string::npos);
 
-    const auto facade = read_all("src/platform/macos/video_capture.cpp");
+    const auto facade = read_all("src/native_video_capture.cpp");
     assert(facade.find("encoded_buffer_pool().release") != std::string::npos);
     assert(facade.find("recycle_storage") != std::string::npos);
     return 0;
