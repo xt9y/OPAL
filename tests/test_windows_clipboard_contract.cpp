@@ -20,6 +20,13 @@ int main()
     assert(source.find("SetClipboardData") != std::string::npos);
     assert(source.find("MultiByteToWideChar") != std::string::npos);
     assert(source.find("WideCharToMultiByte") != std::string::npos);
+    assert(source.find("AddClipboardFormatListener") != std::string::npos);
+    assert(source.find("RemoveClipboardFormatListener") != std::string::npos);
+    assert(source.find("WM_CLIPBOARDUPDATE") != std::string::npos);
+    assert(source.find("HWND_MESSAGE") != std::string::npos);
+    assert(source.find("generation_.fetch_add") != std::string::npos);
+    assert(source.find("cached_text") != std::string::npos);
+    assert(source.find("opal_windows_clipboard_generation") != std::string::npos);
     assert(source.find("opal_windows_get_clipboard_text") != std::string::npos);
     assert(source.find("opal_windows_set_clipboard_text") != std::string::npos);
     return 0;
