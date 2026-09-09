@@ -90,6 +90,7 @@ WINDOWS_NATIVE_LIBS := \
 	-lws2_32 \
 	-liphlpapi \
 	-ld3d11 \
+	-ld3dcompiler \
 	-ldxgi \
 	-ldxguid \
 	-lmfplat \
@@ -123,7 +124,7 @@ windows-deps-check:
 		exit 1; \
 	fi
 
-$(WINDOWS_PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp | $(BUILD) windows-deps-check
+$(WINDOWS_PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp src/platform/windows/cursor_compositor.hpp | $(BUILD) windows-deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(WINDOWS_APP_SRCS) $(LDFLAGS) $(WINDOWS_LIBS) -o $@
 
 $(WINDOWS_INPUT): src/platform/windows/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD) windows-deps-check
@@ -135,6 +136,9 @@ WINDOWS_CONTRACT_TESTS := \
 	test-windows-platform-contract \
 	test-windows-udp-contract \
 	test-windows-capture-contract \
+	test-windows-multimonitor-capture-contract \
+	test-windows-capture-hardening-contract \
+	test-windows-cursor-capture-contract \
 	test-windows-media-foundation-contract \
 	test-windows-audio-contract \
 	test-windows-audio-steady-state-contract \
@@ -159,6 +163,9 @@ endef
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-platform-contract,tests/test_windows_platform_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-udp-contract,tests/test_windows_udp_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-contract,tests/test_windows_capture_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-multimonitor-capture-contract,tests/test_windows_multimonitor_capture_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-hardening-contract,tests/test_windows_capture_hardening_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-cursor-capture-contract,tests/test_windows_cursor_capture_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-media-foundation-contract,tests/test_windows_media_foundation_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-contract,tests/test_windows_audio_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-steady-state-contract,tests/test_windows_audio_steady_state_contract.cpp))
