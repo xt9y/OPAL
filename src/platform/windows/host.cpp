@@ -11,10 +11,14 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace opal {
 namespace {
+
+constexpr wchar_t kHostMutexName[] = L"Local\\xt9y.OPAL.HostDaemon";
+constexpr wchar_t kHostStopEventName[] = L"Local\\xt9y.OPAL.HostStop";
 
 std::filesystem::path windows_executable_path()
 {
@@ -158,19 +162,33 @@ int host_daemon()
 {
     ensure_windows_input_helper_environment();
 
-    HANDLE single_instance = CreateMutexW(nullptr, TRUE, L"Local\\xt9y.OPAL.HostDaemon");
+    HANDLE single_instance = CreateMutexW(nullptr, TRUE, kHostMutexName);
     if (!single_instance) return 1;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         CloseHandle(single_instance);
         return 0;
     }
 
-    const DWORD pid = GetCurrentProcessId();
-    if (!write_windows_host_pid()) {
+    HANDLE stop_event = CreateEventW(nullptr, TRUE, FALSE, kHostStopEventName);
+    if (!stop_event) {
         ReleaseMutex(single_instance);
         CloseHandle(single_instance);
         return 1;
     }
+    (void)ResetEvent(stop_event);
+
+    const DWORD pid = GetCurrentProcessId();
+    if (!write_windows_host_pid()) {
+        CloseHandle(stop_event);
+        ReleaseMutex(single_instance);
+        CloseHandle(single_instance);
+        return 1;
+    }
+
+    std::thread([stop_event] {
+        if (WaitForSingleObject(stop_event, INFINITE) == WAIT_OBJECT_0)
+            ExitProcess(0);
+    }).detach();
 
     WindowsHostPowerGuard power_guard;
     const int result = windows_host_daemon_impl();
