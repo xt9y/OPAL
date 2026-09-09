@@ -21,15 +21,24 @@ int main()
         "<arpa/inet.h>",
         "<ifaddrs.h>",
         "<sys/socket.h>",
+        "<sys/types.h>",
         "sockaddr_storage",
         "socklen_t",
+        "pid_t",
         "CGEventRef",
         "CVPixelBufferRef",
         "CMSampleBufferRef",
         "SCStream",
         "VTCompressionSessionRef",
         "NSPasteboard",
-        "HANDLE"
+        "HANDLE",
+        "SOCKET",
+        "HWND",
+        "HRESULT",
+        "ID3D11",
+        "IDXGI",
+        "IMFTransform",
+        "IMMDevice"
     };
 
     bool clean = true;
