@@ -158,7 +158,7 @@ bool wasapi_render_endpoint_available()
     IMMDeviceEnumerator* enumerator = nullptr;
     IMMDevice* endpoint = nullptr;
     const bool ok = SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                               __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&enumerator))) &&
+                                               __uuidof(MMDeviceEnumerator), reinterpret_cast<void**>(&enumerator))) &&
                     enumerator && SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint)) && endpoint;
     release(endpoint);
     release(enumerator);
@@ -260,25 +260,14 @@ bool read_host_pid(DWORD& pid)
     return true;
 }
 
-bool process_is_current_opal(HANDLE process)
+bool process_name_is_opal(const wchar_t* name)
 {
-    std::vector<wchar_t> buffer(32768);
-    DWORD length = static_cast<DWORD>(buffer.size());
-    if (!QueryFullProcessImageNameW(process, 0, buffer.data(), &length) || length == 0) return false;
-    const std::filesystem::path image(std::wstring(buffer.data(), length));
-    const auto current = current_executable_path();
-    if (current.empty()) return false;
-    return CompareStringOrdinal(image.native().c_str(), -1, current.native().c_str(), -1, TRUE) == CSTR_EQUAL;
+    return CompareStringOrdinal(name, -1, L"opal.exe", -1, TRUE) == CSTR_EQUAL ||
+           CompareStringOrdinal(name, -1, L"opal", -1, TRUE) == CSTR_EQUAL;
 }
 
-bool process_is_opal_in_current_session(HANDLE process, DWORD pid)
+bool process_in_current_session(DWORD pid)
 {
-    std::vector<wchar_t> buffer(32768);
-    DWORD length = static_cast<DWORD>(buffer.size());
-    if (!QueryFullProcessImageNameW(process, 0, buffer.data(), &length) || length == 0) return false;
-    const std::filesystem::path image(std::wstring(buffer.data(), length));
-    if (CompareStringOrdinal(image.filename().c_str(), -1, L"opal.exe", -1, TRUE) != CSTR_EQUAL) return false;
-
     DWORD current_session = 0;
     DWORD candidate_session = 0;
     return ProcessIdToSessionId(GetCurrentProcessId(), &current_session) &&
@@ -308,27 +297,12 @@ bool wait_for_host_mutex_release(DWORD timeout_ms)
     return released;
 }
 
-bool running_current_process(DWORD pid, DWORD access, HANDLE& process)
+bool running_process(DWORD pid, DWORD access, HANDLE& process)
 {
     process = OpenProcess(access | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!process) return false;
     DWORD exit_code = 0;
-    if (!process_is_current_opal(process) ||
-        !GetExitCodeProcess(process, &exit_code) || exit_code != STILL_ACTIVE) {
-        CloseHandle(process);
-        process = nullptr;
-        return false;
-    }
-    return true;
-}
-
-bool running_session_opal_process(DWORD pid, DWORD access, HANDLE& process)
-{
-    process = OpenProcess(access | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process) return false;
-    DWORD exit_code = 0;
-    if (!process_is_opal_in_current_session(process, pid) ||
-        !GetExitCodeProcess(process, &exit_code) || exit_code != STILL_ACTIVE) {
+    if (!GetExitCodeProcess(process, &exit_code) || exit_code != STILL_ACTIVE) {
         CloseHandle(process);
         process = nullptr;
         return false;
@@ -338,46 +312,57 @@ bool running_session_opal_process(DWORD pid, DWORD access, HANDLE& process)
 
 bool recover_host_pid(DWORD& pid)
 {
-    DWORD stored = 0;
-    HANDLE process = nullptr;
-    if (read_host_pid(stored) && running_current_process(stored, 0, process)) {
-        CloseHandle(process);
-        pid = stored;
-        return true;
-    }
-    if (process) CloseHandle(process);
-    clear_host_pid();
     if (!host_mutex_running()) return false;
 
+    DWORD stored = 0;
+    const bool have_stored = read_host_pid(stored);
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
-        if (debug_enabled()) std::cerr << "OPAL daemon process snapshot failed error=" << GetLastError() << '\n';
+        std::cerr << "OPAL daemon process snapshot failed error=" << GetLastError() << '\n';
         return false;
     }
 
     PROCESSENTRY32W entry{};
     entry.dwSize = sizeof(entry);
-    DWORD candidate = 0;
+    DWORD stored_candidate = 0;
+    DWORD sole_candidate = 0;
+    DWORD session_candidate = 0;
     unsigned matches = 0;
+    unsigned session_matches = 0;
+
     if (Process32FirstW(snapshot, &entry)) {
         do {
             if (entry.th32ProcessID == GetCurrentProcessId()) continue;
-            if (CompareStringOrdinal(entry.szExeFile, -1, L"opal.exe", -1, TRUE) != CSTR_EQUAL) continue;
+            if (!process_name_is_opal(entry.szExeFile)) continue;
+
             HANDLE candidate_process = nullptr;
-            if (!running_session_opal_process(entry.th32ProcessID, 0, candidate_process)) continue;
+            if (!running_process(entry.th32ProcessID, 0, candidate_process)) continue;
             CloseHandle(candidate_process);
-            candidate = entry.th32ProcessID;
+
+            sole_candidate = entry.th32ProcessID;
             ++matches;
+            if (have_stored && entry.th32ProcessID == stored)
+                stored_candidate = entry.th32ProcessID;
+            if (process_in_current_session(entry.th32ProcessID)) {
+                session_candidate = entry.th32ProcessID;
+                ++session_matches;
+            }
         } while (Process32NextW(snapshot, &entry));
     }
     CloseHandle(snapshot);
 
-    if (matches != 1 || candidate == 0) {
-        if (debug_enabled())
-            std::cerr << "OPAL legacy daemon recovery found " << matches
-                      << " candidate opal.exe processes in this login session.\n";
+    DWORD candidate = 0;
+    if (stored_candidate != 0) candidate = stored_candidate;
+    else if (session_matches == 1) candidate = session_candidate;
+    else if (matches == 1) candidate = sole_candidate;
+
+    if (candidate == 0) {
+        std::cerr << "OPAL legacy daemon recovery found " << matches
+                  << " other opal processes (" << session_matches
+                  << " in this login session); cannot identify the host safely.\n";
         return false;
     }
+
     (void)write_host_pid(candidate);
     pid = candidate;
     return true;
@@ -415,16 +400,14 @@ bool stop_host_daemon()
 
     DWORD pid = 0;
     if (!recover_host_pid(pid)) {
-        if (debug_enabled())
-            std::cerr << "OPAL host daemon is alive but its process could not be identified safely.\n";
+        std::cerr << "OPAL host daemon is alive but its process could not be identified safely.\n";
         return false;
     }
 
     HANDLE process = nullptr;
-    if (!running_session_opal_process(pid, PROCESS_TERMINATE, process)) {
-        if (debug_enabled())
-            std::cerr << "OPAL could not open recovered host daemon pid=" << pid
-                      << " for termination error=" << GetLastError() << '\n';
+    if (!running_process(pid, PROCESS_TERMINATE, process)) {
+        std::cerr << "OPAL could not open recovered host daemon pid=" << pid
+                  << " for termination error=" << GetLastError() << '\n';
         clear_host_pid_if(pid);
         return !host_mutex_running();
     }
@@ -434,11 +417,11 @@ bool stop_host_daemon()
     if (terminated) (void)WaitForSingleObject(process, 3000);
     CloseHandle(process);
     if (terminated) clear_host_pid_if(pid);
-    if (!terminated && debug_enabled())
+    if (!terminated)
         std::cerr << "OPAL legacy host termination failed pid=" << pid
                   << " error=" << terminate_error << '\n';
     const bool released = terminated && wait_for_host_mutex_release(3000);
-    if (terminated && !released && debug_enabled())
+    if (terminated && !released)
         std::cerr << "OPAL legacy host process exited but host mutex remained active.\n";
     return released;
 }
