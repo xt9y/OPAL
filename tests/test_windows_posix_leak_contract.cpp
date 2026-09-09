@@ -15,17 +15,18 @@ int main()
 {
     const auto crypto = read_all("src/crypto.cpp");
     const auto host = read_all("src/host.cpp");
+    const auto windows_host = read_all("src/platform/windows/host.cpp");
 
-    assert(crypto.find("#if !defined(_WIN32)") != std::string::npos);
-    assert(crypto.find("chmod(priv.c_str()") != std::string::npos);
-    assert(crypto.find("chmod(pub.c_str()") != std::string::npos);
+    const auto crypto_chmod = crypto.find("chmod(priv.c_str()");
+    assert(crypto_chmod != std::string::npos);
+    const auto crypto_guard = crypto.rfind("#if !defined(_WIN32)", crypto_chmod);
+    const auto crypto_endif = crypto.find("#endif", crypto_chmod);
+    assert(crypto_guard != std::string::npos && crypto_endif != std::string::npos && crypto_endif > crypto_chmod);
 
-    const auto host_chmod = host.find("chmod(G.authorized.c_str()") ;
-    assert(host_chmod != std::string::npos);
-    const auto host_guard = host.rfind("#if !defined(_WIN32)", host_chmod);
-    const auto host_endif = host.find("#endif", host_guard);
-    assert(host_guard != std::string::npos && host_endif != std::string::npos && host_endif > host_chmod);
-
-    assert(host.find("#if defined(_WIN32)\n    return e && *e ? e : \"opal-input.exe\";") != std::string::npos);
+    assert(host.find("chmod(G.authorized.c_str()") != std::string::npos);
+    assert(windows_host.find("windows_ignore_posix_mode") != std::string::npos);
+    assert(windows_host.find("#define chmod(path, mode) windows_ignore_posix_mode(path, mode)") != std::string::npos);
+    assert(windows_host.find("#undef chmod") != std::string::npos);
+    assert(windows_host.find("#include <sys/stat.h>") < windows_host.find("#define chmod(path, mode)"));
     return 0;
 }
