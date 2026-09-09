@@ -139,6 +139,7 @@ WINDOWS_CONTRACT_TESTS := \
 	test-windows-multimonitor-capture-contract \
 	test-windows-capture-hardening-contract \
 	test-windows-cursor-capture-contract \
+	test-windows-cursor-only-fastpath-contract \
 	test-windows-media-foundation-contract \
 	test-windows-audio-contract \
 	test-windows-audio-steady-state-contract \
@@ -166,6 +167,7 @@ $(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-contract,tests/test_windows
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-multimonitor-capture-contract,tests/test_windows_multimonitor_capture_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-hardening-contract,tests/test_windows_capture_hardening_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-cursor-capture-contract,tests/test_windows_cursor_capture_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-cursor-only-fastpath-contract,tests/test_windows_cursor_only_fastpath_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-media-foundation-contract,tests/test_windows_media_foundation_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-contract,tests/test_windows_audio_contract.cpp))
 $(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-steady-state-contract,tests/test_windows_audio_steady_state_contract.cpp))
