@@ -1,20 +1,16 @@
 OPAL
 
 Performance-first remote desktop for Linux, Apple Silicon macOS, and Windows.
+All platforms use signed rendezvous, end-to-end encrypted direct UDP, blind encrypted relay fallback, and Tailscale when available.
 
-Build
+LINUX
+=====
 
-  make
-  make verify
-  make clean
-
-The root Makefile detects the platform automatically. No platform-specific makefile or gmake command is required.
-
-Linux
+Installation
 
 Fedora / Fedora Asahi:
 
-  sudo dnf install -y gcc-c++ make git pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire pipewire-devel libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
+  sudo dnf install -y gcc-c++ make git pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire pipewire-devel pipewire-pulseaudio libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
 Arch / CachyOS:
 
@@ -22,33 +18,118 @@ Arch / CachyOS:
 
 Debian / Ubuntu:
 
+  sudo apt-get update
   sudo apt-get install -y build-essential git pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
 
 Build and install:
 
+  git clone https://github.com/xt9y/OPAL.git
+  cd OPAL
   make -j"$(nproc)"
   sudo make install
 
-macOS
+Tailscale
 
-Requirements: Apple Silicon, macOS 13+, Xcode Command Line Tools, Homebrew.
+  curl -fsSL https://tailscale.com/install.sh | sh
+  sudo tailscale up
+  tailscale ip -4
+  tailscale status
+
+Tailscale is optional. OPAL can still use LAN discovery, signed rendezvous, direct UDP, and relay fallback without it.
+
+Run
+
+  opal
+  opal <connection-code>
+  opal doctor
+  OPAL_DEBUG=1 opal <connection-code>
+
+Choose "Host this computer" on the machine being controlled. On Wayland, select the displays in the xdg-desktop-portal chooser. OPAL can persist and reuse that authorization for later capture sessions.
+
+Backend
+
+  capture      PipeWire + libportal + xdg-desktop-portal, persistent multi-monitor capture
+  encode       persistent in-process FFmpeg / hardware H.264 path
+  decode       FFmpeg libavcodec
+  presentation SDL3
+  input        /dev/uinput with multi-monitor absolute pointer mapping
+  clipboard    wl-clipboard on Wayland, SDL3 fallback elsewhere
+  audio        PipeWire/PulseAudio-compatible capture + SDL3 playback
+  service      systemd user service
+  network      native UDP with sendmmsg/recvmmsg batching
+
+Optional rendezvous server deployment:
+
+  make rendezvous-server
+  make deploy-rendezvous
+
+
+MACOS
+=====
+
+Installation
+
+Requirements: Apple Silicon, macOS 13+, Xcode Command Line Tools, and Homebrew.
 
   xcode-select --install
   brew install pkg-config sdl3 openssl@3 ffmpeg git
+  git clone https://github.com/xt9y/OPAL.git
+  cd OPAL
+  make
   make install
 
-Do not run sudo make install on macOS. OPAL builds/signs as the current user and invokes sudo only for the final copies into /usr/local.
+Do not run sudo make install on macOS. The Makefile builds and signs as the current user and invokes sudo only for the final copies into /usr/local.
 
-Host permissions:
+Tailscale
 
-  System Settings -> Privacy & Security -> Screen & System Audio Recording -> allow OPAL / opal
-  System Settings -> Privacy & Security -> Accessibility -> allow opal-input
+Install the Tailscale standalone macOS app, sign in to your tailnet, and enable its CLI integration if you want the tailscale command in Terminal. Then verify:
 
-Windows
+  tailscale ip -4
+  tailscale status
 
-Use an MSYS2 UCRT64 shell and install the UCRT64 C++ toolchain, pkgconf, SDL3, OpenSSL, and FFmpeg packages.
+OPAL also detects the CLI bundled inside Tailscale.app. Tailscale is optional; LAN/direct/rendezvous/relay networking remains available without it.
 
+Run
+
+  opal
+  opal <connection-code>
+  opal doctor
+  OPAL_DEBUG=1 opal <connection-code>
+
+For hosting, grant:
+
+  System Settings -> Privacy & Security -> Screen & System Audio Recording -> OPAL / opal
+  System Settings -> Privacy & Security -> Accessibility -> opal-input
+
+The host runs through a per-user launchd LaunchAgent.
+
+Backend
+
+  capture      ScreenCaptureKit with native display timestamps
+  encode       hardware VideoToolbox H.264 low-latency encoder
+  decode       FFmpeg libavcodec
+  presentation SDL3
+  input        CGEvent through the Accessibility-authorized opal-input helper
+  clipboard    NSPasteboard
+  audio        ScreenCaptureKit system audio + persistent AAC + SDL3 playback
+  service      per-user launchd LaunchAgent
+  network      nonblocking bounded UDP + direct/relay/Tailscale paths
+
+
+WINDOWS
+=======
+
+Installation
+
+Requirements: Windows 10+ and an MSYS2 UCRT64 shell for building OPAL.
+
+In the MSYS2 UCRT64 shell:
+
+  pacman -S --needed mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-SDL3 mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-ffmpeg make git
+  git clone https://github.com/xt9y/OPAL.git
+  cd OPAL
   make
+  make verify
   make install
 
 The Windows build produces:
@@ -56,71 +137,38 @@ The Windows build produces:
   build/opal.exe
   build/opal-input.exe
 
-Windows host backends:
-
-  capture   -> DXGI Desktop Duplication + D3D11
-  encode    -> Media Foundation hardware H.264
-  decode    -> FFmpeg D3D11VA
-  present   -> direct D3D11 + SDL3 fallback
-  input     -> SendInput
-  clipboard -> CF_UNICODETEXT
-  audio     -> WASAPI loopback + AAC
-  service   -> interactive-user Task Scheduler task
+make install currently leaves the binaries in build/. Keep opal.exe and opal-input.exe together when copying them to another directory.
 
 Tailscale
 
-Tailscale is optional but recommended for direct Tailnet connectivity.
-
-Linux:
-
-  curl -fsSL https://tailscale.com/install.sh | sh
-  sudo tailscale up
-
-macOS:
-
-  brew install tailscale
-  sudo brew services start tailscale
-  sudo tailscale up
-
-Check connectivity with:
+Install the official Tailscale Windows client and sign in to the same tailnet as the other OPAL computer. The installed Tailscale client includes its CLI; verify with:
 
   tailscale ip -4
   tailscale status
 
+Tailscale is optional. OPAL can still use LAN discovery, signed rendezvous, direct UDP, and relay fallback without it.
+
 Run
 
-  opal
-  opal <connection-code>
-  OPAL_DEBUG=1 opal <connection-code>
-  opal doctor
-  opal restart
-  opal clean
+From PowerShell, Command Prompt, or the MSYS2 shell:
 
-On Linux Wayland, host setup can remember the selected xdg-desktop-portal screens and reuse the persistent PipeWire authorization on reconnect.
+  build\opal.exe
+  build\opal.exe <connection-code>
+  build\opal.exe doctor
 
-Architecture
+The executable is linked as a console application so CLI output remains visible. Hosting persists through an interactive-user Task Scheduler task rather than a Windows service.
 
-Linux:
+Backend
 
-  capture   -> PipeWire + libportal
-  input     -> /dev/uinput
-  clipboard -> wl-clipboard / SDL3 fallback
-  UDP       -> sendmmsg/recvmmsg batching
+  capture      DXGI Desktop Duplication + D3D11, virtual-desktop multi-monitor composition
+  cursor       DXGI pointer metadata + GPU cursor compositor
+  encode       D3D11 Video Processor BGRA -> NV12 + Media Foundation hardware H.264 MFT
+  decode       FFmpeg D3D11VA with software fallback
+  presentation direct D3D11 swapchain + SDL3 CPU fallback
+  input        SendInput
+  clipboard    CF_UNICODETEXT + event-driven clipboard listener/cache
+  audio        WASAPI loopback + persistent AAC + SDL3 playback
+  service      interactive-user Task Scheduler task
+  network      Winsock2 + LAN/direct/relay/Tailscale paths
 
-macOS:
-
-  capture   -> ScreenCaptureKit
-  encode    -> VideoToolbox
-  input     -> CGEvent
-  clipboard -> NSPasteboard
-  audio     -> ScreenCaptureKit + AAC
-  service   -> launchd LaunchAgent
-
-Network:
-
-  signed rendezvous + direct end-to-end encrypted UDP + blind encrypted relay fallback
-
-Rendezvous server
-
-  make rendezvous-server
-  make deploy-rendezvous
+Windows multi-monitor capture supports displays on the selected D3D11 adapter. A desktop spanning multiple DXGI adapters is rejected rather than silently dropping displays.
