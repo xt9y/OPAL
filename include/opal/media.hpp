@@ -9,7 +9,11 @@
 namespace opal {
 
 using ProcessNativeHandle = std::intptr_t;
+#if defined(_WIN32)
 using ProcessIoHandle = std::intptr_t;
+#else
+using ProcessIoHandle = int;
+#endif
 inline constexpr ProcessNativeHandle kInvalidProcessHandle = -1;
 inline constexpr ProcessIoHandle kInvalidProcessIoHandle = -1;
 
