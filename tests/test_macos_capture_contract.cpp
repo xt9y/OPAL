@@ -37,7 +37,7 @@ int main()
     assert(text.find("dispatch_release(queue_)") != std::string::npos);
     assert(text.find("PermissionDenied") != std::string::npos);
 
-    const auto facade = read_all("src/platform/macos/video_capture.cpp");
+    const auto facade = read_all("src/native_video_capture.cpp");
     assert(facade.find("terminal = true") != std::string::npos);
     assert(facade.find("last_platform_error") != std::string::npos);
     return 0;
