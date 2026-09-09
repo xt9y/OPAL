@@ -1,0 +1,185 @@
+.DEFAULT_GOAL := windows-all
+
+include Makefile.core
+
+CPPFLAGS += -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DOPAL_PLATFORM_WINDOWS=1 \
+	-DSDL_GetClipboardText=opal_windows_get_clipboard_text \
+	-DSDL_SetClipboardText=opal_windows_set_clipboard_text
+CXXFLAGS += -pthread
+
+WINDOWS_PRODUCT := $(BUILD)/opal.exe
+WINDOWS_INPUT := $(BUILD)/opal-input.exe
+
+WINDOWS_UDP_SRCS := \
+	src/platform/windows/udp_transport.cpp \
+	src/platform/windows/udp_socket_ops.cpp
+
+WINDOWS_VIDEO_SRCS := \
+	src/platform/macos/video_capture.cpp \
+	src/native_video_pipeline.cpp \
+	src/platform/windows/capture_backend.cpp \
+	src/platform/windows/video_encoder_backend.cpp \
+	src/platform/windows/audio_capture_backend.cpp
+
+WINDOWS_PLATFORM_SRCS := \
+	src/platform/windows/host.cpp \
+	src/platform/windows/system_backend.cpp \
+	src/platform/windows/media.cpp \
+	src/platform/windows/wake.cpp \
+	src/platform/windows/tailnet.cpp \
+	src/platform/windows/clipboard_shim.cpp \
+	$(WINDOWS_UDP_SRCS) \
+	$(WINDOWS_VIDEO_SRCS)
+
+WINDOWS_CORE_SRCS := \
+	src/config.cpp \
+	src/crypto.cpp \
+	src/platform/windows/media.cpp \
+	src/platform/windows/wake.cpp
+
+WINDOWS_DIRECT_BASE_SRCS := \
+	src/platform/windows/udp_transport.cpp \
+	$(VIDEO_CRYPTO_SRCS) \
+	$(VIDEO_PACKET_SRCS)
+
+WINDOWS_DIRECT_RECEIVER_SRCS := \
+	$(VIDEO_RECEIVER_SRCS) \
+	$(VIDEO_REASSEMBLY_SRCS) \
+	$(VIDEO_DECODER_SRCS) \
+	$(AUDIO_OUTPUT_SRCS)
+
+WINDOWS_DIRECT_SENDER_SRCS := \
+	$(VIDEO_SENDER_SRCS) \
+	$(WINDOWS_VIDEO_SRCS)
+
+WINDOWS_CONTROL_SRCS := \
+	$(RENDEZVOUS_PROTOCOL_SRCS) \
+	$(RENDEZVOUS_CLIENT_SRCS) \
+	src/local_discovery.cpp \
+	src/platform/windows/udp_socket_ops.cpp \
+	$(RELAY_SRCS) \
+	$(PEER_HANDSHAKE_SRCS) \
+	$(SESSION_PACKET_SRCS) \
+	$(RELIABLE_CONTROL_SRCS) \
+	$(PEER_SESSION_SRCS)
+
+WINDOWS_APP_SRCS := \
+	src/main.cpp \
+	src/setup.cpp \
+	src/platform/windows/host.cpp \
+	src/client.cpp \
+	src/session.cpp \
+	src/platform/windows/system_backend.cpp \
+	src/config.cpp \
+	src/crypto.cpp \
+	src/platform/windows/media.cpp \
+	src/platform/windows/wake.cpp \
+	$(PROFILE_SRCS) \
+	$(WINDOWS_DIRECT_BASE_SRCS) \
+	$(DIRECT_MEDIA_COMMON_SRCS) \
+	$(WINDOWS_DIRECT_RECEIVER_SRCS) \
+	$(WINDOWS_DIRECT_SENDER_SRCS) \
+	$(DIRECT_PRESENT_SRCS) \
+	$(WINDOWS_CONTROL_SRCS) \
+	$(INPUT_SRCS) \
+	src/clipboard.cpp \
+	src/platform/windows/clipboard_shim.cpp \
+	src/platform/windows/tailnet.cpp
+
+WINDOWS_NATIVE_LIBS := \
+	-lws2_32 \
+	-liphlpapi \
+	-ld3d11 \
+	-ldxgi \
+	-ldxguid \
+	-lmfplat \
+	-lmf \
+	-lmfuuid \
+	-lwmcodecdspuuid \
+	-lmmdevapi \
+	-lavrt \
+	-luser32 \
+	-lole32 \
+	-loleaut32 \
+	-luuid \
+	-ltaskschd
+
+WINDOWS_MEDIA_LIBS := $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS)
+WINDOWS_LIBS := -lcrypto $(WINDOWS_MEDIA_LIBS) $(WINDOWS_NATIVE_LIBS)
+
+windows-deps-check:
+	@case "$(OS)" in Windows_NT) ;; *) \
+		case "$$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*) ;; *) \
+			echo 'OPAL Windows build must run in an MSYS2 MinGW/UCRT64 environment.' >&2; exit 1;; esac;; esac
+	@command -v "$(CXX)" >/dev/null 2>&1 || { echo 'Missing C++ compiler.' >&2; exit 1; }
+	@command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config.' >&2; exit 1; }
+	@missing=''; \
+	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample; do \
+		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing Windows build modules:$$missing" >&2; \
+		echo 'MSYS2 UCRT64: pacman -S --needed mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-SDL3 mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-ffmpeg make' >&2; \
+		exit 1; \
+	fi
+
+$(WINDOWS_PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp | $(BUILD) windows-deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(WINDOWS_APP_SRCS) $(LDFLAGS) $(WINDOWS_LIBS) -o $@
+
+$(WINDOWS_INPUT): src/platform/windows/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD) windows-deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/platform/windows/input_helper.cpp -luser32 -o $@
+
+windows-all: $(WINDOWS_PRODUCT) $(WINDOWS_INPUT)
+
+WINDOWS_CONTRACT_TESTS := \
+	test-windows-platform-contract \
+	test-windows-udp-contract \
+	test-windows-capture-contract \
+	test-windows-media-foundation-contract \
+	test-windows-audio-contract \
+	test-windows-input-contract \
+	test-windows-clipboard-contract \
+	test-windows-config-contract \
+	test-windows-process-contract \
+	test-windows-tailnet-contract \
+	test-windows-system-contract \
+	test-local-discovery-platform-contract \
+	test-windows-wake-contract \
+	test-windows-host-contract \
+	test-windows-main-contract
+
+define WINDOWS_TEXT_TEST
+$1: | $$(BUILD)
+	$$(CXX) -std=c++20 -O2 -Wall -Wextra -Wpedantic $2 -o $$(BUILD)/$1.exe
+	$$(BUILD)/$1.exe
+endef
+
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-platform-contract,tests/test_windows_platform_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-udp-contract,tests/test_windows_udp_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-capture-contract,tests/test_windows_capture_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-media-foundation-contract,tests/test_windows_media_foundation_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-audio-contract,tests/test_windows_audio_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-input-contract,tests/test_windows_input_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-clipboard-contract,tests/test_windows_clipboard_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-config-contract,tests/test_windows_config_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-process-contract,tests/test_windows_process_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-tailnet-contract,tests/test_windows_tailnet_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-system-contract,tests/test_windows_system_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-local-discovery-platform-contract,tests/test_local_discovery_platform_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-wake-contract,tests/test_windows_wake_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-host-contract,tests/test_windows_host_contract.cpp))
+$(eval $(call WINDOWS_TEXT_TEST,test-windows-main-contract,tests/test_windows_main_contract.cpp))
+
+windows-test: $(WINDOWS_CONTRACT_TESTS) test-platform-contract test-cross-platform-architecture \
+	test-native-video-pipeline test-video-sender-encoder-control test-audio-capture-backend \
+	test-media-profile test-video-crypto test-video-packet test-video-reassembly \
+	test-video-feedback test-video-receiver-architecture test-peer-handshake \
+	test-session-packet test-reliable-control test-relay
+
+windows-verify: windows-all windows-test
+	@echo 'Windows build and contract verification passed'
+
+windows-install: windows-all
+	@echo 'Windows binaries: $(WINDOWS_PRODUCT) and $(WINDOWS_INPUT)'
+
+.PHONY: windows-deps-check windows-all windows-test windows-verify windows-install $(WINDOWS_CONTRACT_TESTS)
