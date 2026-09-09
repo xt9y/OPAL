@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -53,12 +54,38 @@ std::wstring shell_command(const std::string& command)
     return L"cmd.exe /d /s /c \"" + wide + L"\"";
 }
 
+bool launch_process(const std::string& command, HANDLE stdin_handle, HANDLE stdout_handle,
+                    HANDLE stderr_handle, HANDLE& process_handle)
+{
+    process_handle = nullptr;
+    std::wstring command_line = shell_command(command);
+    if (command_line.empty()) return false;
+    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = stdin_handle;
+    startup.hStdOutput = stdout_handle;
+    startup.hStdError = stderr_handle;
+
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, TRUE,
+                                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    if (!created) return false;
+    CloseHandle(process.hThread);
+    process_handle = process.hProcess;
+    return true;
+}
+
 struct SpawnResult {
     HANDLE process = nullptr;
     HANDLE parent_pipe = nullptr;
+    HANDLE wait_event = nullptr;
 };
 
-SpawnResult spawn_with_pipe(const std::string& command, bool capture_stdout)
+SpawnResult spawn_capture_with_pipe(const std::string& command)
 {
     if (command.empty()) return {};
 
@@ -69,43 +96,98 @@ SpawnResult spawn_with_pipe(const std::string& command, bool capture_stdout)
     HANDLE read_pipe = nullptr;
     HANDLE write_pipe = nullptr;
     if (!CreatePipe(&read_pipe, &write_pipe, &security, 0)) return {};
-
-    HANDLE parent_pipe = capture_stdout ? read_pipe : write_pipe;
-    HANDLE child_pipe = capture_stdout ? write_pipe : read_pipe;
-    if (!SetHandleInformation(parent_pipe, HANDLE_FLAG_INHERIT, 0)) {
+    if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
         return {};
     }
 
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = capture_stdout ? GetStdHandle(STD_INPUT_HANDLE) : child_pipe;
-    startup.hStdOutput = capture_stdout ? child_pipe : GetStdHandle(STD_OUTPUT_HANDLE);
-    startup.hStdError = capture_stdout ? child_pipe : GetStdHandle(STD_ERROR_HANDLE);
-
-    PROCESS_INFORMATION process{};
-    std::wstring command_line = shell_command(command);
-    if (command_line.empty()) {
+    HANDLE process = nullptr;
+    if (!launch_process(command, GetStdHandle(STD_INPUT_HANDLE), write_pipe, write_pipe, process)) {
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
         return {};
     }
-    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
-    mutable_command.push_back(L'\0');
+    CloseHandle(write_pipe);
+    return {process, read_pipe, nullptr};
+}
 
-    const BOOL created = CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, TRUE,
-                                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
-    if (!created) {
-        CloseHandle(read_pipe);
-        CloseHandle(write_pipe);
+std::wstring unique_sink_pipe_name()
+{
+    static std::atomic<unsigned long long> serial{1};
+    return L"\\\\.\\pipe\\opal-input-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+           std::to_wstring(serial.fetch_add(1, std::memory_order_relaxed));
+}
+
+bool connect_local_named_pipe(HANDLE server)
+{
+    HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!event) return false;
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event;
+
+    bool connected = false;
+    if (ConnectNamedPipe(server, &overlapped)) {
+        connected = true;
+    } else {
+        const DWORD error = GetLastError();
+        if (error == ERROR_PIPE_CONNECTED) {
+            connected = true;
+        } else if (error == ERROR_IO_PENDING) {
+            connected = WaitForSingleObject(event, 1000) == WAIT_OBJECT_0;
+            if (!connected) {
+                (void)CancelIoEx(server, &overlapped);
+                (void)WaitForSingleObject(event, INFINITE);
+            }
+        }
+    }
+    CloseHandle(event);
+    return connected;
+}
+
+SpawnResult spawn_sink_with_pipe(const std::string& command)
+{
+    if (command.empty()) return {};
+    const std::wstring pipe_name = unique_sink_pipe_name();
+
+    HANDLE parent_write = CreateNamedPipeW(
+        pipe_name.c_str(), PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+        1, 4096, 0, 0, nullptr);
+    if (parent_write == INVALID_HANDLE_VALUE) return {};
+
+    SECURITY_ATTRIBUTES child_security{};
+    child_security.nLength = sizeof(child_security);
+    child_security.bInheritHandle = TRUE;
+    HANDLE child_read = CreateFileW(pipe_name.c_str(), GENERIC_READ, 0, &child_security,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (child_read == INVALID_HANDLE_VALUE) {
+        CloseHandle(parent_write);
+        return {};
+    }
+    if (!connect_local_named_pipe(parent_write)) {
+        CloseHandle(child_read);
+        CloseHandle(parent_write);
         return {};
     }
 
-    CloseHandle(process.hThread);
-    CloseHandle(child_pipe);
-    return {process.hProcess, parent_pipe};
+    HANDLE write_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!write_event) {
+        CloseHandle(child_read);
+        CloseHandle(parent_write);
+        return {};
+    }
+
+    HANDLE process = nullptr;
+    if (!launch_process(command, child_read, GetStdHandle(STD_OUTPUT_HANDLE),
+                        GetStdHandle(STD_ERROR_HANDLE), process)) {
+        CloseHandle(write_event);
+        CloseHandle(child_read);
+        CloseHandle(parent_write);
+        return {};
+    }
+    CloseHandle(child_read);
+    return {process, parent_write, write_event};
 }
 
 bool process_running(HANDLE process)
@@ -126,6 +208,14 @@ void stop_process(HANDLE process, HANDLE pipe)
     CloseHandle(process);
 }
 
+DWORD remaining_wait_ms(ULONGLONG deadline, int timeout_ms)
+{
+    if (timeout_ms < 0) return INFINITE;
+    const ULONGLONG now = GetTickCount64();
+    if (now >= deadline) return 0;
+    return static_cast<DWORD>(std::min<ULONGLONG>(deadline - now, MAXDWORD - 1ULL));
+}
+
 }
 
 std::string capture_command(bool, int, int, bool, const std::string&, int, int)
@@ -137,7 +227,7 @@ std::string capture_command(bool, int, int, bool, const std::string&, int, int)
 
 CaptureProcess start_capture(const std::string& command)
 {
-    const auto spawned = spawn_with_pipe(command, true);
+    const auto spawned = spawn_capture_with_pipe(command);
     if (!spawned.process || !spawned.parent_pipe) return {};
     return {store_process(spawned.process), store_io(spawned.parent_pipe)};
 }
@@ -178,28 +268,49 @@ void stop_capture(CaptureProcess& capture)
 
 SinkProcess start_sink(const std::string& command)
 {
-    const auto spawned = spawn_with_pipe(command, false);
-    if (!spawned.process || !spawned.parent_pipe) return {};
+    const auto spawned = spawn_sink_with_pipe(command);
+    if (!spawned.process || !spawned.parent_pipe || !spawned.wait_event) return {};
     const bool compact = command.find("opal-input") != std::string::npos;
-    return {store_process(spawned.process), store_io(spawned.parent_pipe), compact};
+    return {store_process(spawned.process), store_io(spawned.parent_pipe), compact,
+            store_io(spawned.wait_event)};
 }
 
 bool write_sink_timeout(SinkProcess& sink, const void* data, std::size_t size, int timeout_ms)
 {
     HANDLE process = native_process(sink.process);
     HANDLE pipe = native_io(sink.io);
-    if (!process || !pipe || (!data && size != 0) || size > static_cast<std::size_t>(DWORD_MAX)) return false;
+    HANDLE event = native_io(sink.wait_io);
+    if (!process || !pipe || !event || (!data && size != 0) ||
+        size > static_cast<std::size_t>(DWORD_MAX)) return false;
     if (!process_running(process)) return false;
     if (size == 0) return true;
 
     const auto* bytes = static_cast<const std::uint8_t*>(data);
     std::size_t offset = 0;
-    const ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(std::max(0, timeout_ms));
+    const ULONGLONG deadline = timeout_ms < 0 ? 0 :
+        GetTickCount64() + static_cast<ULONGLONG>(std::max(0, timeout_ms));
+
     while (offset < size) {
         if (!process_running(process)) return false;
-        DWORD written = 0;
+        ResetEvent(event);
+        OVERLAPPED overlapped{};
+        overlapped.hEvent = event;
         const DWORD request = static_cast<DWORD>(std::min<std::size_t>(size - offset, 4096));
-        if (!WriteFile(pipe, bytes + offset, request, &written, nullptr) || written == 0) return false;
+
+        const BOOL completed = WriteFile(pipe, bytes + offset, request, nullptr, &overlapped);
+        if (!completed) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_IO_PENDING) return false;
+            const DWORD wait = WaitForSingleObject(event, remaining_wait_ms(deadline, timeout_ms));
+            if (wait != WAIT_OBJECT_0) {
+                (void)CancelIoEx(pipe, &overlapped);
+                (void)WaitForSingleObject(event, INFINITE);
+                return false;
+            }
+        }
+
+        DWORD written = 0;
+        if (!GetOverlappedResult(pipe, &overlapped, &written, FALSE) || written == 0) return false;
         offset += written;
         if (offset < size && timeout_ms >= 0 && GetTickCount64() >= deadline) return false;
     }
@@ -208,7 +319,9 @@ bool write_sink_timeout(SinkProcess& sink, const void* data, std::size_t size, i
 
 void stop_sink(SinkProcess& sink)
 {
+    HANDLE event = native_io(sink.wait_io);
     stop_process(native_process(sink.process), native_io(sink.io));
+    if (event) CloseHandle(event);
     sink = {};
 }
 
