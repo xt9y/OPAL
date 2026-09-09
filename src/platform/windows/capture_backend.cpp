@@ -11,6 +11,8 @@
 
 #include <opal/capture_backend.hpp>
 
+#include "cursor_compositor.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -26,6 +28,7 @@
 namespace opal {
 namespace {
 using Clock = std::chrono::steady_clock;
+using windows_detail::CursorUpdate;
 
 std::uint64_t monotonic_us()
 {
@@ -147,7 +150,7 @@ struct OutputCapture {
     bool ready = false;
 };
 
-enum class AcquireResult { None, Updated, Fatal };
+enum class AcquireResult { None, Updated, PointerUpdated, Fatal };
 
 class WindowsCaptureBackend final : public CaptureBackend {
 public:
@@ -174,7 +177,7 @@ public:
         for (const auto& output : outputs_)
             needs_composite_ |= output.desc.Rotation != DXGI_MODE_ROTATION_IDENTITY &&
                                 output.desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED;
-        if (needs_composite_ && !create_composite_surface()) return fail_start();
+        if (needs_composite_ && !ensure_composite_surface()) return fail_start();
 
         running_ = true;
         return true;
@@ -190,6 +193,7 @@ public:
     void stop() override
     {
         running_ = false;
+        cursor_.reset();
         release_com(composite_rtv_);
         release_com(composite_texture_);
         for (auto& output : outputs_) release_output(output);
@@ -216,7 +220,8 @@ public:
     {
         std::string name = "dxgi-desktop-duplication+d3d11";
         if (outputs_.size() > 1) name += "+multimonitor-gpu";
-        if (needs_composite_ && outputs_.size() == 1) name += "+rotation-gpu";
+        if (needs_composite_ && outputs_.size() == 1) name += "+gpu-composite";
+        if (cursor_.visible()) name += "+cursor-shader";
         return name;
     }
 
@@ -437,8 +442,9 @@ private:
         return true;
     }
 
-    bool create_composite_surface()
+    bool ensure_composite_surface()
     {
+        if (composite_texture_ && composite_rtv_) return true;
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = static_cast<UINT>(virtual_desktop_.canvas_width);
         desc.Height = static_cast<UINT>(virtual_desktop_.canvas_height);
@@ -451,7 +457,7 @@ private:
         HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &composite_texture_);
         if (SUCCEEDED(hr)) hr = device_->CreateRenderTargetView(composite_texture_, nullptr, &composite_rtv_);
         if (FAILED(hr) || !composite_texture_ || !composite_rtv_) {
-            error_ = dxgi_error(hr, "D3D11 multi-monitor composite surface creation failed");
+            error_ = dxgi_error(hr, "D3D11 desktop composite surface creation failed");
             return false;
         }
         return true;
@@ -605,7 +611,13 @@ private:
         return true;
     }
 
-    AcquireResult acquire_latest(OutputCapture& output, int timeout_ms)
+    CursorUpdate update_cursor(OutputCapture& output, std::size_t output_index,
+                               const DXGI_OUTDUPL_FRAME_INFO& info)
+    {
+        return cursor_.update(output.duplication, output_index, output.desc, info, error_);
+    }
+
+    AcquireResult acquire_latest(OutputCapture& output, std::size_t output_index, int timeout_ms)
     {
         if (!output.duplication) return AcquireResult::Fatal;
         DXGI_OUTDUPL_FRAME_INFO info{};
@@ -622,6 +634,21 @@ private:
             return AcquireResult::Fatal;
         }
 
+        const CursorUpdate cursor_update = update_cursor(output, output_index, info);
+        if (cursor_update == CursorUpdate::Fatal) {
+            resource->Release();
+            (void)output.duplication->ReleaseFrame();
+            return AcquireResult::Fatal;
+        }
+        if (cursor_.visible() && !needs_composite_) {
+            needs_composite_ = true;
+            if (!ensure_composite_surface()) {
+                resource->Release();
+                (void)output.duplication->ReleaseFrame();
+                return AcquireResult::Fatal;
+            }
+        }
+
         ID3D11Texture2D* texture = nullptr;
         const HRESULT texture_hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
         resource->Release();
@@ -631,26 +658,36 @@ private:
             return AcquireResult::Fatal;
         }
 
-        if (info.LastPresentTime.QuadPart == 0) {
+        const bool desktop_updated = info.LastPresentTime.QuadPart != 0;
+        const bool pointer_updated = cursor_update == CursorUpdate::PointerUpdated;
+        if (!desktop_updated && !pointer_updated) {
             texture->Release();
             (void)output.duplication->ReleaseFrame();
             return AcquireResult::None;
         }
+
         if (!ensure_latest_texture(output, texture)) {
             texture->Release();
             (void)output.duplication->ReleaseFrame();
             return AcquireResult::Fatal;
         }
-
         context_->CopyResource(output.latest_texture, texture);
         texture->Release();
         (void)output.duplication->ReleaseFrame();
-
-        const std::uint64_t callback_us = monotonic_us();
-        output.capture_us = present_time_us(info.LastPresentTime, callback_us, output.timestamp_quality);
         output.ready = true;
+
+        if (desktop_updated) {
+            const std::uint64_t callback_us = monotonic_us();
+            output.capture_us = present_time_us(info.LastPresentTime, callback_us, output.timestamp_quality);
+            if (pointer_updated && cursor_.capture_time_us() != 0)
+                output.capture_us = std::min(output.capture_us, cursor_.capture_time_us());
+        } else {
+            output.capture_us = cursor_.capture_time_us() ? cursor_.capture_time_us() : monotonic_us();
+            output.timestamp_quality = CaptureTimestampQuality::Exact;
+        }
+
         if (needs_composite_ && !ensure_output_pipeline(output)) return AcquireResult::Fatal;
-        return AcquireResult::Updated;
+        return desktop_updated ? AcquireResult::Updated : AcquireResult::PointerUpdated;
     }
 
     bool next_single(NativeVideoFrame& frame, int timeout_ms)
@@ -676,6 +713,14 @@ private:
                 return false;
             }
 
+            const CursorUpdate cursor_update = update_cursor(output, 0, info);
+            if (cursor_update == CursorUpdate::Fatal) {
+                resource->Release();
+                (void)output.duplication->ReleaseFrame();
+                running_ = false;
+                return false;
+            }
+
             ID3D11Texture2D* texture = nullptr;
             const HRESULT texture_hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
             resource->Release();
@@ -684,12 +729,6 @@ private:
                 error_ = dxgi_error(texture_hr, "Desktop Duplication frame is not a D3D11 texture", true);
                 running_ = false;
                 return false;
-            }
-            if (info.LastPresentTime.QuadPart == 0) {
-                texture->Release();
-                (void)output.duplication->ReleaseFrame();
-                if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
-                continue;
             }
 
             D3D11_TEXTURE2D_DESC desc{};
@@ -701,6 +740,43 @@ private:
                           "Desktop Duplication surface is not BGRA8", false};
                 running_ = false;
                 return false;
+            }
+
+            const bool desktop_updated = info.LastPresentTime.QuadPart != 0;
+            const bool pointer_updated = cursor_update == CursorUpdate::PointerUpdated;
+            if (cursor_.visible()) {
+                needs_composite_ = true;
+                if (!ensure_composite_surface() || !ensure_latest_texture(output, texture)) {
+                    texture->Release();
+                    (void)output.duplication->ReleaseFrame();
+                    running_ = false;
+                    return false;
+                }
+                context_->CopyResource(output.latest_texture, texture);
+                texture->Release();
+                (void)output.duplication->ReleaseFrame();
+                output.ready = true;
+                if (desktop_updated) {
+                    CaptureTimestampQuality quality = CaptureTimestampQuality::Estimated;
+                    output.capture_us = present_time_us(info.LastPresentTime, monotonic_us(), quality);
+                    output.timestamp_quality = quality;
+                    if (pointer_updated && cursor_.capture_time_us() != 0)
+                        output.capture_us = std::min(output.capture_us, cursor_.capture_time_us());
+                } else {
+                    output.capture_us = cursor_.capture_time_us() ? cursor_.capture_time_us() : monotonic_us();
+                    output.timestamp_quality = CaptureTimestampQuality::Exact;
+                }
+                if (!ensure_output_pipeline(output)) { running_ = false; return false; }
+                return compose(frame, output.capture_us, output.timestamp_quality);
+            }
+
+            if (!desktop_updated) {
+                texture->Release();
+                (void)output.duplication->ReleaseFrame();
+                if (pointer_updated && needs_composite_ && output.ready)
+                    return compose(frame, cursor_.capture_time_us(), CaptureTimestampQuality::Exact);
+                if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
+                continue;
             }
 
             const auto callback_us = monotonic_us();
@@ -731,7 +807,7 @@ private:
 
     bool compose(NativeVideoFrame& frame, std::uint64_t capture_us, CaptureTimestampQuality quality)
     {
-        if (!composite_texture_ || !composite_rtv_) return false;
+        if (!ensure_composite_surface()) return false;
         constexpr float black[4] = {0.f, 0.f, 0.f, 1.f};
         context_->ClearRenderTargetView(composite_rtv_, black);
 
@@ -745,10 +821,18 @@ private:
             const HRESULT hr = video_context_->VideoProcessorBlt(
                 output.video_processor, output.output_view, 0, 1, &stream);
             if (FAILED(hr)) {
-                error_ = dxgi_error(hr, "D3D11 multi-monitor VideoProcessorBlt failed", true);
+                error_ = dxgi_error(hr, "D3D11 desktop VideoProcessorBlt failed", true);
                 running_ = false;
                 return false;
             }
+        }
+
+        ID3D11Texture2D* final_texture = composite_texture_;
+        if (!cursor_.draw(device_, context_, composite_texture_, virtual_desktop_.bounds,
+                          virtual_desktop_.canvas_width, virtual_desktop_.canvas_height,
+                          final_texture, error_)) {
+            running_ = false;
+            return false;
         }
 
         frame.kind = NativeVideoFrameKind::Opaque;
@@ -756,7 +840,7 @@ private:
         frame.height = virtual_desktop_.canvas_height;
         frame.pixel_format = static_cast<std::uint32_t>(DXGI_FORMAT_B8G8R8A8_UNORM);
         frame.capture_time_us = capture_us ? capture_us : monotonic_us();
-        frame.opaque = composite_texture_;
+        frame.opaque = final_texture;
         timestamp_quality_ = quality;
         return true;
     }
@@ -769,15 +853,16 @@ private:
         CaptureTimestampQuality quality = CaptureTimestampQuality::Exact;
 
         auto note = [&](OutputCapture& output, AcquireResult result) {
-            if (result != AcquireResult::Updated) return;
+            if (result != AcquireResult::Updated && result != AcquireResult::PointerUpdated) return;
             updated = true;
             oldest_update = std::min(oldest_update, output.capture_us);
             if (output.timestamp_quality != CaptureTimestampQuality::Exact)
                 quality = CaptureTimestampQuality::Estimated;
         };
 
-        for (auto& output : outputs_) {
-            const auto result = acquire_latest(output, 0);
+        for (std::size_t i = 0; i < outputs_.size(); ++i) {
+            auto& output = outputs_[i];
+            const auto result = acquire_latest(output, i, 0);
             if (result == AcquireResult::Fatal) { running_ = false; return false; }
             note(output, result);
         }
@@ -785,18 +870,20 @@ private:
             return compose(frame, oldest_update, quality);
         if (timeout_ms <= 0) return false;
 
-        std::size_t cursor = 0;
+        std::size_t cursor_index = 0;
         while (Clock::now() < deadline) {
-            auto& output = outputs_[cursor++ % outputs_.size()];
+            const std::size_t index = cursor_index++ % outputs_.size();
+            auto& output = outputs_[index];
             const auto remaining = static_cast<int>(std::max<std::int64_t>(
                 1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count()));
-            const auto result = acquire_latest(output, std::min(1, remaining));
+            const auto result = acquire_latest(output, index, std::min(1, remaining));
             if (result == AcquireResult::Fatal) { running_ = false; return false; }
             note(output, result);
-            if (result == AcquireResult::Updated) {
-                for (auto& peer : outputs_) {
-                    if (&peer == &output) continue;
-                    const auto peer_result = acquire_latest(peer, 0);
+            if (result == AcquireResult::Updated || result == AcquireResult::PointerUpdated) {
+                for (std::size_t peer_index = 0; peer_index < outputs_.size(); ++peer_index) {
+                    if (peer_index == index) continue;
+                    auto& peer = outputs_[peer_index];
+                    const auto peer_result = acquire_latest(peer, peer_index, 0);
                     if (peer_result == AcquireResult::Fatal) { running_ = false; return false; }
                     note(peer, peer_result);
                 }
@@ -817,6 +904,7 @@ private:
     VirtualDesktopLayout virtual_desktop_{};
     ID3D11Texture2D* composite_texture_ = nullptr;
     ID3D11RenderTargetView* composite_rtv_ = nullptr;
+    windows_detail::CursorCompositor cursor_{};
     std::size_t selected_attached_outputs_ = 0;
     std::size_t total_attached_outputs_ = 0;
     bool needs_composite_ = false;
