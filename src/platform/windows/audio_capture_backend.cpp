@@ -17,18 +17,20 @@ extern "C" {
 #include <libavutil/audio_fifo.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/frame.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
-#include <libavutil/mathematics.h>
 #include <libswresample/swresample.h>
 }
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -93,6 +95,48 @@ std::uint64_t qpc_capture_time_us(UINT64 qpc_100ns, std::uint64_t callback_us)
     return callback_us - static_cast<std::uint64_t>(age_us);
 }
 
+class EndpointNotificationClient final : public IMMNotificationClient {
+public:
+    explicit EndpointNotificationClient(std::atomic<bool>* pending) : pending_(pending) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override
+    {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IMMNotificationClient)) {
+            *object = static_cast<IMMNotificationClient*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG value = --refs_;
+        if (value == 0) delete this;
+        return value;
+    }
+
+    HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR) override
+    {
+        if (pending_ && flow == eRender && role == eConsole)
+            pending_->store(true, std::memory_order_release);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR, DWORD) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR, const PROPERTYKEY) override { return S_OK; }
+
+private:
+    std::atomic<ULONG> refs_{1};
+    std::atomic<bool>* pending_ = nullptr;
+};
+
 }
 
 class WindowsAudioCaptureBackend final : public AudioCaptureBackend {
@@ -113,71 +157,31 @@ public:
 
         HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                                       __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&enumerator_));
-        if (SUCCEEDED(hr)) hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
-        if (SUCCEEDED(hr)) hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                                  reinterpret_cast<void**>(&audio_client_));
-        if (FAILED(hr) || !audio_client_) {
-            error_ = audio_error(hr, "could not open the default Windows render endpoint", true);
+        if (FAILED(hr) || !enumerator_) {
+            error_ = audio_error(hr, "could not create Windows audio device enumerator");
             stop();
             return false;
         }
 
-        hr = audio_client_->GetMixFormat(&mix_format_);
-        if (FAILED(hr) || !mix_format_) {
-            error_ = audio_error(hr, "WASAPI did not provide a shared-mode mix format", true);
+        notification_ = new (std::nothrow) EndpointNotificationClient(&endpoint_change_pending_);
+        if (!notification_) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unavailable,
+                      "could not allocate Windows audio endpoint notification client", false};
             stop();
             return false;
         }
-        input_format_ = wave_sample_format(mix_format_);
-        input_rate_ = static_cast<int>(mix_format_->nSamplesPerSec);
-        input_channels_ = static_cast<int>(mix_format_->nChannels);
-        input_block_align_ = static_cast<int>(mix_format_->nBlockAlign);
-        if (input_format_ == AV_SAMPLE_FMT_NONE || input_rate_ <= 0 || input_channels_ <= 0 || input_block_align_ <= 0) {
-            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unsupported,
-                      "WASAPI mix format is not supported by OPAL audio capture", false};
-            stop();
-            return false;
-        }
-
-        const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-                            AUDCLNT_STREAMFLAGS_NOPERSIST;
-        hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, mix_format_, nullptr);
-        if (SUCCEEDED(hr)) hr = audio_client_->GetBufferSize(&buffer_frame_count_);
-        if (FAILED(hr) || buffer_frame_count_ == 0) {
-            error_ = audio_error(hr, "WASAPI loopback initialization or buffer query failed", true);
-            stop();
-            return false;
-        }
-
-        silence_.resize(static_cast<std::size_t>(buffer_frame_count_) * static_cast<std::size_t>(input_block_align_));
-
-        event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!event_) {
-            error_ = {PlatformComponent::AudioCapture, PlatformFailure::OsError,
-                      "could not create WASAPI capture event", true};
-            stop();
-            return false;
-        }
-        hr = audio_client_->SetEventHandle(event_);
-        if (SUCCEEDED(hr)) hr = audio_client_->GetService(__uuidof(IAudioCaptureClient),
-                                                          reinterpret_cast<void**>(&capture_client_));
-        if (FAILED(hr) || !capture_client_) {
-            error_ = audio_error(hr, "could not attach WASAPI loopback capture client", true);
-            stop();
-            return false;
-        }
-        if (!open_encoder()) {
-            stop();
-            return false;
-        }
-
-        hr = audio_client_->Start();
+        hr = enumerator_->RegisterEndpointNotificationCallback(notification_);
         if (FAILED(hr)) {
-            error_ = audio_error(hr, "WASAPI loopback stream failed to start", true);
+            error_ = audio_error(hr, "could not register Windows audio endpoint notification callback");
             stop();
             return false;
         }
-        started_client_ = true;
+        notification_registered_ = true;
+
+        if (!open_default_endpoint()) {
+            stop();
+            return false;
+        }
         running_ = true;
         return true;
     }
@@ -189,10 +193,15 @@ public:
         unit.pts_us = 0;
         unit.capture_time_us = 0;
         unit.keyframe = false;
-        if (!running_ || !capture_client_ || !codec_ || !fifo_ || !encode_frame_) return false;
-        const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
+        if (!running_) return false;
 
+        const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
         for (;;) {
+            if (endpoint_change_pending_.exchange(false, std::memory_order_acq_rel)) {
+                if (!recover_default_endpoint()) return false;
+            }
+            if (!capture_client_ || !codec_ || !fifo_ || !encode_frame_ || !event_) return false;
+
             if (av_audio_fifo_size(fifo_) >= codec_->frame_size) {
                 if (!encode_one(unit)) return false;
                 if (!unit.data.empty()) return true;
@@ -210,7 +219,14 @@ public:
                 running_ = false;
                 return false;
             }
-            if (!drain_capture_packets()) return false;
+            if (!drain_capture_packets()) {
+                if (endpoint_change_pending_.exchange(false, std::memory_order_acq_rel)) {
+                    if (!recover_default_endpoint()) return false;
+                    if (timeout_ms <= 0) return false;
+                    continue;
+                }
+                return false;
+            }
             if (timeout_ms <= 0 && av_audio_fifo_size(fifo_) < codec_->frame_size) return false;
             if (timeout_ms > 0 && Clock::now() >= deadline && av_audio_fifo_size(fifo_) < codec_->frame_size) return false;
         }
@@ -219,33 +235,137 @@ public:
     void stop() override
     {
         running_ = false;
-        if (audio_client_ && started_client_) (void)audio_client_->Stop();
-        started_client_ = false;
-        reset_encoder();
-        release_com(capture_client_);
-        if (event_) { CloseHandle(event_); event_ = nullptr; }
-        if (mix_format_) { CoTaskMemFree(mix_format_); mix_format_ = nullptr; }
-        release_com(audio_client_);
-        release_com(device_);
+        endpoint_change_pending_.store(false, std::memory_order_release);
+        close_endpoint();
+        if (enumerator_ && notification_ && notification_registered_)
+            (void)enumerator_->UnregisterEndpointNotificationCallback(notification_);
+        notification_registered_ = false;
+        release_com(notification_);
         release_com(enumerator_);
-        if (com_initialized_) { CoUninitialize(); com_initialized_ = false; }
-        input_rate_ = input_channels_ = input_block_align_ = 0;
-        buffer_frame_count_ = 0;
-        input_format_ = AV_SAMPLE_FMT_NONE;
+        if (com_initialized_) {
+            CoUninitialize();
+            com_initialized_ = false;
+        }
         config_ = {};
         config_revision_ = 0;
-        pending_capture_times_.clear();
-        fifo_capture_us_ = 0;
         samples_submitted_ = 0;
-        silence_.clear();
+        audio_timeline_us_ = 0;
     }
 
     MediaConfig config() const override { return config_; }
     std::uint64_t config_revision() const override { return config_revision_; }
-    std::string backend_name() const override { return "wasapi-loopback+aac"; }
+    std::string backend_name() const override { return "wasapi-loopback+aac+endpoint-recovery"; }
     PlatformError last_platform_error() const override { return error_; }
 
 private:
+    bool open_default_endpoint()
+    {
+        if (!enumerator_) return false;
+        HRESULT hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+        if (SUCCEEDED(hr)) hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                                  reinterpret_cast<void**>(&audio_client_));
+        if (FAILED(hr) || !audio_client_) {
+            error_ = audio_error(hr, "could not open the default Windows render endpoint", true);
+            close_endpoint();
+            return false;
+        }
+
+        hr = audio_client_->GetMixFormat(&mix_format_);
+        if (FAILED(hr) || !mix_format_) {
+            error_ = audio_error(hr, "WASAPI did not provide a shared-mode mix format", true);
+            close_endpoint();
+            return false;
+        }
+        input_format_ = wave_sample_format(mix_format_);
+        input_rate_ = static_cast<int>(mix_format_->nSamplesPerSec);
+        input_channels_ = static_cast<int>(mix_format_->nChannels);
+        input_block_align_ = static_cast<int>(mix_format_->nBlockAlign);
+        if (input_format_ == AV_SAMPLE_FMT_NONE || input_rate_ <= 0 || input_channels_ <= 0 || input_block_align_ <= 0) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::Unsupported,
+                      "WASAPI mix format is not supported by OPAL audio capture", false};
+            close_endpoint();
+            return false;
+        }
+
+        const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+                            AUDCLNT_STREAMFLAGS_NOPERSIST;
+        hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, mix_format_, nullptr);
+        if (SUCCEEDED(hr)) hr = audio_client_->GetBufferSize(&buffer_frame_count_);
+        if (FAILED(hr) || buffer_frame_count_ == 0) {
+            error_ = audio_error(hr, "WASAPI loopback initialization or buffer query failed", true);
+            close_endpoint();
+            return false;
+        }
+
+        silence_.resize(static_cast<std::size_t>(buffer_frame_count_) * static_cast<std::size_t>(input_block_align_));
+        event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!event_) {
+            error_ = {PlatformComponent::AudioCapture, PlatformFailure::OsError,
+                      "could not create WASAPI capture event", true};
+            close_endpoint();
+            return false;
+        }
+        hr = audio_client_->SetEventHandle(event_);
+        if (SUCCEEDED(hr)) hr = audio_client_->GetService(__uuidof(IAudioCaptureClient),
+                                                          reinterpret_cast<void**>(&capture_client_));
+        if (FAILED(hr) || !capture_client_) {
+            error_ = audio_error(hr, "could not attach WASAPI loopback capture client", true);
+            close_endpoint();
+            return false;
+        }
+        if (!open_encoder()) {
+            close_endpoint();
+            return false;
+        }
+
+        hr = audio_client_->Start();
+        if (FAILED(hr)) {
+            error_ = audio_error(hr, "WASAPI loopback stream failed to start", true);
+            close_endpoint();
+            return false;
+        }
+        started_client_ = true;
+        error_ = {};
+        return true;
+    }
+
+    bool recover_default_endpoint()
+    {
+        close_endpoint();
+        if (!open_default_endpoint()) {
+            running_ = false;
+            return false;
+        }
+        running_ = true;
+        return true;
+    }
+
+    void close_endpoint()
+    {
+        if (audio_client_ && started_client_) (void)audio_client_->Stop();
+        started_client_ = false;
+        reset_encoder();
+        release_com(capture_client_);
+        if (event_) {
+            CloseHandle(event_);
+            event_ = nullptr;
+        }
+        if (mix_format_) {
+            CoTaskMemFree(mix_format_);
+            mix_format_ = nullptr;
+        }
+        release_com(audio_client_);
+        release_com(device_);
+        input_rate_ = 0;
+        input_channels_ = 0;
+        input_block_align_ = 0;
+        buffer_frame_count_ = 0;
+        input_format_ = AV_SAMPLE_FMT_NONE;
+        pending_capture_times_.clear();
+        fifo_capture_us_ = 0;
+        silence_.clear();
+    }
+
     bool allocate_resample_buffer(int capacity)
     {
         if (capacity <= 0) return false;
@@ -313,6 +433,9 @@ private:
             return false;
         }
 
+        samples_submitted_ = static_cast<std::uint64_t>(av_rescale_q(
+            static_cast<std::int64_t>(audio_timeline_us_), AVRational{1, 1000000}, AVRational{1, input_rate_}));
+
         packet_ = av_packet_alloc();
         encode_frame_ = av_frame_alloc();
         if (!packet_ || !encode_frame_) {
@@ -365,7 +488,14 @@ private:
         config_.channels = codec_->ch_layout.nb_channels;
         if (codec_->extradata && codec_->extradata_size > 0)
             config_.extradata.assign(codec_->extradata, codec_->extradata + codec_->extradata_size);
-        config_revision_ = 1;
+        ++config_revision_;
+        return true;
+    }
+
+    bool note_invalidated(HRESULT hr)
+    {
+        if (hr != AUDCLNT_E_DEVICE_INVALIDATED) return false;
+        endpoint_change_pending_.store(true, std::memory_order_release);
         return true;
     }
 
@@ -375,6 +505,7 @@ private:
             UINT32 packet_frames = 0;
             HRESULT hr = capture_client_->GetNextPacketSize(&packet_frames);
             if (FAILED(hr)) {
+                if (note_invalidated(hr)) return false;
                 error_ = audio_error(hr, "WASAPI GetNextPacketSize failed", true);
                 running_ = false;
                 return false;
@@ -388,6 +519,7 @@ private:
             UINT64 qpc_position = 0;
             hr = capture_client_->GetBuffer(&data, &frames, &flags, &device_position, &qpc_position);
             if (FAILED(hr)) {
+                if (note_invalidated(hr)) return false;
                 error_ = audio_error(hr, "WASAPI GetBuffer failed", true);
                 running_ = false;
                 return false;
@@ -415,6 +547,7 @@ private:
                 return false;
             }
             if (FAILED(release_hr)) {
+                if (note_invalidated(release_hr)) return false;
                 error_ = audio_error(release_hr, "WASAPI ReleaseBuffer failed", true);
                 running_ = false;
                 return false;
@@ -471,6 +604,8 @@ private:
         fifo_capture_us_ += static_cast<std::uint64_t>(codec_->frame_size) * 1000000ULL /
                             static_cast<std::uint64_t>(codec_->sample_rate);
         samples_submitted_ += static_cast<std::uint64_t>(codec_->frame_size);
+        audio_timeline_us_ = static_cast<std::uint64_t>(av_rescale_q(
+            static_cast<std::int64_t>(samples_submitted_), AVRational{1, codec_->sample_rate}, AVRational{1, 1000000}));
 
         const int send_rc = avcodec_send_frame(codec_, encode_frame_);
         if (send_rc < 0) {
@@ -492,7 +627,7 @@ private:
         unit.data.assign(packet_->data, packet_->data + packet_->size);
         unit.pts_us = packet_->pts >= 0
             ? static_cast<std::int64_t>(packet_->pts * 1000000LL / codec_->sample_rate)
-            : 0;
+            : static_cast<std::int64_t>(audio_timeline_us_);
         if (!pending_capture_times_.empty()) {
             unit.capture_time_us = pending_capture_times_.front();
             pending_capture_times_.pop_front();
@@ -519,6 +654,7 @@ private:
     }
 
     IMMDeviceEnumerator* enumerator_ = nullptr;
+    IMMNotificationClient* notification_ = nullptr;
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;
     IAudioCaptureClient* capture_client_ = nullptr;
@@ -526,8 +662,10 @@ private:
     HANDLE event_ = nullptr;
     UINT32 buffer_frame_count_ = 0;
     bool com_initialized_ = false;
+    bool notification_registered_ = false;
     bool started_client_ = false;
     bool running_ = false;
+    std::atomic<bool> endpoint_change_pending_{false};
 
     AVCodecContext* codec_ = nullptr;
     SwrContext* swr_ = nullptr;
@@ -543,6 +681,7 @@ private:
     int input_block_align_ = 0;
     std::uint64_t fifo_capture_us_ = 0;
     std::uint64_t samples_submitted_ = 0;
+    std::uint64_t audio_timeline_us_ = 0;
     std::deque<std::uint64_t> pending_capture_times_;
     std::vector<std::uint8_t> silence_;
 
