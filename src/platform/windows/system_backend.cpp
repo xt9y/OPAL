@@ -215,16 +215,18 @@ bool register_host_task()
     } else ok = false;
     release(registration);
 
-    IPrincipal* principal = nullptr;
-    if (ok && SUCCEEDED(definition->get_Principal(&principal)) && principal) {
-        ok = SUCCEEDED(principal->put_LogonType(TASK_LOGON_INTERACTIVE_TOKEN));
-        const bool elevated = [] {
-            const char* value = std::getenv("OPAL_WINDOWS_HOST_ELEVATED");
-            return value && *value && std::string(value) != "0";
-        }();
-        if (ok) ok = SUCCEEDED(principal->put_RunLevel(elevated ? TASK_RUNLEVEL_HIGHEST : TASK_RUNLEVEL_LUA));
-    } else ok = false;
-    release(principal);
+    const bool elevated = [] {
+        const char* value = std::getenv("OPAL_WINDOWS_HOST_ELEVATED");
+        return value && *value && std::string(value) != "0";
+    }();
+    if (ok && elevated) {
+        IPrincipal* principal = nullptr;
+        if (SUCCEEDED(definition->get_Principal(&principal)) && principal)
+            ok = SUCCEEDED(principal->put_RunLevel(TASK_RUNLEVEL_HIGHEST));
+        else
+            ok = false;
+        release(principal);
+    }
 
     ITriggerCollection* triggers = nullptr;
     ITrigger* trigger = nullptr;
@@ -278,6 +280,11 @@ bool register_host_task()
             const HRESULT hr = connection.root->RegisterTaskDefinition(
                 name, definition, TASK_CREATE_OR_UPDATE, empty, empty,
                 TASK_LOGON_INTERACTIVE_TOKEN, empty, &registered);
+            if (FAILED(hr)) {
+                if (const char* debug = std::getenv("OPAL_DEBUG"); debug && *debug && std::string(debug) != "0")
+                    std::cerr << "OPAL Task Scheduler registration failed HRESULT="
+                              << static_cast<unsigned long>(hr) << '\n';
+            }
             ok = SUCCEEDED(hr) && registered;
             SysFreeString(name);
         }
