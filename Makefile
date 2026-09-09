@@ -1,245 +1,406 @@
-include Makefile.core
+# OPAL unified build
+# Public targets: make, make install, make uninstall, make clean, make verify
+
+UNAME_S := $(shell uname -s 2>/dev/null || echo unknown)
+OPAL_OS ?= $(if $(filter Windows_NT,$(OS)),windows,$(if $(filter MINGW% MSYS% CYGWIN%,$(UNAME_S)),windows,$(if $(filter Darwin,$(UNAME_S)),macos,$(if $(filter Linux,$(UNAME_S)),linux,unsupported))))
+
+.DEFAULT_GOAL := all
+
+CXX ?= c++
+CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic
+PKG_CONFIG ?= pkg-config
+INSTALL ?= install
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+LIBEXECDIR ?= $(PREFIX)/libexec/opal
+SYSTEMDUSERDIR ?= $(PREFIX)/lib/systemd/user
+UDEVDIR ?= /usr/lib/udev/rules.d
+PUBLIC_HOST ?= rendezvous.opal.xt9y.de
+RENDEZVOUS_PORT ?= 47992
+BUILD := build
+
+ifeq ($(OPAL_OS),windows)
+PRODUCT := $(BUILD)/opal.exe
+INPUT := $(BUILD)/opal-input.exe
+else
+PRODUCT := $(BUILD)/opal
+INPUT := $(BUILD)/opal-input
+endif
+
+RENDEZVOUS_SERVER := $(BUILD)/opal-rendezvous
+
+ifeq ($(OPAL_OS),macos)
+HOMEBREW_OPENSSL_PREFIX ?= $(shell brew --prefix openssl@3 2>/dev/null)
+ORIGINAL_PKG_CONFIG_PATH := $(PKG_CONFIG_PATH)
+ifneq ($(strip $(HOMEBREW_OPENSSL_PREFIX)),)
+PKG_CONFIG_PATH := $(HOMEBREW_OPENSSL_PREFIX)/lib/pkgconfig$(if $(strip $(ORIGINAL_PKG_CONFIG_PATH)),:$(ORIGINAL_PKG_CONFIG_PATH))
+export PKG_CONFIG_PATH
+endif
+endif
+
+AV_PKGS := libavformat libavcodec libavutil
+FFMPEG_PKGS := $(AV_PKGS) libswresample
+FFMPEG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(FFMPEG_PKGS) 2>/dev/null)
+SDL3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3 2>/dev/null)
+SDL3_LIBS := $(shell $(PKG_CONFIG) --libs sdl3 2>/dev/null)
+AVLIBS := $(shell $(PKG_CONFIG) --libs $(AV_PKGS) 2>/dev/null)
+SWRLIBS := $(shell $(PKG_CONFIG) --libs libswresample 2>/dev/null)
+CPPFLAGS += -Iinclude $(FFMPEG_CFLAGS) $(SDL3_CFLAGS)
+
+PROFILE_SRCS := src/media_profile.cpp
+VIDEO_CRYPTO_SRCS := src/video_crypto.cpp
+VIDEO_PACKET_SRCS := src/video_packet.cpp
+VIDEO_REASSEMBLY_SRCS := src/video_reassembly.cpp
+VIDEO_FEEDBACK_SRCS := src/video_feedback.cpp
+AUDIO_OUTPUT_SRCS := src/audio_output.cpp
+VIDEO_SENDER_SRCS := src/video_sender.cpp
+VIDEO_RECEIVER_SRCS := src/video_receiver.cpp
+RENDEZVOUS_PROTOCOL_SRCS := src/rendezvous_protocol.cpp
+RENDEZVOUS_STATE_SRCS := src/rendezvous_server.cpp
+RENDEZVOUS_CLIENT_SRCS := src/rendezvous_client.cpp
+RELAY_SRCS := src/relay_protocol.cpp
+PEER_HANDSHAKE_SRCS := src/peer_handshake.cpp
+SESSION_PACKET_SRCS := src/session_packet.cpp
+RELIABLE_CONTROL_SRCS := src/reliable_control.cpp
+PEER_SESSION_SRCS := src/peer_session.cpp
+INPUT_SRCS := src/input.cpp
+
+CONTROL_COMMON_SRCS := \
+	$(RENDEZVOUS_PROTOCOL_SRCS) \
+	$(RENDEZVOUS_CLIENT_SRCS) \
+	$(RELAY_SRCS) \
+	$(PEER_HANDSHAKE_SRCS) \
+	$(SESSION_PACKET_SRCS) \
+	$(RELIABLE_CONTROL_SRCS) \
+	$(PEER_SESSION_SRCS)
+
+$(BUILD):
+	@mkdir -p "$(BUILD)"
+
+ifeq ($(OPAL_OS),linux)
 
 CXXFLAGS += -pthread
 NATIVE_CAPTURE_PKGS := libportal libpipewire-0.3 libswscale
 NATIVE_CAPTURE_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
 NATIVE_CAPTURE_LIBS := $(shell $(PKG_CONFIG) --libs $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
 CPPFLAGS += $(NATIVE_CAPTURE_CFLAGS) -DOPAL_HAVE_NATIVE_PIPEWIRE=1
-AVLIBS += $(NATIVE_CAPTURE_LIBS)
-AUDIOLIBS := $(SWRLIBS) $(SDL3_LIBS)
-GLLIBS :=
-NATIVE_MEDIA_LIBS := $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS)
-LDLIBS := -lcrypto -lpthread $(NATIVE_MEDIA_LIBS)
 
-native-capture-deps-check:
-	@command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'OPAL native capture requires pkg-config.' >&2; exit 1; }
-	if ! "$(PKG_CONFIG)" --exists $(NATIVE_CAPTURE_PKGS); then
-		echo 'OPAL native PipeWire capture dependencies are required; refusing to build a capture fallback binary.' >&2
-		echo 'Missing one or more pkg-config modules: $(NATIVE_CAPTURE_PKGS)' >&2
-		exit 1
+LINUX_CAPTURE_SRCS := src/video_capture.cpp src/pipewire_capture.cpp src/flv_stream.cpp
+LINUX_APP_SRCS := \
+	src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp \
+	src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp \
+	$(PROFILE_SRCS) \
+	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
+	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
+	$(VIDEO_SENDER_SRCS) $(LINUX_CAPTURE_SRCS) src/video_present.cpp \
+	$(CONTROL_COMMON_SRCS) src/local_discovery.cpp src/udp_socket_ops.cpp \
+	$(INPUT_SRCS) src/clipboard.cpp src/tailnet.cpp
+
+LINUX_LIBS := -lcrypto -lpthread $(AVLIBS) $(NATIVE_CAPTURE_LIBS) $(SWRLIBS) $(SDL3_LIBS)
+
+deps-check:
+	@set -e; \
+	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config.' >&2; exit 1; }; \
+	missing=''; \
+	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample $(NATIVE_CAPTURE_PKGS); do \
+		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing Linux build modules:$$missing" >&2; \
+		echo 'Install SDL3, OpenSSL, FFmpeg, PipeWire and libportal development packages.' >&2; \
+		exit 1; \
 	fi
 
-PIPEWIRE_CAPTURE_SRCS := src/pipewire_capture.cpp
-VIDEO_CAPTURE_SRCS += $(PIPEWIRE_CAPTURE_SRCS)
-DIRECT_SENDER_SRCS += $(PIPEWIRE_CAPTURE_SRCS)
-APP_SRCS += $(PIPEWIRE_CAPTURE_SRCS)
-FLV_STREAM_SRCS := src/flv_stream.cpp
-VIDEO_CAPTURE_SRCS += $(FLV_STREAM_SRCS)
-DIRECT_SENDER_SRCS += $(FLV_STREAM_SRCS)
-APP_SRCS += $(FLV_STREAM_SRCS)
-CLIPBOARD_SRCS := src/clipboard.cpp
-APP_SRCS += $(CLIPBOARD_SRCS)
-$(PRODUCT): $(CLIPBOARD_SRCS) $(FLV_STREAM_SRCS) $(PIPEWIRE_CAPTURE_SRCS) | native-capture-deps-check
-$(MEDIA_TEST_TARGETS): | native-capture-deps-check
-$(INPUT): include/opal/input_record.hpp
-OPAL_SOAK_SECONDS ?= 3600
-CAPTURE_PROBE := $(BUILD)/test-capture-probe
-FFMPEG_H264_PROBE := "$(CAPTURE_PROBE)" --check
-REAL_FFMPEG := $(shell command -v ffmpeg 2>/dev/null)
-INTEGRATION_FFMPEG_DIR := $(BUILD)/integration-bin
-INTEGRATION_FFMPEG := $(INTEGRATION_FFMPEG_DIR)/ffmpeg
-LINKED_CODEC_PROBE := $(BUILD)/test-linked-codec-probe
+$(PRODUCT): $(LINUX_APP_SRCS) include/opal/*.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LINUX_APP_SRCS) $(LDFLAGS) $(LINUX_LIBS) -o $@
 
-$(LINKED_CODEC_PROBE): tests/test_linked_codec_probe.cpp tests/linked_codec_support.hpp | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linked_codec_probe.cpp $(AVLIBS) -o $@
+$(INPUT): src/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
 
-$(CAPTURE_PROBE): tests/test_capture_probe.cpp tests/capture_test_support.hpp | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_capture_probe.cpp -o $@
+all: $(PRODUCT) $(INPUT)
 
-$(INTEGRATION_FFMPEG): $(LINKED_CODEC_PROBE) | $(BUILD)
-	mkdir -p "$(INTEGRATION_FFMPEG_DIR)"
-	cat >"$@" <<'SH'
-	#!/bin/sh
-	real='$(REAL_FFMPEG)'
-	decoder_probe='$(abspath $(LINKED_CODEC_PROBE))'
-	if [ -z "$$real" ] || [ ! -x "$$real" ]; then exit 127; fi
-	case " $$* " in
-	  *' -encoders '*)
-		tmp=$$(mktemp)
-		trap 'rm -f "$$tmp"' EXIT INT TERM
-		if "$$decoder_probe" --check >/dev/null 2>&1 && "$$real" -nostdin -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=60 -frames:v 8 -pix_fmt yuv420p -c:v libx264 -bf 0 -g 4 -preset ultrafast -tune zerolatency -keyint_min 4 -sc_threshold 0 -an -flush_packets 1 -f flv pipe:1 >"$$tmp" 2>/dev/null && [ -s "$$tmp" ]; then
-			rm -f "$$tmp"; trap - EXIT INT TERM; exec "$$real" "$$@"
-		fi
-		rm -f "$$tmp"; trap - EXIT INT TERM
-		"$$real" "$$@" | sed '/[[:space:]]libx264[[:space:]]/d'
-		;;
-	  *) exec "$$real" "$$@" ;;
-	esac
-	SH
-	chmod +x "$@"
+install: all
+	@set -e; \
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)" "$(DESTDIR)$(SYSTEMDUSERDIR)" "$(DESTDIR)$(UDEVDIR)"; \
+	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"; \
+	$(INSTALL) -m 0755 "$(INPUT)" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
+	$(INSTALL) -m 0644 system/opal-host.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service"; \
+	$(INSTALL) -m 0644 system/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
+	$(INSTALL) -m 0644 system/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"; \
+	if [ -z "$(DESTDIR)" ]; then \
+		$(MAKE) --no-print-directory firewall-install; \
+		if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
+		if command -v udevadm >/dev/null 2>&1; then \
+			udevadm control --reload-rules; \
+			udevadm trigger --action=change --sysname-match=uinput; \
+			udevadm settle; \
+		fi; \
+	fi; \
+	echo "Installed OPAL to $(DESTDIR)$(PREFIX)"
 
-test-linked-codec-probe: $(LINKED_CODEC_PROBE)
-	$(LINKED_CODEC_PROBE)
+uninstall:
+	@set -e; \
+	if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory firewall-remove; fi; \
+	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
+	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
+	rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null || true
 
-test-flv-stream: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_flv_stream.cpp $(FLV_STREAM_SRCS) -o $(BUILD)/test-flv-stream
-	$(BUILD)/test-flv-stream
-
-test-video-reorder: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_video_reorder.cpp $(VIDEO_PACKET_SRCS) $(VIDEO_REASSEMBLY_SRCS) -o $(BUILD)/test-video-reorder
-	$(BUILD)/test-video-reorder
-
-test-clipboard: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_clipboard.cpp $(CLIPBOARD_SRCS) -o $(BUILD)/test-clipboard
-	$(BUILD)/test-clipboard
-
-test-tailnet-discovery-lifecycle: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_tailnet_discovery_lifecycle.cpp -o $(BUILD)/test-tailnet-discovery-lifecycle
-	$(BUILD)/test-tailnet-discovery-lifecycle
-
-test-input-record: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_input_record.cpp -o $(BUILD)/test-input-record
-	$(BUILD)/test-input-record
-
-test-latency-window: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_latency_window.cpp -o $(BUILD)/test-latency-window
-	$(BUILD)/test-latency-window
-
-test-capture-probe: $(CAPTURE_PROBE)
-	$(CAPTURE_PROBE)
-
-test-multimonitor: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_multimonitor.cpp -o $(BUILD)/test-multimonitor
-	$(BUILD)/test-multimonitor
-
-test-linux-capture-session-contract: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linux_capture_session_contract.cpp -o $(BUILD)/test-linux-capture-session-contract
-	$(BUILD)/test-linux-capture-session-contract
-
-test-linux-capture-restart-contract: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linux_capture_restart_contract.cpp -o $(BUILD)/test-linux-capture-restart-contract
-	$(BUILD)/test-linux-capture-restart-contract
-
-test-linux-screen-setup-contract: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_linux_screen_setup_contract.cpp -o $(BUILD)/test-linux-screen-setup-contract
-	$(BUILD)/test-linux-screen-setup-contract
-
-test-multimonitor-input-contract: | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_multimonitor_input_contract.cpp -o $(BUILD)/test-multimonitor-input-contract
-	$(BUILD)/test-multimonitor-input-contract
-
-test: test-flv-stream test-video-reorder test-clipboard test-tailnet-discovery-lifecycle test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-multimonitor test-linux-capture-session-contract test-linux-capture-restart-contract test-linux-screen-setup-contract test-multimonitor-input-contract
-
-SAN_COMMON := -O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
-ASAN_UBSAN := -fsanitize=address,undefined
-TSAN := -fsanitize=thread
-
-test-direct-media-sanitize: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(ASAN_UBSAN)
-test-direct-media-sanitize: LDFLAGS += $(ASAN_UBSAN)
-test-direct-media-sanitize: export ASAN_OPTIONS := detect_leaks=1:strict_string_checks=1:check_initialization_order=1
-test-direct-media-sanitize: export UBSAN_OPTIONS := print_stacktrace=1:halt_on_error=1
-test-direct-media-sanitize: test-flv-stream test-video-reorder
-
-test-thread-sanitize-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
-test-thread-sanitize-run: LDFLAGS += $(TSAN)
-test-thread-sanitize-run: export TSAN_OPTIONS := halt_on_error=1:history_size=7
-test-thread-sanitize-run: test-reliable-control test-video-crypto test-peer-handshake test-session-packet test-relay test-udp-transport test-video-packet
-
-test-thread-sanitize-session-run: CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -pthread $(SAN_COMMON) $(TSAN)
-test-thread-sanitize-session-run: LDFLAGS += $(TSAN)
-test-thread-sanitize-session-run: export TSAN_OPTIONS := halt_on_error=1:history_size=7
-test-thread-sanitize-session-run: export OPAL_TEST_TRACE := 1
-test-thread-sanitize-session-run: test-peer-session test-peer-session-relay
-
-test-thread-sanitize:
-	mkdir -p "$(BUILD)"
-	tmp="$(BUILD)/.tsan-runtime-probe"
-	cat >"$$tmp.cpp" <<'CPP'
-	#include <openssl/evp.h>
-	#include <thread>
-	static bool keygen(int id){EVP_PKEY_CTX*ctx=EVP_PKEY_CTX_new_id(id,nullptr);if(!ctx)return false;EVP_PKEY*key=nullptr;const bool ok=EVP_PKEY_keygen_init(ctx)==1&&EVP_PKEY_keygen(ctx,&key)==1;EVP_PKEY_free(key);EVP_PKEY_CTX_free(ctx);return ok;}
-	int main(){bool ok=false;std::thread t([&]{ok=keygen(EVP_PKEY_ED25519)&&keygen(EVP_PKEY_X25519);});t.join();return ok?0:1;}
-	CPP
-	if ! $(CXX) -std=c++20 -pthread "$$tmp.cpp" $(TSAN) -lcrypto -o "$$tmp" >/dev/null 2>&1; then
-		echo 'SKIP test-thread-sanitize: compiler cannot link ThreadSanitizer + OpenSSL runtime on this system'
-		rm -f "$$tmp" "$$tmp.cpp"
-		exit 0
-	fi
-	if ! TSAN_OPTIONS=halt_on_error=1 "$$tmp" >/dev/null 2>&1; then
-		echo 'SKIP test-thread-sanitize: ThreadSanitizer + OpenSSL runtime cannot execute on this system'
-		rm -f "$$tmp" "$$tmp.cpp"
-		exit 0
-	fi
-	rm -f "$$tmp" "$$tmp.cpp"
-	$(MAKE) -B test-thread-sanitize-run
-	tmp="$(BUILD)/.tsan-condvar-probe"
-	cat >"$$tmp.cpp" <<'CPP'
-	#include <chrono>
-	#include <condition_variable>
-	#include <mutex>
-	#include <thread>
-	int main(){std::mutex m;std::condition_variable cv;bool ready=false;std::thread t([&]{std::unique_lock<std::mutex>lock(m);cv.wait_for(lock,std::chrono::milliseconds(20),[&]{return ready;});});{std::lock_guard<std::mutex>lock(m);ready=true;}cv.notify_one();t.join();return 0;}
-	CPP
-	if ! $(CXX) -std=c++20 -pthread "$$tmp.cpp" $(TSAN) -o "$$tmp" >/dev/null 2>&1; then
-		echo 'SKIP peer-session TSan: compiler cannot link condition-variable probe'
-		rm -f "$$tmp" "$$tmp.cpp"
-		exit 0
-	fi
-	if ! TSAN_OPTIONS=halt_on_error=1 "$$tmp" >/dev/null 2>&1; then
-		echo 'SKIP peer-session TSan: ThreadSanitizer condition-variable interceptor cannot execute on this system'
-		rm -f "$$tmp" "$$tmp.cpp"
-		exit 0
-	fi
-	rm -f "$$tmp" "$$tmp.cpp"
-	$(MAKE) -B test-thread-sanitize-session-run
-
-NETEM_PIPELINE := $(BUILD)/test-direct-video-pipeline-netem
-$(NETEM_PIPELINE): tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp | $(BUILD) deps-check native-capture-deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/test_direct_video_pipeline.cpp $(DIRECT_MEDIA_BASE_SRCS) $(DIRECT_MEDIA_COMMON_SRCS) $(DIRECT_RECEIVER_SRCS) $(DIRECT_SENDER_SRCS) src/media.cpp $(PROFILE_SRCS) src/config.cpp -lcrypto $(AVLIBS) $(AUDIOLIBS) -o $@
-
-test-netem: $(NETEM_PIPELINE) $(LINKED_CODEC_PROBE) $(CAPTURE_PROBE)
-	@if ! command -v tc >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/tc (Fedora: sudo dnf install iproute-tc)'; exit 0; fi
-	if ! command -v ip >/dev/null 2>&1; then echo 'SKIP test-netem: install iproute2/ip'; exit 0; fi
-	if ! command -v timeout >/dev/null 2>&1; then echo 'SKIP test-netem: timeout command unavailable'; exit 0; fi
-	if ! $(FFMPEG_H264_PROBE) >/dev/null; then echo 'SKIP test-netem: FFmpeg has no H.264 encoder that emits a valid streaming FLV'; exit 0; fi
-	if ! "$(LINKED_CODEC_PROBE)" --check; then echo 'SKIP test-netem: linked libavcodec has no H.264 decoder (Fedora: install RPM Fusion libavcodec-freeworld/ffmpeg-libs)'; exit 0; fi
-	export BIN='$(abspath $(NETEM_PIPELINE))'
-	run_cases='set -eu; \
-		ip link set lo up; \
-		cleanup(){ tc qdisc del dev lo root >/dev/null 2>&1 || true; }; \
-		trap cleanup EXIT INT TERM; \
-		run(){ name=$$1; shift; case "$$name" in clean|lan-jitter) loss=0;; *) loss=1;; esac; echo "netem $$name: $$*"; tc qdisc replace dev lo root netem "$$@"; OPAL_TEST_HEADLESS=1 OPAL_TEST_NETEM=1 OPAL_TEST_NETEM_LOSS=$$loss timeout 45 "$$BIN"; }; \
-		run clean delay 0ms; \
-		run lan-jitter delay 3ms 1ms distribution normal; \
-		run mild-loss delay 5ms 2ms loss 1%; \
-		run bad-wifi delay 12ms 5ms loss 3% reorder 5% 50%; \
-		run collapse delay 20ms 8ms loss 5% rate 2mbit; \
-		cleanup'
-	if command -v unshare >/dev/null 2>&1 && unshare -Urn sh -c 'ip link set lo up' >/dev/null 2>&1; then
-		unshare -Urn sh -ec "$$run_cases"
-	elif [ "$$(id -u)" -eq 0 ]; then
-		sh -ec "$$run_cases"
-	else
-		echo 'SKIP test-netem: needs unprivileged user namespaces or sudo make test-netem'
+firewall-install:
+	@if [ "$${OPAL_SKIP_FIREWALL:-0}" = 1 ]; then exit 0; fi; \
+	discovery_rule='47993/udp'; reply_rule='47994/udp'; \
+	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then \
+		firewall-cmd --quiet --permanent --add-port="$$discovery_rule"; \
+		firewall-cmd --quiet --add-port="$$discovery_rule"; \
+		firewall-cmd --quiet --permanent --add-port="$$reply_rule"; \
+		firewall-cmd --quiet --add-port="$$reply_rule"; \
+	fi; \
+	if command -v ufw >/dev/null 2>&1; then \
+		ufw_active=0; \
+		if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then ufw_active=1; fi; \
+		ufw allow "$$discovery_rule" comment 'OPAL LAN discovery'; \
+		ufw allow "$$reply_rule" comment 'OPAL LAN discovery replies'; \
+		if [ "$$ufw_active" -eq 1 ]; then ufw reload >/dev/null; fi; \
 	fi
 
-test-soak: test-peer-session test-udp-transport test-direct-video-stress test-direct-video-pipeline $(LINKED_CODEC_PROBE) $(CAPTURE_PROBE)
-	@case '$(OPAL_SOAK_SECONDS)' in ''|*[!0-9]*) echo 'OPAL_SOAK_SECONDS must be a positive integer' >&2; exit 2;; esac
-	[ '$(OPAL_SOAK_SECONDS)' -gt 0 ] || { echo 'OPAL_SOAK_SECONDS must be > 0' >&2; exit 2; }
-	start=$$(date +%s); deadline=$$((start + $(OPAL_SOAK_SECONDS))); iterations=0
-	have_pipeline=0
-	if $(FFMPEG_H264_PROBE) >/dev/null && "$(LINKED_CODEC_PROBE)" --check; then have_pipeline=1; else echo 'SKIP pipeline portion of soak: usable streaming FFmpeg H.264 encode + linked H.264 decode are required'; fi
-	while [ $$(date +%s) -lt $$deadline ]; do
-		$(BUILD)/test-peer-session
-		$(BUILD)/test-udp-transport
-		$(BUILD)/test-direct-video-stress
-		if [ $$have_pipeline -eq 1 ]; then OPAL_TEST_HEADLESS=1 $(BUILD)/test-direct-video-pipeline; fi
-		iterations=$$((iterations + 1))
-	done
-	echo "HPI soak iterations=$$iterations seconds=$$(($$(date +%s) - start))"
+firewall-remove:
+	@if [ "$${OPAL_SKIP_FIREWALL:-0}" = 1 ]; then exit 0; fi; \
+	discovery_rule='47993/udp'; reply_rule='47994/udp'; \
+	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then \
+		firewall-cmd --quiet --permanent --remove-port="$$reply_rule" >/dev/null 2>&1 || true; \
+		firewall-cmd --quiet --remove-port="$$reply_rule" >/dev/null 2>&1 || true; \
+		firewall-cmd --quiet --permanent --remove-port="$$discovery_rule" >/dev/null 2>&1 || true; \
+		firewall-cmd --quiet --remove-port="$$discovery_rule" >/dev/null 2>&1 || true; \
+	fi; \
+	if command -v ufw >/dev/null 2>&1; then \
+		ufw_active=0; \
+		if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then ufw_active=1; fi; \
+		ufw --force delete allow "$$reply_rule" >/dev/null 2>&1 || true; \
+		ufw --force delete allow "$$discovery_rule" >/dev/null 2>&1 || true; \
+		if [ "$$ufw_active" -eq 1 ]; then ufw reload >/dev/null 2>&1 || true; fi; \
+	fi
 
-test-hpi: test-flv-stream test-video-reorder test-capture-probe test-linked-codec-probe test-video-capture test-input test-media test-udp-transport test-video-packet test-video-reassembly test-video-feedback test-video-decoder test-video-present test-direct-video-stress test-direct-video-pipeline test-peer-session test-multimonitor test-linux-capture-session-contract test-linux-capture-restart-contract test-linux-screen-setup-contract test-multimonitor-input-contract
+RENDEZVOUS_LIBS := -lcrypto -lpthread
 
-test-sanitize:
-	$(MAKE) clean
-	$(MAKE) -B test-direct-media-sanitize
-	$(MAKE) clean
-	$(MAKE) -B test-thread-sanitize
+else ifeq ($(OPAL_OS),macos)
 
-test-hpi-sanitize: test-sanitize
+MACOSX_DEPLOYMENT_TARGET ?= 13.0
+export MACOSX_DEPLOYMENT_TARGET
+OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl 2>/dev/null)
+OPENSSL_LIBS := $(shell $(PKG_CONFIG) --libs openssl 2>/dev/null)
+OPENSSL_LIBRARY_FLAGS := $(shell $(PKG_CONFIG) --libs-only-L openssl 2>/dev/null)
+CXXFLAGS += -pthread -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET) $(OPENSSL_LIBRARY_FLAGS)
+CPPFLAGS += $(OPENSSL_CFLAGS) -DOPAL_PLATFORM_MACOS=1 \
+	-DSDL_GetClipboardText=opal_macos_get_clipboard_text \
+	-DSDL_SetClipboardText=opal_macos_set_clipboard_text
 
-.PHONY: native-capture-deps-check test-flv-stream test-video-reorder test-input-record test-latency-window test-capture-probe test-linked-codec-probe test-multimonitor test-linux-capture-session-contract test-linux-capture-restart-contract test-linux-screen-setup-contract test-multimonitor-input-contract test-thread-sanitize test-thread-sanitize-run test-thread-sanitize-session-run test-sanitize test-netem test-soak test-hpi test-hpi-sanitize
+APPLE_FRAMEWORKS := \
+	-framework Foundation \
+	-framework AppKit \
+	-framework CoreGraphics \
+	-framework ApplicationServices \
+	-framework ScreenCaptureKit \
+	-framework CoreMedia \
+	-framework CoreVideo \
+	-framework VideoToolbox \
+	-framework AudioToolbox
 
-test-integration: $(INTEGRATION_FFMPEG) $(LINKED_CODEC_PROBE)
-test-integration: export OPAL_TEST_HEADLESS=1
-test-integration: export PATH := $(abspath $(INTEGRATION_FFMPEG_DIR)):$(PATH)
+MACOS_INFO_PLIST := platform/macos/Info.plist
+MACOS_INPUT_INFO_PLIST := platform/macos/InputHelper-Info.plist
+MACOS_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INFO_PLIST)
+MACOS_INPUT_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INPUT_INFO_PLIST)
+
+MACOS_VIDEO_SRCS := \
+	src/native_video_capture.cpp \
+	src/native_video_pipeline.cpp \
+	src/platform/macos/capture_backend.mm \
+	src/platform/macos/video_encoder_backend.mm \
+	src/platform/macos/audio_capture_backend.mm
+
+MACOS_APP_SRCS := \
+	src/main.cpp src/setup.cpp src/platform/macos/host.cpp src/client.cpp src/session.cpp \
+	src/platform/macos/system_backend.mm \
+	src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp \
+	$(PROFILE_SRCS) \
+	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
+	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
+	$(VIDEO_SENDER_SRCS) $(MACOS_VIDEO_SRCS) src/video_present.cpp \
+	$(CONTROL_COMMON_SRCS) src/local_discovery.cpp src/udp_socket_ops.cpp \
+	$(INPUT_SRCS) src/clipboard.cpp src/platform/macos/clipboard_shim.mm src/tailnet.cpp
+
+MACOS_FFMPEG_LIBS := $(AVLIBS) $(SWRLIBS)
+MACOS_LIBS := $(OPENSSL_LIBS) -pthread $(MACOS_FFMPEG_LIBS) $(SDL3_LIBS) $(APPLE_FRAMEWORKS)
+
+deps-check:
+	@set -e; \
+	os=$$(uname -s); arch=$$(uname -m); \
+	[ "$$os" = Darwin ] || { echo 'OPAL macOS build must run on macOS.' >&2; exit 1; }; \
+	[ "$$arch" = arm64 ] || { echo 'OPAL currently supports Apple Silicon macOS (arm64) only.' >&2; exit 1; }; \
+	command -v brew >/dev/null 2>&1 || { echo 'Homebrew is required. Install: brew install pkg-config sdl3 openssl@3 ffmpeg' >&2; exit 1; }; \
+	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config. Install: brew install pkg-config' >&2; exit 1; }; \
+	command -v codesign >/dev/null 2>&1 || { echo 'Missing codesign. Install Xcode Command Line Tools.' >&2; exit 1; }; \
+	missing=''; \
+	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample; do \
+		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then echo "Missing macOS build modules:$$missing" >&2; exit 1; fi
+
+$(PRODUCT): $(MACOS_APP_SRCS) include/opal/*.hpp $(MACOS_INFO_PLIST) | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(MACOS_APP_SRCS) $(LDFLAGS) $(MACOS_INFO_LDFLAGS) $(MACOS_LIBS) -o $@
+
+$(INPUT): src/platform/macos/input_helper.mm include/opal/input_record.hpp include/opal/input_wire.hpp $(MACOS_INPUT_INFO_PLIST) | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fobjc-arc src/platform/macos/input_helper.mm $(MACOS_INPUT_INFO_LDFLAGS) -framework ApplicationServices -framework CoreGraphics -o $@
+
+macos-sign: $(PRODUCT) $(INPUT)
+	codesign --force --sign - --identifier de.xt9y.opal "$(PRODUCT)"
+	codesign --force --sign - --identifier de.xt9y.opal.input "$(INPUT)"
+	codesign --verify --strict "$(PRODUCT)"
+	codesign --verify --strict "$(INPUT)"
+
+all: macos-sign
+
+install: all
+	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run make install as a normal user; it invokes sudo only for final installation.' >&2; exit 2; fi
+	@set -e; \
+	if [ -n "$(DESTDIR)" ]; then \
+		$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)"; \
+		$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"; \
+		$(INSTALL) -m 0755 "$(INPUT)" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
+	else \
+		command -v sudo >/dev/null 2>&1 || { echo 'sudo is required to install under $(PREFIX)' >&2; exit 1; }; \
+		sudo $(INSTALL) -d "$(BINDIR)" "$(LIBEXECDIR)"; \
+		sudo $(INSTALL) -m 0755 "$(PRODUCT)" "$(BINDIR)/opal"; \
+		sudo $(INSTALL) -m 0755 "$(INPUT)" "$(LIBEXECDIR)/opal-input"; \
+	fi; \
+	echo 'Installed OPAL.'
+
+uninstall:
+	@set -e; \
+	if [ -n "$(DESTDIR)" ]; then \
+		rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
+		rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null || true; \
+	else \
+		command -v sudo >/dev/null 2>&1 || { echo 'sudo is required to uninstall from $(PREFIX)' >&2; exit 1; }; \
+		sudo rm -f "$(BINDIR)/opal" "$(LIBEXECDIR)/opal-input"; \
+		sudo rmdir "$(LIBEXECDIR)" 2>/dev/null || true; \
+	fi
+
+RENDEZVOUS_LIBS := $(OPENSSL_LIBS) -pthread
+
+else ifeq ($(OPAL_OS),windows)
+
+CPPFLAGS += -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DOPAL_PLATFORM_WINDOWS=1 \
+	-DSDL_GetClipboardText=opal_windows_get_clipboard_text \
+	-DSDL_SetClipboardText=opal_windows_set_clipboard_text
+CXXFLAGS += -pthread
+
+WINDOWS_VIDEO_SRCS := \
+	src/native_video_capture.cpp \
+	src/native_video_pipeline.cpp \
+	src/platform/windows/capture_backend.cpp \
+	src/platform/windows/video_encoder_backend.cpp \
+	src/platform/windows/audio_capture_backend.cpp
+
+WINDOWS_APP_SRCS := \
+	src/main.cpp src/setup.cpp src/platform/windows/host.cpp src/client.cpp src/session.cpp \
+	src/platform/windows/system_backend.cpp \
+	src/config.cpp src/crypto.cpp src/platform/windows/media.cpp src/platform/windows/wake.cpp \
+	$(PROFILE_SRCS) \
+	src/platform/windows/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
+	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/platform/windows/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
+	$(VIDEO_SENDER_SRCS) $(WINDOWS_VIDEO_SRCS) src/platform/windows/video_present.cpp \
+	$(CONTROL_COMMON_SRCS) src/local_discovery.cpp src/platform/windows/udp_socket_ops.cpp \
+	$(INPUT_SRCS) src/clipboard.cpp src/platform/windows/clipboard_shim.cpp src/platform/windows/tailnet.cpp
+
+WINDOWS_NATIVE_LIBS := \
+	-lws2_32 -liphlpapi -ld3d11 -ld3dcompiler -ldxgi -ldxguid \
+	-lmfplat -lmf -lmfuuid -lwmcodecdspuuid -lmmdevapi -lavrt \
+	-luser32 -lole32 -loleaut32 -luuid -ltaskschd
+WINDOWS_LIBS := -lcrypto $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS) $(WINDOWS_NATIVE_LIBS)
+
+deps-check:
+	@set -e; \
+	case "$(OS)" in Windows_NT) ;; *) \
+		case "$$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) ;; \
+		*) echo 'OPAL Windows build must run in MSYS2 MinGW/UCRT64.' >&2; exit 1;; esac;; \
+	esac; \
+	command -v "$(CXX)" >/dev/null 2>&1 || { echo 'Missing C++ compiler.' >&2; exit 1; }; \
+	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config.' >&2; exit 1; }; \
+	missing=''; \
+	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample; do \
+		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing Windows build modules:$$missing" >&2; \
+		echo 'MSYS2 UCRT64: install the toolchain, pkgconf, SDL3, OpenSSL and FFmpeg packages.' >&2; \
+		exit 1; \
+	fi
+
+$(PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp src/platform/windows/cursor_compositor.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(WINDOWS_APP_SRCS) $(LDFLAGS) $(WINDOWS_LIBS) -o $@
+
+$(INPUT): src/platform/windows/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/platform/windows/input_helper.cpp -luser32 -o $@
+
+all: $(PRODUCT) $(INPUT)
+
+install: all
+	@echo "Windows binaries:"
+	@echo "  $(PRODUCT)"
+	@echo "  $(INPUT)"
+
+uninstall:
+	@echo 'Windows make install does not copy files; nothing to uninstall.'
+
+else
+
+$(error Unsupported platform '$(UNAME_S)'; OPAL supports Linux, Apple Silicon macOS, and Windows)
+
+endif
+
+ifneq ($(OPAL_OS),windows)
+
+$(RENDEZVOUS_SERVER): src/rendezvous_main.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp include/opal/*.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/rendezvous_main.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp $(RENDEZVOUS_LIBS) -o $@
+
+rendezvous-server: $(RENDEZVOUS_SERVER)
+
+install-rendezvous: $(RENDEZVOUS_SERVER)
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
+	$(INSTALL) -m 0755 "$(RENDEZVOUS_SERVER)" "$(DESTDIR)$(BINDIR)/opal-rendezvous"
+
+endif
+
+ifeq ($(OPAL_OS),linux)
+
+deploy-rendezvous: rendezvous-server
+	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run as a normal user with sudo access, not as root.' >&2; exit 2; fi
+	@set -e; \
+	command -v sudo >/dev/null 2>&1 || { echo 'sudo is required' >&2; exit 1; }; \
+	sudo install -m 0755 "$(RENDEZVOUS_SERVER)" /usr/local/bin/opal-rendezvous; \
+	sudo install -m 0644 system/opal-rendezvous.service /etc/systemd/system/opal-rendezvous.service; \
+	sudo mkdir -p /etc/systemd/system/opal-rendezvous.service.d; \
+	printf '%s\n' '[Service]' 'Environment=OPAL_RENDEZVOUS_BIND=::' 'Environment=OPAL_RENDEZVOUS_PUBLIC_HOST=$(PUBLIC_HOST)' 'Environment=OPAL_RENDEZVOUS_PORT=$(RENDEZVOUS_PORT)' | sudo tee /etc/systemd/system/opal-rendezvous.service.d/endpoint.conf >/dev/null; \
+	if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q '^Status: active'; then sudo ufw allow '$(RENDEZVOUS_PORT)/udp'; fi; \
+	if command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port='$(RENDEZVOUS_PORT)/udp'; sudo firewall-cmd --reload; fi; \
+	sudo systemctl daemon-reload; \
+	sudo systemctl enable --now opal-rendezvous.service; \
+	sudo systemctl --no-pager --full status opal-rendezvous.service
+
+endif
+
+verify: all
+	@echo "OPAL $(OPAL_OS) build complete."
+
+clean:
+	rm -rf "$(BUILD)"
+
+help:
+	@echo 'OPAL build'
+	@echo '  make              build OPAL'
+	@echo '  make install      install/copy OPAL for this platform'
+	@echo '  make uninstall    remove installed OPAL files'
+	@echo '  make verify       build verification'
+	@echo '  make clean        remove build output'
+	@if [ "$(OPAL_OS)" != windows ]; then echo '  make rendezvous-server'; fi
+
+.PHONY: all deps-check install uninstall verify clean help rendezvous-server install-rendezvous deploy-rendezvous firewall-install firewall-remove macos-sign
