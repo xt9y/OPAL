@@ -314,8 +314,8 @@ WINDOWS_APP_SRCS := \
 WINDOWS_NATIVE_LIBS := \
 	-lws2_32 -liphlpapi -ld3d11 -ld3dcompiler -ldxgi -ldxguid \
 	-lmfplat -lmf -lmfuuid -lwmcodecdspuuid -lmmdevapi -lavrt \
-	-luser32 -lole32 -loleaut32 -luuid -ltaskschd
-WINDOWS_LIBS := -lcrypto $(AVLIBS) $(SWRLIBS) $(SDL3_LIBS) $(WINDOWS_NATIVE_LIBS)
+	-luser32 -lole32 -loleaut32 -luuid -ltaskschd -lstrmiids -lksuser
+WINDOWS_LIBS := -lcrypto $(AVLIBS) $(SWRLIBS) $(filter-out -mwindows,$(SDL3_LIBS)) -mconsole $(WINDOWS_NATIVE_LIBS)
 
 deps-check:
 	@set -e; \
