@@ -1,3 +1,14 @@
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
+
 #include <opal/client.hpp>
 #include <opal/host.hpp>
 #include <opal/realtime.hpp>
@@ -8,6 +19,127 @@
 #include <csignal>
 #include <iostream>
 #include <string>
+
+#if defined(_WIN32)
+namespace {
+
+constexpr wchar_t kOpalHostMutexName[] = L"Local\\xt9y.OPAL.HostDaemon";
+constexpr wchar_t kOpalHostStopEventName[] = L"Local\\xt9y.OPAL.HostStop";
+
+bool windows_host_mutex_running()
+{
+    HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, kOpalHostMutexName);
+    if (!mutex) return false;
+    const DWORD wait = WaitForSingleObject(mutex, 0);
+    const bool running = wait == WAIT_TIMEOUT;
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) (void)ReleaseMutex(mutex);
+    CloseHandle(mutex);
+    return running;
+}
+
+bool windows_legacy_host_running()
+{
+    if (!windows_host_mutex_running()) return false;
+    HANDLE stop_event = OpenEventW(SYNCHRONIZE, FALSE, kOpalHostStopEventName);
+    if (stop_event) {
+        CloseHandle(stop_event);
+        return false;
+    }
+    return true;
+}
+
+bool windows_opal_process_name(const wchar_t* name)
+{
+    return CompareStringOrdinal(name, -1, L"opal.exe", -1, TRUE) == CSTR_EQUAL ||
+           CompareStringOrdinal(name, -1, L"opal", -1, TRUE) == CSTR_EQUAL;
+}
+
+bool windows_wait_for_host_exit(DWORD timeout_ms)
+{
+    const ULONGLONG deadline = GetTickCount64() + timeout_ms;
+    do {
+        if (!windows_host_mutex_running()) return true;
+        Sleep(10);
+    } while (GetTickCount64() < deadline);
+    return !windows_host_mutex_running();
+}
+
+bool windows_take_over_legacy_host()
+{
+    if (!windows_legacy_host_running()) return true;
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        std::cerr << "OPAL legacy host process snapshot failed error=" << GetLastError() << '\n';
+        return false;
+    }
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    DWORD candidate = 0;
+    unsigned matches = 0;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ProcessID == GetCurrentProcessId()) continue;
+            if (!windows_opal_process_name(entry.szExeFile)) continue;
+            candidate = entry.th32ProcessID;
+            ++matches;
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+
+    if (matches != 1 || candidate == 0) {
+        std::cerr << "OPAL legacy host takeover found " << matches
+                  << " other opal processes; refusing to terminate an ambiguous process.\n";
+        return false;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                                 FALSE, candidate);
+    if (!process) {
+        std::cerr << "OPAL legacy host takeover could not open pid=" << candidate
+                  << " error=" << GetLastError() << '\n';
+        return false;
+    }
+
+    DWORD exit_code = 0;
+    if (!GetExitCodeProcess(process, &exit_code)) {
+        const DWORD error = GetLastError();
+        CloseHandle(process);
+        std::cerr << "OPAL legacy host takeover could not inspect pid=" << candidate
+                  << " error=" << error << '\n';
+        return false;
+    }
+    if (exit_code != STILL_ACTIVE) {
+        CloseHandle(process);
+        return windows_wait_for_host_exit(1000);
+    }
+
+    const bool terminated = TerminateProcess(process, 0) != FALSE;
+    const DWORD error = terminated ? ERROR_SUCCESS : GetLastError();
+    if (terminated) (void)WaitForSingleObject(process, 3000);
+    CloseHandle(process);
+    if (!terminated) {
+        std::cerr << "OPAL legacy host takeover could not terminate pid=" << candidate
+                  << " error=" << error << '\n';
+        return false;
+    }
+    if (!windows_wait_for_host_exit(3000)) {
+        std::cerr << "OPAL legacy host process exited but its host mutex remained active.\n";
+        return false;
+    }
+
+    std::cout << "OPAL migrated legacy Windows host daemon.\n";
+    return true;
+}
+
+bool windows_prepare_host_lifecycle()
+{
+    return !windows_legacy_host_running() || windows_take_over_legacy_host();
+}
+
+}
+#endif
 
 static void help()
 {
@@ -92,12 +224,25 @@ int main(int argc, char** argv)
     if (action == "help" || action == "--help" || action == "-h") { help(); return 0; }
     if (action == "version" || action == "--version") { std::cout << "OPAL 0.2.0\n"; return 0; }
     if (action == "stop" && argc == 2) {
+#if defined(_WIN32)
+        if (!windows_prepare_host_lifecycle()) return 1;
+#endif
         const int result = opal::host_service(false);
         if (result == 0) std::cout << "OPAL host stopped.\n";
         return result;
     }
-    if (action == "restart" && argc == 2) return opal::restart_services();
-    if (action == "clean" && argc == 2) return opal::clean();
+    if (action == "restart" && argc == 2) {
+#if defined(_WIN32)
+        if (!windows_prepare_host_lifecycle()) return 1;
+#endif
+        return opal::restart_services();
+    }
+    if (action == "clean" && argc == 2) {
+#if defined(_WIN32)
+        if (!windows_prepare_host_lifecycle()) return 1;
+#endif
+        return opal::clean();
+    }
     if (action == "select" && argc == 2) return opal::interactive_select();
     if (action == "new" && argc == 2) return opal::interactive_setup();
     if (action == "remove" && argc == 2) return opal::interactive_remove();
