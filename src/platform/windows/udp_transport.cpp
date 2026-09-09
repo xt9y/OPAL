@@ -9,6 +9,7 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <mstcpip.h>
+#include <mswsock.h>
 
 #include <opal/udp_transport.hpp>
 
