@@ -271,6 +271,21 @@ bool process_is_current_opal(HANDLE process)
     return CompareStringOrdinal(image.native().c_str(), -1, current.native().c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
+bool process_is_opal_in_current_session(HANDLE process, DWORD pid)
+{
+    std::vector<wchar_t> buffer(32768);
+    DWORD length = static_cast<DWORD>(buffer.size());
+    if (!QueryFullProcessImageNameW(process, 0, buffer.data(), &length) || length == 0) return false;
+    const std::filesystem::path image(std::wstring(buffer.data(), length));
+    if (CompareStringOrdinal(image.filename().c_str(), -1, L"opal.exe", -1, TRUE) != CSTR_EQUAL) return false;
+
+    DWORD current_session = 0;
+    DWORD candidate_session = 0;
+    return ProcessIdToSessionId(GetCurrentProcessId(), &current_session) &&
+           ProcessIdToSessionId(pid, &candidate_session) &&
+           current_session == candidate_session;
+}
+
 bool host_mutex_running()
 {
     HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, kHostMutexName);
@@ -293,7 +308,7 @@ bool wait_for_host_mutex_release(DWORD timeout_ms)
     return released;
 }
 
-bool running_process(DWORD pid, DWORD access, HANDLE& process)
+bool running_current_process(DWORD pid, DWORD access, HANDLE& process)
 {
     process = OpenProcess(access | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!process) return false;
@@ -307,11 +322,25 @@ bool running_process(DWORD pid, DWORD access, HANDLE& process)
     return true;
 }
 
+bool running_session_opal_process(DWORD pid, DWORD access, HANDLE& process)
+{
+    process = OpenProcess(access | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return false;
+    DWORD exit_code = 0;
+    if (!process_is_opal_in_current_session(process, pid) ||
+        !GetExitCodeProcess(process, &exit_code) || exit_code != STILL_ACTIVE) {
+        CloseHandle(process);
+        process = nullptr;
+        return false;
+    }
+    return true;
+}
+
 bool recover_host_pid(DWORD& pid)
 {
     DWORD stored = 0;
     HANDLE process = nullptr;
-    if (read_host_pid(stored) && running_process(stored, 0, process)) {
+    if (read_host_pid(stored) && running_current_process(stored, 0, process)) {
         CloseHandle(process);
         pid = stored;
         return true;
@@ -321,7 +350,10 @@ bool recover_host_pid(DWORD& pid)
     if (!host_mutex_running()) return false;
 
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        if (debug_enabled()) std::cerr << "OPAL daemon process snapshot failed error=" << GetLastError() << '\n';
+        return false;
+    }
 
     PROCESSENTRY32W entry{};
     entry.dwSize = sizeof(entry);
@@ -332,7 +364,7 @@ bool recover_host_pid(DWORD& pid)
             if (entry.th32ProcessID == GetCurrentProcessId()) continue;
             if (CompareStringOrdinal(entry.szExeFile, -1, L"opal.exe", -1, TRUE) != CSTR_EQUAL) continue;
             HANDLE candidate_process = nullptr;
-            if (!running_process(entry.th32ProcessID, 0, candidate_process)) continue;
+            if (!running_session_opal_process(entry.th32ProcessID, 0, candidate_process)) continue;
             CloseHandle(candidate_process);
             candidate = entry.th32ProcessID;
             ++matches;
@@ -340,7 +372,12 @@ bool recover_host_pid(DWORD& pid)
     }
     CloseHandle(snapshot);
 
-    if (matches != 1 || candidate == 0) return false;
+    if (matches != 1 || candidate == 0) {
+        if (debug_enabled())
+            std::cerr << "OPAL legacy daemon recovery found " << matches
+                      << " candidate opal.exe processes in this login session.\n";
+        return false;
+    }
     (void)write_host_pid(candidate);
     pid = candidate;
     return true;
@@ -366,6 +403,9 @@ bool stop_host_daemon()
             clear_host_pid();
             return true;
         }
+    } else if (debug_enabled()) {
+        std::cerr << "OPAL host stop event unavailable error=" << GetLastError()
+                  << "; trying legacy daemon recovery.\n";
     }
 
     if (!host_mutex_running()) {
@@ -381,16 +421,26 @@ bool stop_host_daemon()
     }
 
     HANDLE process = nullptr;
-    if (!running_process(pid, PROCESS_TERMINATE, process)) {
+    if (!running_session_opal_process(pid, PROCESS_TERMINATE, process)) {
+        if (debug_enabled())
+            std::cerr << "OPAL could not open recovered host daemon pid=" << pid
+                      << " for termination error=" << GetLastError() << '\n';
         clear_host_pid_if(pid);
         return !host_mutex_running();
     }
 
     const bool terminated = TerminateProcess(process, 0) != FALSE;
+    const DWORD terminate_error = terminated ? ERROR_SUCCESS : GetLastError();
     if (terminated) (void)WaitForSingleObject(process, 3000);
     CloseHandle(process);
     if (terminated) clear_host_pid_if(pid);
-    return terminated && wait_for_host_mutex_release(3000);
+    if (!terminated && debug_enabled())
+        std::cerr << "OPAL legacy host termination failed pid=" << pid
+                  << " error=" << terminate_error << '\n';
+    const bool released = terminated && wait_for_host_mutex_release(3000);
+    if (terminated && !released && debug_enabled())
+        std::cerr << "OPAL legacy host process exited but host mutex remained active.\n";
+    return released;
 }
 
 bool launch_host_daemon()
@@ -538,13 +588,17 @@ int doctor()
 int host_service(bool enable)
 {
     if (!enable) {
-        const bool autostart_removed = remove_host_autostart();
         const bool daemon_stopped = stop_host_daemon();
-        if (!autostart_removed)
-            std::cerr << "Could not remove OPAL Windows auto-start entry.\n";
-        if (!daemon_stopped)
+        if (!daemon_stopped) {
             std::cerr << "Could not stop OPAL host daemon.\n";
-        return autostart_removed && daemon_stopped ? 0 : 1;
+            return 1;
+        }
+        const bool autostart_removed = remove_host_autostart();
+        if (!autostart_removed) {
+            std::cerr << "Could not remove OPAL Windows auto-start entry.\n";
+            return 1;
+        }
+        return 0;
     }
 
     if (current_executable_path().empty()) {
