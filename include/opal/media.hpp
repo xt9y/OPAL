@@ -1,18 +1,59 @@
 #pragma once
+
 #include <opal/media_profile.hpp>
-#include <chrono>
+
 #include <cstddef>
+#include <cstdint>
 #include <string>
-#include <sys/types.h>
 
 namespace opal {
-struct CaptureProcess { pid_t pid=-1; int fd=-1; };
-struct SinkProcess { pid_t pid=-1; int fd=-1; bool compact_input=false; };
-std::string capture_command(bool gpu_screen_recorder,int fps,int bitrate_kbps,bool audio,const std::string &portal_token_file="",int max_width=0,int max_height=0);
+
+using ProcessNativeHandle = std::intptr_t;
+using ProcessIoHandle = std::intptr_t;
+inline constexpr ProcessNativeHandle kInvalidProcessHandle = -1;
+inline constexpr ProcessIoHandle kInvalidProcessIoHandle = -1;
+
+struct CaptureProcess {
+    union {
+        ProcessNativeHandle process;
+        ProcessNativeHandle pid; // transitional source alias; not a POSIX type
+    };
+    union {
+        ProcessIoHandle io;
+        ProcessIoHandle fd; // transitional source alias; not a POSIX type
+    };
+
+    constexpr CaptureProcess() noexcept : process(kInvalidProcessHandle), io(kInvalidProcessIoHandle) {}
+    constexpr CaptureProcess(ProcessNativeHandle native_process, ProcessIoHandle native_io) noexcept
+        : process(native_process), io(native_io) {}
+    bool valid() const noexcept { return process != kInvalidProcessHandle && io != kInvalidProcessIoHandle; }
+};
+
+struct SinkProcess {
+    union {
+        ProcessNativeHandle process;
+        ProcessNativeHandle pid; // transitional source alias; not a POSIX type
+    };
+    union {
+        ProcessIoHandle io;
+        ProcessIoHandle fd; // transitional source alias; not a POSIX type
+    };
+    bool compact_input = false;
+
+    constexpr SinkProcess() noexcept : process(kInvalidProcessHandle), io(kInvalidProcessIoHandle) {}
+    constexpr SinkProcess(ProcessNativeHandle native_process, ProcessIoHandle native_io, bool compact = false) noexcept
+        : process(native_process), io(native_io), compact_input(compact) {}
+    bool valid() const noexcept { return process != kInvalidProcessHandle && io != kInvalidProcessIoHandle; }
+};
+
+std::string capture_command(bool gpu_screen_recorder, int fps, int bitrate_kbps, bool audio,
+                            const std::string &portal_token_file = "", int max_width = 0,
+                            int max_height = 0);
 CaptureProcess start_capture(const std::string &command);
-int read_capture(CaptureProcess &capture,void *buffer,size_t size,int timeout_ms);
+int read_capture(CaptureProcess &capture, void *buffer, std::size_t size, int timeout_ms);
 void stop_capture(CaptureProcess &capture);
 SinkProcess start_sink(const std::string &command);
-bool write_sink_timeout(SinkProcess &sink,const void *data,size_t size,int timeout_ms);
+bool write_sink_timeout(SinkProcess &sink, const void *data, std::size_t size, int timeout_ms);
 void stop_sink(SinkProcess &sink);
+
 }
