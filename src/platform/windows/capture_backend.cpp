@@ -13,10 +13,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace opal {
 namespace {
@@ -63,19 +67,60 @@ std::uint64_t present_time_us(const LARGE_INTEGER& present_time, std::uint64_t c
     return callback_us - static_cast<std::uint64_t>(age_us_value);
 }
 
+template <class T>
+void release_com(T*& value)
+{
+    if (value) value->Release();
+    value = nullptr;
+}
+
 struct AcquiredDesktopFrame {
     IDXGIOutputDuplication* duplication = nullptr;
     ID3D11Texture2D* texture = nullptr;
 
     ~AcquiredDesktopFrame()
     {
-        if (texture) texture->Release();
+        release_com(texture);
         if (duplication) {
             (void)duplication->ReleaseFrame();
             duplication->Release();
+            duplication = nullptr;
         }
     }
 };
+
+struct VirtualDesktopLayout {
+    RECT bounds{};
+    int source_width = 0;
+    int source_height = 0;
+    int canvas_width = 0;
+    int canvas_height = 0;
+
+    bool valid() const noexcept
+    {
+        return source_width > 0 && source_height > 0 && canvas_width > 0 && canvas_height > 0;
+    }
+};
+
+struct OutputCapture {
+    IDXGIOutput1* output = nullptr;
+    IDXGIOutputDuplication* duplication = nullptr;
+    ID3D11Texture2D* latest_texture = nullptr;
+    ID3D11VideoProcessorEnumerator* video_enumerator = nullptr;
+    ID3D11VideoProcessor* video_processor = nullptr;
+    ID3D11VideoProcessorInputView* input_view = nullptr;
+    ID3D11VideoProcessorOutputView* output_view = nullptr;
+    DXGI_OUTPUT_DESC desc{};
+    RECT destination{};
+    int frame_width = 0;
+    int frame_height = 0;
+    DXGI_FORMAT frame_format = DXGI_FORMAT_UNKNOWN;
+    std::uint64_t capture_us = 0;
+    CaptureTimestampQuality timestamp_quality = CaptureTimestampQuality::Estimated;
+    bool ready = false;
+};
+
+enum class AcquireResult { None, Updated, Fatal };
 
 class WindowsCaptureBackend final : public CaptureBackend {
 public:
@@ -88,7 +133,126 @@ public:
         error_ = {};
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
 
-        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        if (!select_adapter()) return false;
+        if (!create_device()) return false;
+        if (!open_outputs()) return false;
+        if (!build_virtual_desktop()) return false;
+        if (outputs_.size() > 1 && !create_composite_surface()) return false;
+
+        running_ = true;
+        return true;
+    }
+
+    bool next(NativeVideoFrame& frame, int timeout_ms) override
+    {
+        frame = {};
+        if (!running_ || outputs_.empty()) return false;
+        return outputs_.size() == 1 ? next_single(frame, timeout_ms) : next_composite(frame, timeout_ms);
+    }
+
+    void stop() override
+    {
+        running_ = false;
+        release_com(composite_rtv_);
+        release_com(composite_texture_);
+        for (auto& output : outputs_) release_output(output);
+        outputs_.clear();
+        release_com(video_context_);
+        release_com(video_device_);
+        if (context_) {
+            context_->ClearState();
+            context_->Flush();
+        }
+        release_com(context_);
+        release_com(device_);
+        release_com(adapter_);
+        virtual_desktop_ = {};
+        total_attached_outputs_ = 0;
+        timestamp_quality_ = CaptureTimestampQuality::Estimated;
+    }
+
+    CaptureTimestampQuality timestamp_quality() const override { return timestamp_quality_; }
+
+    std::string backend_name() const override
+    {
+        std::string name = "dxgi-desktop-duplication+d3d11";
+        if (outputs_.size() > 1) name += "+multimonitor-gpu";
+        if (total_attached_outputs_ > outputs_.size()) name += "+single-adapter";
+        return name;
+    }
+
+    PlatformError last_platform_error() const override { return error_; }
+
+private:
+    bool select_adapter()
+    {
+        IDXGIFactory1* factory = nullptr;
+        HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory));
+        if (FAILED(hr) || !factory) {
+            error_ = dxgi_error(hr, "DXGI factory creation failed");
+            return false;
+        }
+
+        IDXGIAdapter1* best = nullptr;
+        unsigned best_outputs = 0;
+        bool best_primary = false;
+        total_attached_outputs_ = 0;
+
+        for (UINT adapter_index = 0;; ++adapter_index) {
+            IDXGIAdapter1* candidate = nullptr;
+            hr = factory->EnumAdapters1(adapter_index, &candidate);
+            if (hr == DXGI_ERROR_NOT_FOUND) break;
+            if (FAILED(hr) || !candidate) continue;
+
+            DXGI_ADAPTER_DESC1 adapter_desc{};
+            candidate->GetDesc1(&adapter_desc);
+            if ((adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+                candidate->Release();
+                continue;
+            }
+
+            unsigned attached = 0;
+            bool primary = false;
+            for (UINT output_index = 0;; ++output_index) {
+                IDXGIOutput* output = nullptr;
+                const HRESULT output_hr = candidate->EnumOutputs(output_index, &output);
+                if (output_hr == DXGI_ERROR_NOT_FOUND) break;
+                if (FAILED(output_hr) || !output) continue;
+                DXGI_OUTPUT_DESC desc{};
+                if (SUCCEEDED(output->GetDesc(&desc)) && desc.AttachedToDesktop) {
+                    ++attached;
+                    ++total_attached_outputs_;
+                    const POINT origin{0, 0};
+                    primary |= desc.Monitor == MonitorFromPoint(origin, MONITOR_DEFAULTTONULL);
+                }
+                output->Release();
+            }
+
+            const bool better = attached > best_outputs ||
+                                (attached == best_outputs && primary && !best_primary);
+            if (attached > 0 && better) {
+                release_com(best);
+                best = candidate;
+                best_outputs = attached;
+                best_primary = primary;
+            } else {
+                candidate->Release();
+            }
+        }
+        factory->Release();
+
+        if (!best) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      "no hardware DXGI adapter owns an attached desktop output", false};
+            return false;
+        }
+        adapter_ = best;
+        return true;
+    }
+
+    bool create_device()
+    {
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 #ifdef _DEBUG
         if (const char* debug = std::getenv("OPAL_D3D_DEBUG"); debug && *debug && std::string(debug) != "0")
             flags |= D3D11_CREATE_DEVICE_DEBUG;
@@ -100,96 +264,371 @@ public:
             D3D_FEATURE_LEVEL_10_0
         };
         D3D_FEATURE_LEVEL selected{};
-        HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
-                                       levels, static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION,
-                                       &device_, &selected, &context_);
+        HRESULT hr = D3D11CreateDevice(adapter_, D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags,
+                                       levels, static_cast<UINT>(sizeof(levels) / sizeof(levels[0])),
+                                       D3D11_SDK_VERSION, &device_, &selected, &context_);
         if (hr == E_INVALIDARG) {
-            hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
-                                   levels + 1, static_cast<UINT>(std::size(levels) - 1), D3D11_SDK_VERSION,
-                                   &device_, &selected, &context_);
+            hr = D3D11CreateDevice(adapter_, D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags,
+                                   levels + 1, static_cast<UINT>(sizeof(levels) / sizeof(levels[0]) - 1),
+                                   D3D11_SDK_VERSION, &device_, &selected, &context_);
         }
         if (FAILED(hr) || !device_ || !context_) {
-            error_ = dxgi_error(hr, "D3D11 hardware device creation failed");
-            stop_device();
+            error_ = dxgi_error(hr, "D3D11 hardware/video device creation failed");
             return false;
         }
-        if (!open_duplication()) {
-            stop_device();
+
+        if (FAILED(device_->QueryInterface(__uuidof(ID3D11VideoDevice), reinterpret_cast<void**>(&video_device_))) ||
+            FAILED(context_->QueryInterface(__uuidof(ID3D11VideoContext), reinterpret_cast<void**>(&video_context_))) ||
+            !video_device_ || !video_context_) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "D3D11 video processor interfaces are unavailable", false};
             return false;
         }
-        running_ = true;
         return true;
     }
 
-    bool next(NativeVideoFrame& frame, int timeout_ms) override
+    bool open_outputs()
     {
-        frame = {};
-        if (!running_ || !duplication_) return false;
+        if (!adapter_ || !device_) return false;
+        outputs_.clear();
+        for (UINT output_index = 0;; ++output_index) {
+            IDXGIOutput* base = nullptr;
+            const HRESULT enum_hr = adapter_->EnumOutputs(output_index, &base);
+            if (enum_hr == DXGI_ERROR_NOT_FOUND) break;
+            if (FAILED(enum_hr) || !base) continue;
+
+            DXGI_OUTPUT_DESC desc{};
+            const HRESULT desc_hr = base->GetDesc(&desc);
+            if (FAILED(desc_hr) || !desc.AttachedToDesktop) {
+                base->Release();
+                continue;
+            }
+
+            IDXGIOutput1* output1 = nullptr;
+            const HRESULT query_hr = base->QueryInterface(__uuidof(IDXGIOutput1), reinterpret_cast<void**>(&output1));
+            base->Release();
+            if (FAILED(query_hr) || !output1) {
+                error_ = dxgi_error(query_hr, "attached DXGI output does not support Desktop Duplication");
+                return false;
+            }
+
+            OutputCapture output{};
+            output.output = output1;
+            output.desc = desc;
+            if (!open_duplication(output)) {
+                release_output(output);
+                return false;
+            }
+            outputs_.push_back(output);
+        }
+        if (outputs_.empty()) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      "selected DXGI adapter has no capturable desktop outputs", false};
+            return false;
+        }
+        return true;
+    }
+
+    bool build_virtual_desktop()
+    {
+        LONG min_x = std::numeric_limits<LONG>::max();
+        LONG min_y = std::numeric_limits<LONG>::max();
+        LONG max_x = std::numeric_limits<LONG>::min();
+        LONG max_y = std::numeric_limits<LONG>::min();
+        for (const auto& output : outputs_) {
+            min_x = std::min(min_x, output.desc.DesktopCoordinates.left);
+            min_y = std::min(min_y, output.desc.DesktopCoordinates.top);
+            max_x = std::max(max_x, output.desc.DesktopCoordinates.right);
+            max_y = std::max(max_y, output.desc.DesktopCoordinates.bottom);
+        }
+        const int source_width = static_cast<int>(max_x - min_x);
+        const int source_height = static_cast<int>(max_y - min_y);
+        if (source_width <= 0 || source_height <= 0) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::InvalidState,
+                      "DXGI virtual desktop geometry is invalid", false};
+            return false;
+        }
+
+        const int max_width = stream_.max_width > 0 ? stream_.max_width : source_width;
+        const int max_height = stream_.max_height > 0 ? stream_.max_height : source_height;
+        const double scale = std::min({1.0,
+            static_cast<double>(max_width) / static_cast<double>(source_width),
+            static_cast<double>(max_height) / static_cast<double>(source_height)});
+        int canvas_width = std::max(2, static_cast<int>(std::floor(source_width * scale)));
+        int canvas_height = std::max(2, static_cast<int>(std::floor(source_height * scale)));
+        canvas_width &= ~1;
+        canvas_height &= ~1;
+
+        virtual_desktop_.bounds = RECT{min_x, min_y, max_x, max_y};
+        virtual_desktop_.source_width = source_width;
+        virtual_desktop_.source_height = source_height;
+        virtual_desktop_.canvas_width = canvas_width;
+        virtual_desktop_.canvas_height = canvas_height;
+        if (!virtual_desktop_.valid()) return false;
+
+        for (auto& output : outputs_) {
+            const auto& source = output.desc.DesktopCoordinates;
+            const auto map_x = [&](LONG value) {
+                return static_cast<LONG>(std::llround(
+                    static_cast<long double>(value - min_x) * canvas_width / source_width));
+            };
+            const auto map_y = [&](LONG value) {
+                return static_cast<LONG>(std::llround(
+                    static_cast<long double>(value - min_y) * canvas_height / source_height));
+            };
+            output.destination = RECT{
+                std::clamp<LONG>(map_x(source.left), 0, canvas_width),
+                std::clamp<LONG>(map_y(source.top), 0, canvas_height),
+                std::clamp<LONG>(map_x(source.right), 0, canvas_width),
+                std::clamp<LONG>(map_y(source.bottom), 0, canvas_height)};
+            if (output.destination.right <= output.destination.left)
+                output.destination.right = std::min<LONG>(canvas_width, output.destination.left + 1);
+            if (output.destination.bottom <= output.destination.top)
+                output.destination.bottom = std::min<LONG>(canvas_height, output.destination.top + 1);
+        }
+        return true;
+    }
+
+    bool create_composite_surface()
+    {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = static_cast<UINT>(virtual_desktop_.canvas_width);
+        desc.Height = static_cast<UINT>(virtual_desktop_.canvas_height);
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &composite_texture_);
+        if (SUCCEEDED(hr)) hr = device_->CreateRenderTargetView(composite_texture_, nullptr, &composite_rtv_);
+        if (FAILED(hr) || !composite_texture_ || !composite_rtv_) {
+            error_ = dxgi_error(hr, "D3D11 multi-monitor composite surface creation failed");
+            return false;
+        }
+        return true;
+    }
+
+    bool open_duplication(OutputCapture& output)
+    {
+        release_com(output.duplication);
+        if (!output.output) return false;
+        const HRESULT hr = output.output->DuplicateOutput(device_, &output.duplication);
+        if (FAILED(hr) || !output.duplication) {
+            error_ = dxgi_error(hr, "IDXGIOutput1::DuplicateOutput failed", true);
+            return false;
+        }
+        return true;
+    }
+
+    void release_pipeline(OutputCapture& output)
+    {
+        release_com(output.output_view);
+        release_com(output.input_view);
+        release_com(output.video_processor);
+        release_com(output.video_enumerator);
+    }
+
+    void release_output(OutputCapture& output)
+    {
+        release_pipeline(output);
+        release_com(output.latest_texture);
+        release_com(output.duplication);
+        release_com(output.output);
+        output = {};
+    }
+
+    bool ensure_latest_texture(OutputCapture& output, ID3D11Texture2D* source)
+    {
+        D3D11_TEXTURE2D_DESC source_desc{};
+        source->GetDesc(&source_desc);
+        if (source_desc.Width == 0 || source_desc.Height == 0 ||
+            source_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "Desktop Duplication surface is not BGRA8", false};
+            return false;
+        }
+
+        if (output.latest_texture && output.frame_width == static_cast<int>(source_desc.Width) &&
+            output.frame_height == static_cast<int>(source_desc.Height) && output.frame_format == source_desc.Format)
+            return true;
+
+        release_pipeline(output);
+        release_com(output.latest_texture);
+
+        D3D11_TEXTURE2D_DESC copy = source_desc;
+        copy.MipLevels = 1;
+        copy.ArraySize = 1;
+        copy.Usage = D3D11_USAGE_DEFAULT;
+        copy.BindFlags = 0;
+        copy.CPUAccessFlags = 0;
+        copy.MiscFlags = 0;
+        const HRESULT hr = device_->CreateTexture2D(&copy, nullptr, &output.latest_texture);
+        if (FAILED(hr) || !output.latest_texture) {
+            error_ = dxgi_error(hr, "could not allocate persistent DXGI monitor texture");
+            return false;
+        }
+        output.frame_width = static_cast<int>(source_desc.Width);
+        output.frame_height = static_cast<int>(source_desc.Height);
+        output.frame_format = source_desc.Format;
+        output.ready = false;
+        return true;
+    }
+
+    bool ensure_output_pipeline(OutputCapture& output)
+    {
+        if (output.video_processor && output.input_view && output.output_view) return true;
+        if (!output.latest_texture || !composite_texture_ || !video_device_ || !video_context_) return false;
+
+        D3D11_VIDEO_PROCESSOR_CONTENT_DESC content{};
+        content.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+        content.InputFrameRate.Numerator = static_cast<UINT>(std::clamp(stream_.fps, 15, 240));
+        content.InputFrameRate.Denominator = 1;
+        content.InputWidth = static_cast<UINT>(output.frame_width);
+        content.InputHeight = static_cast<UINT>(output.frame_height);
+        content.OutputFrameRate = content.InputFrameRate;
+        content.OutputWidth = static_cast<UINT>(virtual_desktop_.canvas_width);
+        content.OutputHeight = static_cast<UINT>(virtual_desktop_.canvas_height);
+        content.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+
+        HRESULT hr = video_device_->CreateVideoProcessorEnumerator(&content, &output.video_enumerator);
+        if (SUCCEEDED(hr)) hr = video_device_->CreateVideoProcessor(output.video_enumerator, 0, &output.video_processor);
+
+        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC input_desc{};
+        input_desc.FourCC = 0;
+        input_desc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+        input_desc.Texture2D.MipSlice = 0;
+        input_desc.Texture2D.ArraySlice = 0;
+        if (SUCCEEDED(hr)) hr = video_device_->CreateVideoProcessorInputView(
+            output.latest_texture, output.video_enumerator, &input_desc, &output.input_view);
+
+        D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC output_desc{};
+        output_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+        output_desc.Texture2D.MipSlice = 0;
+        if (SUCCEEDED(hr)) hr = video_device_->CreateVideoProcessorOutputView(
+            composite_texture_, output.video_enumerator, &output_desc, &output.output_view);
+        if (FAILED(hr) || !output.video_processor || !output.input_view || !output.output_view) {
+            release_pipeline(output);
+            error_ = dxgi_error(hr, "D3D11 monitor compositor pipeline creation failed");
+            return false;
+        }
+
+        RECT source_rect{0, 0, output.frame_width, output.frame_height};
+        video_context_->VideoProcessorSetStreamSourceRect(output.video_processor, 0, TRUE, &source_rect);
+        video_context_->VideoProcessorSetStreamDestRect(output.video_processor, 0, TRUE, &output.destination);
+        video_context_->VideoProcessorSetOutputTargetRect(output.video_processor, TRUE, &output.destination);
+        return true;
+    }
+
+    AcquireResult acquire_latest(OutputCapture& output, int timeout_ms)
+    {
+        if (!output.duplication) return AcquireResult::Fatal;
+        DXGI_OUTDUPL_FRAME_INFO info{};
+        IDXGIResource* resource = nullptr;
+        const HRESULT hr = output.duplication->AcquireNextFrame(static_cast<UINT>(std::max(0, timeout_ms)), &info, &resource);
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) return AcquireResult::None;
+        if (hr == DXGI_ERROR_ACCESS_LOST) {
+            if (!open_duplication(output)) return AcquireResult::Fatal;
+            return AcquireResult::None;
+        }
+        if (FAILED(hr) || !resource) {
+            if (resource) resource->Release();
+            error_ = dxgi_error(hr, "Desktop Duplication AcquireNextFrame failed", true);
+            return AcquireResult::Fatal;
+        }
+
+        ID3D11Texture2D* texture = nullptr;
+        const HRESULT texture_hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+        resource->Release();
+        if (FAILED(texture_hr) || !texture) {
+            (void)output.duplication->ReleaseFrame();
+            error_ = dxgi_error(texture_hr, "Desktop Duplication frame is not a D3D11 texture", true);
+            return AcquireResult::Fatal;
+        }
+
+        if (info.LastPresentTime.QuadPart == 0) {
+            texture->Release();
+            (void)output.duplication->ReleaseFrame();
+            return AcquireResult::None;
+        }
+        if (!ensure_latest_texture(output, texture)) {
+            texture->Release();
+            (void)output.duplication->ReleaseFrame();
+            return AcquireResult::Fatal;
+        }
+
+        context_->CopyResource(output.latest_texture, texture);
+        texture->Release();
+        (void)output.duplication->ReleaseFrame();
+
+        const std::uint64_t callback_us = monotonic_us();
+        output.capture_us = present_time_us(info.LastPresentTime, callback_us, output.timestamp_quality);
+        output.ready = true;
+        if (outputs_.size() > 1 && !ensure_output_pipeline(output)) return AcquireResult::Fatal;
+        return AcquireResult::Updated;
+    }
+
+    bool next_single(NativeVideoFrame& frame, int timeout_ms)
+    {
+        auto& output = outputs_.front();
         const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
-
         for (;;) {
-            const auto now = Clock::now();
-            const int remaining = timeout_ms <= 0 ? 0 : static_cast<int>(std::max<std::int64_t>(
-                0, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count()));
-
+            const auto remaining = timeout_ms <= 0 ? 0 : static_cast<int>(std::max<std::int64_t>(
+                0, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count()));
             DXGI_OUTDUPL_FRAME_INFO info{};
             IDXGIResource* resource = nullptr;
-            const HRESULT hr = duplication_->AcquireNextFrame(static_cast<UINT>(remaining), &info, &resource);
+            const HRESULT hr = output.duplication->AcquireNextFrame(static_cast<UINT>(remaining), &info, &resource);
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
             if (hr == DXGI_ERROR_ACCESS_LOST) {
-                if (!open_duplication()) {
-                    running_ = false;
-                    return false;
-                }
+                if (!open_duplication(output)) { running_ = false; return false; }
                 if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
                 continue;
             }
             if (FAILED(hr) || !resource) {
+                if (resource) resource->Release();
                 error_ = dxgi_error(hr, "Desktop Duplication AcquireNextFrame failed", true);
                 running_ = false;
-                if (resource) resource->Release();
                 return false;
             }
 
             ID3D11Texture2D* texture = nullptr;
-            const HRESULT texture_hr = resource->QueryInterface(__uuidof(ID3D11Texture2D),
-                                                                 reinterpret_cast<void**>(&texture));
+            const HRESULT texture_hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
             resource->Release();
             if (FAILED(texture_hr) || !texture) {
-                (void)duplication_->ReleaseFrame();
+                (void)output.duplication->ReleaseFrame();
                 error_ = dxgi_error(texture_hr, "Desktop Duplication frame is not a D3D11 texture", true);
                 running_ = false;
                 return false;
             }
-
             if (info.LastPresentTime.QuadPart == 0) {
                 texture->Release();
-                (void)duplication_->ReleaseFrame();
+                (void)output.duplication->ReleaseFrame();
                 if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
                 continue;
             }
 
             D3D11_TEXTURE2D_DESC desc{};
             texture->GetDesc(&desc);
-            if (desc.Width == 0 || desc.Height == 0) {
+            if (desc.Width == 0 || desc.Height == 0 || desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
                 texture->Release();
-                (void)duplication_->ReleaseFrame();
+                (void)output.duplication->ReleaseFrame();
+                error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                          "Desktop Duplication surface is not BGRA8", false};
+                running_ = false;
                 return false;
             }
 
-            const std::uint64_t callback_us = monotonic_us();
+            const auto callback_us = monotonic_us();
             CaptureTimestampQuality quality = CaptureTimestampQuality::Estimated;
-            const std::uint64_t capture_us = present_time_us(info.LastPresentTime, callback_us, quality);
-
-            duplication_->AddRef();
+            const auto capture_us = present_time_us(info.LastPresentTime, callback_us, quality);
+            output.duplication->AddRef();
             auto owner = std::make_shared<AcquiredDesktopFrame>();
-            owner->duplication = duplication_;
+            owner->duplication = output.duplication;
             owner->texture = texture;
 
             frame.kind = NativeVideoFrameKind::Opaque;
             frame.width = static_cast<int>(desc.Width);
             frame.height = static_cast<int>(desc.Height);
-            frame.stride = 0;
             frame.pixel_format = static_cast<std::uint32_t>(desc.Format);
             frame.capture_time_us = capture_us;
             frame.opaque = texture;
@@ -199,89 +638,101 @@ public:
         }
     }
 
-    void stop() override
+    bool all_outputs_ready() const
     {
-        running_ = false;
-        if (duplication_) {
-            duplication_->Release();
-            duplication_ = nullptr;
-        }
-        stop_device();
-        timestamp_quality_ = CaptureTimestampQuality::Estimated;
-    }
-
-    CaptureTimestampQuality timestamp_quality() const override { return timestamp_quality_; }
-    std::string backend_name() const override { return "dxgi-desktop-duplication+d3d11"; }
-    PlatformError last_platform_error() const override { return error_; }
-
-private:
-    bool open_duplication()
-    {
-        if (!device_) return false;
-        if (duplication_) {
-            duplication_->Release();
-            duplication_ = nullptr;
-        }
-
-        IDXGIDevice* dxgi_device = nullptr;
-        HRESULT hr = device_->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi_device));
-        if (FAILED(hr) || !dxgi_device) {
-            error_ = dxgi_error(hr, "D3D11 device does not expose IDXGIDevice");
-            return false;
-        }
-
-        IDXGIAdapter* adapter = nullptr;
-        hr = dxgi_device->GetAdapter(&adapter);
-        dxgi_device->Release();
-        if (FAILED(hr) || !adapter) {
-            error_ = dxgi_error(hr, "could not resolve DXGI adapter");
-            return false;
-        }
-
-        IDXGIOutput* output = nullptr;
-        hr = adapter->EnumOutputs(0, &output);
-        adapter->Release();
-        if (FAILED(hr) || !output) {
-            error_ = dxgi_error(hr, "no capturable DXGI output is available");
-            return false;
-        }
-
-        IDXGIOutput1* output1 = nullptr;
-        hr = output->QueryInterface(__uuidof(IDXGIOutput1), reinterpret_cast<void**>(&output1));
-        output->Release();
-        if (FAILED(hr) || !output1) {
-            error_ = dxgi_error(hr, "DXGI output does not support Desktop Duplication");
-            return false;
-        }
-
-        hr = output1->DuplicateOutput(device_, &duplication_);
-        output1->Release();
-        if (FAILED(hr) || !duplication_) {
-            error_ = dxgi_error(hr, "IDXGIOutput1::DuplicateOutput failed", true);
-            return false;
-        }
-        error_ = {};
+        for (const auto& output : outputs_) if (!output.ready) return false;
         return true;
     }
 
-    void stop_device()
+    bool compose(NativeVideoFrame& frame, std::uint64_t capture_us, CaptureTimestampQuality quality)
     {
-        if (context_) {
-            context_->ClearState();
-            context_->Flush();
-            context_->Release();
-            context_ = nullptr;
+        if (!composite_texture_ || !composite_rtv_) return false;
+        constexpr float black[4] = {0.f, 0.f, 0.f, 1.f};
+        context_->ClearRenderTargetView(composite_rtv_, black);
+
+        for (auto& output : outputs_) {
+            if (!output.ready || !ensure_output_pipeline(output)) return false;
+            D3D11_VIDEO_PROCESSOR_STREAM stream{};
+            stream.Enable = TRUE;
+            stream.OutputIndex = 0;
+            stream.InputFrameOrField = 0;
+            stream.pInputSurface = output.input_view;
+            const HRESULT hr = video_context_->VideoProcessorBlt(
+                output.video_processor, output.output_view, 0, 1, &stream);
+            if (FAILED(hr)) {
+                error_ = dxgi_error(hr, "D3D11 multi-monitor VideoProcessorBlt failed", true);
+                running_ = false;
+                return false;
+            }
         }
-        if (device_) {
-            device_->Release();
-            device_ = nullptr;
+
+        frame.kind = NativeVideoFrameKind::Opaque;
+        frame.width = virtual_desktop_.canvas_width;
+        frame.height = virtual_desktop_.canvas_height;
+        frame.pixel_format = static_cast<std::uint32_t>(DXGI_FORMAT_B8G8R8A8_UNORM);
+        frame.capture_time_us = capture_us ? capture_us : monotonic_us();
+        frame.opaque = composite_texture_;
+        timestamp_quality_ = quality;
+        return true;
+    }
+
+    bool next_composite(NativeVideoFrame& frame, int timeout_ms)
+    {
+        const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
+        bool updated = false;
+        std::uint64_t oldest_update = std::numeric_limits<std::uint64_t>::max();
+        CaptureTimestampQuality quality = CaptureTimestampQuality::Exact;
+
+        auto note = [&](OutputCapture& output, AcquireResult result) {
+            if (result != AcquireResult::Updated) return;
+            updated = true;
+            oldest_update = std::min(oldest_update, output.capture_us);
+            if (output.timestamp_quality != CaptureTimestampQuality::Exact)
+                quality = CaptureTimestampQuality::Estimated;
+        };
+
+        for (auto& output : outputs_) {
+            const auto result = acquire_latest(output, 0);
+            if (result == AcquireResult::Fatal) { running_ = false; return false; }
+            note(output, result);
         }
+        if (all_outputs_ready() && updated)
+            return compose(frame, oldest_update, quality);
+        if (timeout_ms <= 0) return false;
+
+        std::size_t cursor = 0;
+        while (Clock::now() < deadline) {
+            auto& output = outputs_[cursor++ % outputs_.size()];
+            const auto remaining = static_cast<int>(std::max<std::int64_t>(
+                1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count()));
+            const auto result = acquire_latest(output, std::min(1, remaining));
+            if (result == AcquireResult::Fatal) { running_ = false; return false; }
+            note(output, result);
+            if (result == AcquireResult::Updated) {
+                for (auto& peer : outputs_) {
+                    if (&peer == &output) continue;
+                    const auto peer_result = acquire_latest(peer, 0);
+                    if (peer_result == AcquireResult::Fatal) { running_ = false; return false; }
+                    note(peer, peer_result);
+                }
+            }
+            if (all_outputs_ready() && updated)
+                return compose(frame, oldest_update, quality);
+        }
+        return false;
     }
 
     StreamOptions stream_{};
+    IDXGIAdapter1* adapter_ = nullptr;
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
-    IDXGIOutputDuplication* duplication_ = nullptr;
+    ID3D11VideoDevice* video_device_ = nullptr;
+    ID3D11VideoContext* video_context_ = nullptr;
+    std::vector<OutputCapture> outputs_;
+    VirtualDesktopLayout virtual_desktop_{};
+    ID3D11Texture2D* composite_texture_ = nullptr;
+    ID3D11RenderTargetView* composite_rtv_ = nullptr;
+    std::size_t total_attached_outputs_ = 0;
     bool running_ = false;
     CaptureTimestampQuality timestamp_quality_ = CaptureTimestampQuality::Estimated;
     PlatformError error_{};
