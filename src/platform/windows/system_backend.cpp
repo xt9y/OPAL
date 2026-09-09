@@ -158,7 +158,7 @@ bool wasapi_render_endpoint_available()
     IMMDeviceEnumerator* enumerator = nullptr;
     IMMDevice* endpoint = nullptr;
     const bool ok = SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                               __uuidof(MMDeviceEnumerator), reinterpret_cast<void**>(&enumerator))) &&
+                                               __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&enumerator))) &&
                     enumerator && SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint)) && endpoint;
     release(endpoint);
     release(enumerator);
@@ -203,7 +203,7 @@ bool host_autostart_registered()
         return false;
 
     std::vector<wchar_t> value(bytes / sizeof(wchar_t) + 1, L'\0');
-    if (RegQueryValueExW(key.value, kHostRunValueName, nullptr, &type,
+    if (RegQueryValueExW(key.value, kHostRunKeyPath, nullptr, &type,
                          reinterpret_cast<BYTE*>(value.data()), &bytes) != ERROR_SUCCESS)
         return false;
 
