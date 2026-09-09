@@ -1,6 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <SDL3/SDL.h>
+
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -43,13 +45,29 @@ void ensure_windows_input_helper_environment()
     }
 }
 
+const SDL_DisplayMode* windows_virtual_desktop_mode(SDL_DisplayID display)
+{
+    const SDL_DisplayMode* native = SDL_GetDesktopDisplayMode(display);
+    static thread_local SDL_DisplayMode mode{};
+    if (native) mode = *native;
+    else mode = {};
+
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (width > 0) mode.w = width;
+    if (height > 0) mode.h = height;
+    return mode.w > 0 && mode.h > 0 ? &mode : native;
+}
+
 }
 }
 
 #define host_setup windows_host_setup_impl
 #define host_run windows_host_run_impl
 #define host_daemon windows_host_daemon_impl
+#define SDL_GetDesktopDisplayMode windows_virtual_desktop_mode
 #include "../../host.cpp"
+#undef SDL_GetDesktopDisplayMode
 #undef host_setup
 #undef host_run
 #undef host_daemon
