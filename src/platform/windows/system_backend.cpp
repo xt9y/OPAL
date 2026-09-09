@@ -15,8 +15,6 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mmdeviceapi.h>
-#include <oleauto.h>
-#include <taskschd.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -33,7 +31,9 @@ extern "C" {
 
 namespace opal {
 namespace {
-constexpr wchar_t kHostTaskName[] = L"OPAL Host";
+
+constexpr wchar_t kHostRunKeyPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kHostRunValueName[] = L"OPAL Host";
 
 struct ComScope {
     HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -48,6 +48,11 @@ void release(T*& value)
     if (value) value->Release();
     value = nullptr;
 }
+
+struct RegistryKey {
+    HKEY value = nullptr;
+    ~RegistryKey() { if (value) RegCloseKey(value); }
+};
 
 std::filesystem::path current_executable_path()
 {
@@ -151,182 +156,185 @@ bool wasapi_render_endpoint_available()
     return ok;
 }
 
-struct TaskConnection {
-    ITaskService* service = nullptr;
-    ITaskFolder* root = nullptr;
-    ~TaskConnection() { release(root); release(service); }
-};
-
-bool connect_task_scheduler(TaskConnection& connection)
+std::wstring host_autostart_command()
 {
-    ComScope com;
-    if (!com.usable()) return false;
-    HRESULT hr = CoCreateInstance(CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER,
-                                  IID_ITaskService, reinterpret_cast<void**>(&connection.service));
-    if (FAILED(hr) || !connection.service) return false;
-    VARIANT empty;
-    VariantInit(&empty);
-    hr = connection.service->Connect(empty, empty, empty, empty);
-    if (FAILED(hr)) return false;
-    BSTR root_path = SysAllocString(L"\\");
-    if (!root_path) return false;
-    hr = connection.service->GetFolder(root_path, &connection.root);
-    SysFreeString(root_path);
-    return SUCCEEDED(hr) && connection.root;
+    const auto executable = current_executable_path();
+    if (executable.empty()) return {};
+    return L"\"" + executable.native() + L"\" --internal-host-daemon";
 }
 
-bool task_exists()
+bool register_host_autostart()
 {
-    ComScope com;
-    if (!com.usable()) return false;
-    TaskConnection connection;
-    if (!connect_task_scheduler(connection)) return false;
-    BSTR name = SysAllocString(kHostTaskName);
-    if (!name) return false;
-    IRegisteredTask* task = nullptr;
-    const HRESULT hr = connection.root->GetTask(name, &task);
-    SysFreeString(name);
-    release(task);
-    return SUCCEEDED(hr);
+    const auto command = host_autostart_command();
+    if (command.empty()) return false;
+
+    RegistryKey key;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kHostRunKeyPath, 0, nullptr, 0,
+                        KEY_SET_VALUE, nullptr, &key.value, nullptr) != ERROR_SUCCESS)
+        return false;
+
+    const DWORD bytes = static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t));
+    return RegSetValueExW(key.value, kHostRunValueName, 0, REG_SZ,
+                          reinterpret_cast<const BYTE*>(command.c_str()), bytes) == ERROR_SUCCESS;
 }
 
-bool register_host_task()
+bool host_autostart_registered()
 {
-    ComScope com;
-    if (!com.usable()) return false;
-    TaskConnection connection;
-    if (!connect_task_scheduler(connection)) return false;
+    const auto expected = host_autostart_command();
+    if (expected.empty()) return false;
+
+    RegistryKey key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kHostRunKeyPath, 0, KEY_QUERY_VALUE, &key.value) != ERROR_SUCCESS)
+        return false;
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (RegQueryValueExW(key.value, kHostRunValueName, nullptr, &type, nullptr, &bytes) != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ) || bytes < sizeof(wchar_t))
+        return false;
+
+    std::vector<wchar_t> value(bytes / sizeof(wchar_t) + 1, L'\0');
+    if (RegQueryValueExW(key.value, kHostRunValueName, nullptr, &type,
+                         reinterpret_cast<BYTE*>(value.data()), &bytes) != ERROR_SUCCESS)
+        return false;
+
+    return CompareStringOrdinal(value.data(), -1, expected.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+bool remove_host_autostart()
+{
+    RegistryKey key;
+    const LSTATUS opened = RegOpenKeyExW(HKEY_CURRENT_USER, kHostRunKeyPath, 0, KEY_SET_VALUE, &key.value);
+    if (opened == ERROR_FILE_NOT_FOUND) return true;
+    if (opened != ERROR_SUCCESS) return false;
+
+    const LSTATUS removed = RegDeleteValueW(key.value, kHostRunValueName);
+    return removed == ERROR_SUCCESS || removed == ERROR_FILE_NOT_FOUND;
+}
+
+std::filesystem::path host_pid_path()
+{
+    return Paths::load().root / "host.pid";
+}
+
+void clear_host_pid()
+{
+    std::error_code error;
+    std::filesystem::remove(host_pid_path(), error);
+}
+
+bool read_host_pid(DWORD& pid)
+{
+    std::ifstream input(host_pid_path());
+    unsigned long long value = 0;
+    if (!(input >> value) || value == 0 || value > 0xffffffffULL) return false;
+    pid = static_cast<DWORD>(value);
+    return true;
+}
+
+bool process_is_opal(HANDLE process)
+{
+    std::vector<wchar_t> buffer(32768);
+    DWORD length = static_cast<DWORD>(buffer.size());
+    if (!QueryFullProcessImageNameW(process, 0, buffer.data(), &length) || length == 0) return false;
+    const std::filesystem::path image(std::wstring(buffer.data(), length));
+    return CompareStringOrdinal(image.filename().c_str(), -1, L"opal.exe", -1, TRUE) == CSTR_EQUAL;
+}
+
+bool host_daemon_running()
+{
+    DWORD pid = 0;
+    if (!read_host_pid(pid)) return false;
+
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) {
+        if (GetLastError() == ERROR_INVALID_PARAMETER) clear_host_pid();
+        return false;
+    }
+
+    DWORD exit_code = 0;
+    const bool running = process_is_opal(process) &&
+                         GetExitCodeProcess(process, &exit_code) &&
+                         exit_code == STILL_ACTIVE;
+    CloseHandle(process);
+    if (!running) clear_host_pid();
+    return running;
+}
+
+bool stop_host_daemon()
+{
+    DWORD pid = 0;
+    if (!read_host_pid(pid)) {
+        clear_host_pid();
+        return true;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) {
+        if (GetLastError() == ERROR_INVALID_PARAMETER) {
+            clear_host_pid();
+            return true;
+        }
+        return false;
+    }
+
+    if (!process_is_opal(process)) {
+        CloseHandle(process);
+        clear_host_pid();
+        return true;
+    }
+
+    const DWORD wait = WaitForSingleObject(process, 0);
+    if (wait == WAIT_OBJECT_0) {
+        CloseHandle(process);
+        clear_host_pid();
+        return true;
+    }
+
+    const bool terminated = TerminateProcess(process, 0) != FALSE;
+    if (terminated) (void)WaitForSingleObject(process, 3000);
+    CloseHandle(process);
+    if (terminated) clear_host_pid();
+    return terminated;
+}
+
+bool launch_host_daemon()
+{
+    if (host_daemon_running()) return true;
 
     const auto executable_path = current_executable_path();
     if (executable_path.empty()) return false;
     const std::wstring executable = executable_path.native();
     const std::wstring working = executable_path.parent_path().native();
-    if (executable.empty()) return false;
+    std::wstring command = L"\"" + executable + L"\" --internal-host-daemon";
+    std::vector<wchar_t> command_line(command.begin(), command.end());
+    command_line.push_back(L'\0');
 
-    ITaskDefinition* definition = nullptr;
-    if (FAILED(connection.service->NewTask(0, &definition)) || !definition) return false;
-
-    bool ok = true;
-    IRegistrationInfo* registration = nullptr;
-    if (SUCCEEDED(definition->get_RegistrationInfo(&registration)) && registration) {
-        BSTR description = SysAllocString(L"OPAL interactive remote desktop host");
-        ok = description && SUCCEEDED(registration->put_Description(description));
-        SysFreeString(description);
-    } else ok = false;
-    release(registration);
-
-    const bool elevated = [] {
-        const char* value = std::getenv("OPAL_WINDOWS_HOST_ELEVATED");
-        return value && *value && std::string(value) != "0";
-    }();
-    if (ok && elevated) {
-        IPrincipal* principal = nullptr;
-        if (SUCCEEDED(definition->get_Principal(&principal)) && principal)
-            ok = SUCCEEDED(principal->put_RunLevel(TASK_RUNLEVEL_HIGHEST));
-        else
-            ok = false;
-        release(principal);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(
+        executable.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr,
+        working.empty() ? nullptr : working.c_str(), &startup, &process);
+    if (!created) {
+        if (const char* debug = std::getenv("OPAL_DEBUG"); debug && *debug && std::string(debug) != "0")
+            std::cerr << "OPAL host daemon CreateProcessW failed error=" << GetLastError() << '\n';
+        return false;
     }
 
-    ITriggerCollection* triggers = nullptr;
-    ITrigger* trigger = nullptr;
-    if (ok && SUCCEEDED(definition->get_Triggers(&triggers)) && triggers &&
-        SUCCEEDED(triggers->Create(TASK_TRIGGER_LOGON, &trigger)) && trigger) {
-        (void)trigger->put_Enabled(VARIANT_TRUE);
-    } else ok = false;
-    release(trigger);
-    release(triggers);
-
-    IActionCollection* actions = nullptr;
-    IAction* action = nullptr;
-    IExecAction* exec = nullptr;
-    if (ok && SUCCEEDED(definition->get_Actions(&actions)) && actions &&
-        SUCCEEDED(actions->Create(TASK_ACTION_EXEC, &action)) && action &&
-        SUCCEEDED(action->QueryInterface(IID_IExecAction, reinterpret_cast<void**>(&exec))) && exec) {
-        BSTR path = SysAllocString(executable.c_str());
-        BSTR arguments = SysAllocString(L"--internal-host-daemon");
-        BSTR directory = working.empty() ? nullptr : SysAllocString(working.c_str());
-        ok = path && arguments && SUCCEEDED(exec->put_Path(path)) && SUCCEEDED(exec->put_Arguments(arguments));
-        if (ok && directory) ok = SUCCEEDED(exec->put_WorkingDirectory(directory));
-        SysFreeString(directory);
-        SysFreeString(arguments);
-        SysFreeString(path);
-    } else ok = false;
-    release(exec);
-    release(action);
-    release(actions);
-
-    ITaskSettings* settings = nullptr;
-    if (ok && SUCCEEDED(definition->get_Settings(&settings)) && settings) {
-        (void)settings->put_StartWhenAvailable(VARIANT_TRUE);
-        (void)settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE);
-        (void)settings->put_StopIfGoingOnBatteries(VARIANT_FALSE);
-        (void)settings->put_MultipleInstances(TASK_INSTANCES_IGNORE_NEW);
-        BSTR unlimited = SysAllocString(L"PT0S");
-        if (unlimited) {
-            (void)settings->put_ExecutionTimeLimit(unlimited);
-            SysFreeString(unlimited);
-        }
-    } else ok = false;
-    release(settings);
-
-    IRegisteredTask* registered = nullptr;
-    if (ok) {
-        VARIANT empty;
-        VariantInit(&empty);
-        BSTR name = SysAllocString(kHostTaskName);
-        if (!name) ok = false;
-        else {
-            const HRESULT hr = connection.root->RegisterTaskDefinition(
-                name, definition, TASK_CREATE_OR_UPDATE, empty, empty,
-                TASK_LOGON_INTERACTIVE_TOKEN, empty, &registered);
-            if (FAILED(hr)) {
-                if (const char* debug = std::getenv("OPAL_DEBUG"); debug && *debug && std::string(debug) != "0")
-                    std::cerr << "OPAL Task Scheduler registration failed HRESULT="
-                              << static_cast<unsigned long>(hr) << '\n';
-            }
-            ok = SUCCEEDED(hr) && registered;
-            SysFreeString(name);
+    CloseHandle(process.hThread);
+    const DWORD wait = WaitForSingleObject(process.hProcess, 300);
+    bool running = wait == WAIT_TIMEOUT;
+    if (!running && wait == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(process.hProcess, &exit_code)) {
+            if (const char* debug = std::getenv("OPAL_DEBUG"); debug && *debug && std::string(debug) != "0")
+                std::cerr << "OPAL host daemon exited during startup code=" << exit_code << '\n';
         }
     }
-    release(registered);
-    release(definition);
-    return ok;
-}
-
-bool delete_host_task()
-{
-    ComScope com;
-    if (!com.usable()) return false;
-    TaskConnection connection;
-    if (!connect_task_scheduler(connection)) return false;
-    BSTR name = SysAllocString(kHostTaskName);
-    if (!name) return false;
-    const HRESULT hr = connection.root->DeleteTask(name, 0);
-    SysFreeString(name);
-    return SUCCEEDED(hr) || hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-}
-
-bool run_host_task(bool restart)
-{
-    ComScope com;
-    if (!com.usable()) return false;
-    TaskConnection connection;
-    if (!connect_task_scheduler(connection)) return false;
-    BSTR name = SysAllocString(kHostTaskName);
-    if (!name) return false;
-    IRegisteredTask* task = nullptr;
-    HRESULT hr = connection.root->GetTask(name, &task);
-    SysFreeString(name);
-    if (FAILED(hr) || !task) return false;
-    if (restart) (void)task->Stop(0);
-    VARIANT empty;
-    VariantInit(&empty);
-    IRunningTask* running = nullptr;
-    hr = task->Run(empty, &running);
-    release(running);
-    release(task);
-    return SUCCEEDED(hr);
+    CloseHandle(process.hProcess);
+    return running;
 }
 
 void write_default_config(const Paths& paths)
@@ -405,7 +413,8 @@ int doctor()
     else if (tailscale_cli_available()) show_doctor_failure("Tailscale WAN underlay installed but disconnected", PlatformComponent::Datagram, PlatformFailure::Unavailable);
     else show_doctor_failure("Tailscale WAN underlay", PlatformComponent::Datagram, PlatformFailure::DependencyMissing);
 
-    show_doctor_item("Interactive host logon task installed", task_exists());
+    show_doctor_item("Host auto-start registered", host_autostart_registered());
+    show_doctor_item("Host daemon running", host_daemon_running());
     show_doctor_item("OPAL state initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=win32-unicode\n";
     std::cout << "[info] host capture=dxgi-desktop-duplication encoder=media-foundation-hardware-lowlatency input=sendinput clipboard=win32-unicode audio=wasapi-loopback+aac\n";
@@ -414,17 +423,26 @@ int doctor()
 
 int host_service(bool enable)
 {
-    if (!enable) return delete_host_task() ? 0 : 1;
+    if (!enable) {
+        const bool autostart_removed = remove_host_autostart();
+        const bool daemon_stopped = stop_host_daemon();
+        if (!autostart_removed)
+            std::cerr << "Could not remove OPAL Windows auto-start entry.\n";
+        if (!daemon_stopped)
+            std::cerr << "Could not stop OPAL host daemon.\n";
+        return autostart_removed && daemon_stopped ? 0 : 1;
+    }
+
     if (current_executable_path().empty()) {
         std::cerr << "Could not resolve OPAL executable path.\n";
         return 1;
     }
-    if (!register_host_task()) {
-        std::cerr << "Could not register OPAL interactive logon task.\n";
+    if (!register_host_autostart()) {
+        std::cerr << "Could not register OPAL Windows auto-start entry.\n";
         return 1;
     }
-    if (!run_host_task(false)) {
-        std::cerr << "OPAL host task was registered but could not be started.\n";
+    if (!launch_host_daemon()) {
+        std::cerr << "Could not start OPAL host daemon.\n";
         return 1;
     }
     return 0;
@@ -432,15 +450,19 @@ int host_service(bool enable)
 
 int restart_services()
 {
-    if (!task_exists()) {
-        std::cerr << "OPAL host task is not installed. Run host setup first.\n";
+    if (!host_autostart_registered()) {
+        std::cerr << "OPAL host auto-start is not installed. Run host setup first.\n";
         return 1;
     }
-    if (!run_host_task(true)) {
-        std::cerr << "Could not restart OPAL host task.\n";
+    if (!stop_host_daemon()) {
+        std::cerr << "Could not stop OPAL host daemon.\n";
         return 1;
     }
-    std::cout << "OPAL host task restarted.\n";
+    if (!launch_host_daemon()) {
+        std::cerr << "Could not restart OPAL host daemon.\n";
+        return 1;
+    }
+    std::cout << "OPAL host daemon restarted.\n";
     return 0;
 }
 
