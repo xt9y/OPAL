@@ -13,6 +13,7 @@
 #include <mfidl.h>
 #include <mftransform.h>
 #include <codecapi.h>
+#include <icodecapi.h>
 #include <oleauto.h>
 
 #include <opal/video_encoder_backend.hpp>
