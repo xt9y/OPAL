@@ -1,7 +1,11 @@
 #include <opal/relay_protocol.hpp>
 #include <opal/crypto.hpp>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <arpa/inet.h>
+#endif
 #include <cstring>
 
 namespace opal { namespace {
