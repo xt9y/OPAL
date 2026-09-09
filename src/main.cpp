@@ -20,6 +20,7 @@ Commands:
   opal select                               Select a saved host
   opal new                                  Run OPAL setup / add another host
   opal remove                               Remove a saved host
+  opal stop                                 Stop OPAL host services
   opal restart                              Restart OPAL services
   opal clean                                Remove OPAL state
   opal doctor                               Check local OPAL requirements
@@ -90,6 +91,11 @@ int main(int argc, char** argv)
     if (action == "--mode" || action == "--fps") return run_stream_flags(argc, argv);
     if (action == "help" || action == "--help" || action == "-h") { help(); return 0; }
     if (action == "version" || action == "--version") { std::cout << "OPAL 0.2.0\n"; return 0; }
+    if (action == "stop" && argc == 2) {
+        const int result = opal::host_service(false);
+        if (result == 0) std::cout << "OPAL host stopped.\n";
+        return result;
+    }
     if (action == "restart" && argc == 2) return opal::restart_services();
     if (action == "clean" && argc == 2) return opal::clean();
     if (action == "select" && argc == 2) return opal::interactive_select();
