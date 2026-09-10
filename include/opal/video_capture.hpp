@@ -29,10 +29,6 @@ public:
     std::string last_error() const;
     CaptureTimestampQuality capture_timestamp_quality() const;
     bool capture_timestamp_estimated() const;
-    int display_width() const;
-    int display_height() const;
-    bool virtual_display() const;
-    std::string display_backend_name() const;
     void stop();
 private:struct Impl;std::unique_ptr<Impl> impl_;
 };
