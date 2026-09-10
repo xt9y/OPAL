@@ -81,6 +81,7 @@ struct HeadlessSession::Impl {
         };
         saved_environment.clear();
         for (const char* name : names) saved_environment.push_back(save_env(name));
+        environment_installed = true;
 
         if (::setenv("XDG_RUNTIME_DIR", runtime_dir.c_str(), 1) != 0 ||
             ::setenv("WAYLAND_DISPLAY", display_name.c_str(), 1) != 0 ||
@@ -90,6 +91,7 @@ struct HeadlessSession::Impl {
             ::setenv("KDE_FULL_SESSION", "true", 1) != 0 ||
             ::setenv("QT_QPA_PLATFORM", "wayland", 1) != 0) {
             error = "could not install managed Plasma environment";
+            restore_environment();
             return false;
         }
         const auto bus = std::filesystem::path(runtime_dir) / "bus";
@@ -97,10 +99,10 @@ struct HeadlessSession::Impl {
             const std::string address = "unix:path=" + bus.string();
             if (::setenv("DBUS_SESSION_BUS_ADDRESS", address.c_str(), 1) != 0) {
                 error = "could not select the user D-Bus session";
+                restore_environment();
                 return false;
             }
         }
-        environment_installed = true;
         return true;
     }
 
@@ -121,7 +123,7 @@ bool HeadlessSession::start(const DisplayMode& requested)
     stop();
     impl_ = std::make_unique<Impl>();
 
-    for (const char* required : {"kwin_wayland", "plasmashell"}) {
+    for (const char* required : {"kwin_wayland", "plasmashell", "Xwayland"}) {
         if (!executable_on_path(required)) {
             impl_->error = std::string("managed headless Plasma requires ") + required;
             return false;
