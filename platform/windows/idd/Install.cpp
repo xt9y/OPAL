@@ -15,6 +15,7 @@
 
 namespace {
 constexpr wchar_t kHardwareId[] = L"Root\\OPALDISPLAY";
+constexpr wchar_t kInfEnvironment[] = L"OPAL_IDD_INF";
 
 bool hardware_ids_contain(const std::vector<wchar_t>& values, const wchar_t* wanted)
 {
@@ -107,6 +108,7 @@ bool remove_root_devices()
 
 std::wstring absolute_path(const wchar_t* value)
 {
+    if (!value || !*value) return {};
     DWORD needed = GetFullPathNameW(value, 0, nullptr, nullptr);
     if (!needed) return {};
     std::wstring result(needed, L'\0');
@@ -114,6 +116,17 @@ std::wstring absolute_path(const wchar_t* value)
     if (!written || written >= needed) return {};
     result.resize(written);
     return result;
+}
+
+std::wstring environment_value(const wchar_t* name)
+{
+    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
+    if (!needed) return {};
+    std::wstring value(needed, L'\0');
+    const DWORD written = GetEnvironmentVariableW(name, value.data(), needed);
+    if (!written || written >= needed) return {};
+    value.resize(written);
+    return value;
 }
 
 int install_driver(const wchar_t* inf)
@@ -159,7 +172,16 @@ int uninstall_driver()
 int wmain(int argc, wchar_t** argv)
 {
     if (argc >= 2 && _wcsicmp(argv[1], L"uninstall") == 0) return uninstall_driver();
-    if (argc == 3 && _wcsicmp(argv[1], L"install") == 0) return install_driver(argv[2]);
-    std::wcerr << L"usage: opal-display-install install <OpalDisplay.inf> | uninstall\n";
+    if (argc >= 2 && _wcsicmp(argv[1], L"install") == 0) {
+        std::wstring inf;
+        if (argc >= 3) inf = argv[2];
+        else inf = environment_value(kInfEnvironment);
+        if (inf.empty()) {
+            std::wcerr << L"No OPAL display-driver INF path was provided.\n";
+            return 2;
+        }
+        return install_driver(inf.c_str());
+    }
+    std::wcerr << L"usage: opal-display-install install [OpalDisplay.inf] | uninstall\n";
     return 2;
 }
