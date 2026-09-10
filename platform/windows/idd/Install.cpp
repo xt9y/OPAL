@@ -216,6 +216,22 @@ bool complete_driver_package(const std::wstring& inf)
            file_exists(join_path(directory, L"OPALDisplay.dll"));
 }
 
+std::wstring default_package_inf()
+{
+    std::vector<wchar_t> buffer(32768, L'\0');
+    const DWORD written = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (!written || written >= buffer.size()) return {};
+
+    const std::wstring build_directory = parent_path(std::wstring(buffer.data(), written));
+    for (const wchar_t* platform : {L"x64", L"ARM64"}) {
+        const auto inf = join_path(
+            join_path(join_path(join_path(build_directory, L"idd"), platform), L"OpalDisplay"),
+            L"OpalDisplay.inf");
+        if (complete_driver_package(inf)) return inf;
+    }
+    return {};
+}
+
 std::wstring resolve_package_inf(const wchar_t* value)
 {
     const auto input = absolute_path(value);
@@ -397,9 +413,10 @@ int wmain(int argc, wchar_t** argv)
         std::wstring inf;
         if (argc >= 3) inf = argv[2];
         else inf = environment_value(kInfEnvironment);
+        if (inf.empty()) inf = default_package_inf();
         if (inf.empty()) {
             reset_install_log();
-            return report_failure("No OPAL display-driver INF path was provided.", 2);
+            return report_failure("No OPAL display-driver INF path was provided and no local WDK package was found.", 2);
         }
         return install_driver(inf.c_str());
     }
