@@ -25,6 +25,7 @@ struct KwinVirtualDisplay::Impl {
     zkde_screencast_unstable_v1* screencast = nullptr;
     zkde_screencast_stream_unstable_v1* stream = nullptr;
     std::vector<wl_output*> outputs;
+    std::uint32_t screencast_version = 0;
     std::uint32_t node = 0;
     bool complete = false;
     bool failed = false;
@@ -36,9 +37,10 @@ struct KwinVirtualDisplay::Impl {
         auto& self = *static_cast<Impl*>(data);
         if (std::strcmp(interface, zkde_screencast_unstable_v1_interface.name) == 0) {
             if (!self.screencast) {
-                const std::uint32_t bind_version = std::min<std::uint32_t>(version, 5);
+                self.screencast_version = std::min<std::uint32_t>(version, 5);
                 self.screencast = static_cast<zkde_screencast_unstable_v1*>(
-                    wl_registry_bind(registry, name, &zkde_screencast_unstable_v1_interface, bind_version));
+                    wl_registry_bind(registry, name, &zkde_screencast_unstable_v1_interface,
+                                     self.screencast_version));
             }
             return;
         }
@@ -150,6 +152,7 @@ struct KwinVirtualDisplay::Impl {
             zkde_screencast_unstable_v1_destroy(screencast);
             screencast = nullptr;
         }
+        screencast_version = 0;
         if (registry) {
             wl_registry_destroy(registry);
             registry = nullptr;
@@ -217,15 +220,22 @@ bool KwinVirtualDisplay::create_virtual_output(const std::string& name, int widt
         if (impl_) impl_->error = "KWin screencast protocol is unavailable";
         return false;
     }
+    if (impl_->screencast_version < 2) {
+        impl_->error = "KWin screencast protocol does not support virtual outputs";
+        return false;
+    }
+
     impl_->release_stream();
-    impl_->stream = zkde_screencast_unstable_v1_stream_virtual_output_with_description(
-        impl_->screencast,
-        name.c_str(),
-        "OPAL headless remote desktop",
-        width,
-        height,
-        wl_fixed_from_double(scale > 0.0f ? scale : 1.0f),
-        ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_EMBEDDED);
+    const auto pointer = ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_EMBEDDED;
+    const auto fixed_scale = wl_fixed_from_double(scale > 0.0f ? scale : 1.0f);
+    if (impl_->screencast_version >= 4) {
+        impl_->stream = zkde_screencast_unstable_v1_stream_virtual_output_with_description(
+            impl_->screencast, name.c_str(), "OPAL headless remote desktop",
+            width, height, fixed_scale, pointer);
+    } else {
+        impl_->stream = zkde_screencast_unstable_v1_stream_virtual_output(
+            impl_->screencast, name.c_str(), width, height, fixed_scale, pointer);
+    }
     if (!impl_->stream || !impl_->wait_created(3000)) return false;
     pipewire_node = impl_->node;
     return true;
