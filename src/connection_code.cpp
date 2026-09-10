@@ -3,6 +3,7 @@
 #include <openssl/evp.h>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <string>
 
 namespace opal { namespace {
