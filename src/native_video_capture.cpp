@@ -6,6 +6,9 @@
 #include <opal/host_display.hpp>
 #include <opal/native_video_pipeline.hpp>
 #include <opal/video_encoder_backend.hpp>
+#if defined(_WIN32)
+#include <opal/windows_idd_capture.hpp>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +32,17 @@ bool same_config(const MediaConfig& a, const MediaConfig& b)
 {
     return a.kind == b.kind && a.extradata == b.extradata &&
            a.sample_rate == b.sample_rate && a.channels == b.channels;
+}
+
+std::unique_ptr<CaptureBackend> make_target_capture_backend(const DisplayTarget& target)
+{
+#if defined(_WIN32)
+    if (target.capture_kind == DisplayCaptureKind::WindowsIddSwapchain)
+        return make_windows_idd_capture_backend();
+#else
+    (void)target;
+#endif
+    return make_capture_backend();
 }
 
 }
@@ -162,8 +176,10 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
         return false;
     }
 
-    impl_->video = std::make_unique<NativeVideoPipeline>(make_capture_backend(), make_video_encoder_backend());
-    if (!impl_->video->start(stream, bitrate_kbps, &impl_->display->target())) {
+    const auto& target = impl_->display->target();
+    impl_->video = std::make_unique<NativeVideoPipeline>(
+        make_target_capture_backend(target), make_video_encoder_backend());
+    if (!impl_->video->start(stream, bitrate_kbps, &target)) {
         impl_->capture_error();
         if (impl_->error.empty()) impl_->error = "native video capture failed to start";
         impl_->video.reset();
@@ -189,7 +205,6 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
 
     impl_->running = true;
     if (debug_enabled()) {
-        const auto& target = impl_->display->target();
         std::cerr << "OPAL display=" << display_kind_name(target.kind)
                   << " name=" << target.name
                   << " mode=" << target.mode.width << 'x' << target.mode.height << '@' << target.mode.refresh_hz
