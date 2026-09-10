@@ -57,7 +57,9 @@ bool wait_tailnet_client(UdpSocket&listener,const std::string&host_public_key,
     const auto deadline=Clock::now()+std::chrono::milliseconds(std::max(1,timeout_ms));std::array<std::uint8_t,kDiscoveryMessageBytes>buffer{};
     while(remaining_ms(deadline)>0){
         UdpEndpoint source{};const int n=recv_datagram(listener,buffer,source,remaining_ms(deadline));
-        if(n==-2)continue;if(n<0){error="Tailscale discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
+        if(n==-2)continue;
+        if(n<0){error="Tailscale discovery receive failed";return false;}
+        if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string request_id,client_public_key,client_nonce;std::uint16_t client_peer_port=0;
         if(!parse_discover(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),request_id,client_public_key,client_nonce,client_peer_port)||request_id!=id)continue;
         UdpCandidate client;if(!candidate_from_udp(source,client)||client.port!=client_peer_port)continue;
@@ -82,10 +84,13 @@ bool discover_tailnet_host(const std::string&connection_id,const std::string&cli
     while(remaining_ms(deadline)>0){
         const auto now=Clock::now();if(next_send.time_since_epoch().count()==0||now>=next_send){(void)send_datagram(peer_socket,target,std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(request.data()),request.size()));next_send=now+std::chrono::milliseconds(75);}
         UdpEndpoint source{};const int n=recv_datagram(peer_socket,buffer,source,std::min(75,remaining_ms(deadline)));
-        if(n==-2)continue;if(n<0){close_udp_socket(peer_socket);error="Tailscale discovery receive failed";return false;}if(n<=0||n>static_cast<int>(buffer.size()))continue;
+        if(n==-2)continue;
+        if(n<0){close_udp_socket(peer_socket);error="Tailscale discovery receive failed";return false;}
+        if(n<=0||n>static_cast<int>(buffer.size()))continue;
         std::string id,session_id,host_public_key,host_nonce,signature;std::uint16_t host_peer_port=0;
         if(!parse_offer(std::string_view(reinterpret_cast<const char*>(buffer.data()),static_cast<std::size_t>(n)),id,session_id,host_public_key,host_nonce,host_peer_port,signature))continue;
-        if(id!=connection_id)continue;if(connection_id_from_public_key(host_public_key)!=connection_id){rejection_error="Tailscale host identity mismatch";continue;}
+        if(id!=connection_id)continue;
+        if(connection_id_from_public_key(host_public_key)!=connection_id){rejection_error="Tailscale host identity mismatch";continue;}
         const auto transcript=offer_transcript(id,session_id,client_public_key,client_nonce,host_public_key,host_nonce,host_peer_port);if(!verify_hex(host_public_key,transcript,signature)){rejection_error="Tailscale offer signature invalid";continue;}
         UdpCandidate host;if(!candidate_from_udp(source,host)){rejection_error="Tailscale offer source invalid";continue;}host.port=host_peer_port;
         result.socket=peer_socket;peer_socket={};result.host=host;result.connection_id=id;result.session_id=session_id;result.host_public_key=host_public_key;result.client_nonce=client_nonce;result.host_nonce=host_nonce;return true;
