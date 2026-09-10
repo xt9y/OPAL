@@ -125,6 +125,18 @@ struct VideoCapture::Impl {
         }
     }
 
+    bool start_video(const StreamOptions& stream, int bitrate_kbps)
+    {
+        if (!display) return false;
+        const auto& target = display->target();
+        video = std::make_unique<NativeVideoPipeline>(
+            make_target_capture_backend(target), make_video_encoder_backend());
+        if (video->start(stream, bitrate_kbps, &target)) return true;
+        capture_error();
+        video.reset();
+        return false;
+    }
+
     void mark_terminal(std::string message = {})
     {
         if (!message.empty()) error = std::move(message);
@@ -178,8 +190,13 @@ struct VideoCapture::Impl {
         }
 
         if (video && video->ended()) {
-            if (display && !display->target().virtual_display() && !display->healthy())
+            if (display && !display->target().virtual_display()) {
+#if defined(_WIN32)
                 request_virtual_display_fallback();
+#else
+                if (!display->healthy()) request_virtual_display_fallback();
+#endif
+            }
             mark_terminal();
         }
         return false;
@@ -212,16 +229,34 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
         return false;
     }
 
-    const auto& target = impl_->display->target();
-    impl_->video = std::make_unique<NativeVideoPipeline>(
-        make_target_capture_backend(target), make_video_encoder_backend());
-    if (!impl_->video->start(stream, bitrate_kbps, &target)) {
-        impl_->capture_error();
-        if (impl_->error.empty()) impl_->error = "native video capture failed to start";
-        impl_->video.reset();
-        impl_->display->stop();
-        impl_->display.reset();
-        return false;
+    if (!impl_->start_video(stream, bitrate_kbps)) {
+#if defined(_WIN32)
+        const bool failed_physical = impl_->display && !impl_->display->target().virtual_display();
+        if (failed_physical) {
+            impl_->display->stop();
+            impl_->display.reset();
+            impl_->error.clear();
+            request_virtual_display_fallback();
+            impl_->display = std::make_unique<HostDisplayManager>();
+            if (impl_->display->prepare(stream) && impl_->start_video(stream, bitrate_kbps)) {
+                impl_->error.clear();
+            } else {
+                impl_->capture_error();
+                if (impl_->error.empty()) impl_->error = "virtual display capture failed to start";
+                impl_->video.reset();
+                if (impl_->display) impl_->display->stop();
+                impl_->display.reset();
+                return false;
+            }
+        } else
+#endif
+        {
+            if (impl_->error.empty()) impl_->error = "native video capture failed to start";
+            impl_->video.reset();
+            impl_->display->stop();
+            impl_->display.reset();
+            return false;
+        }
     }
 
     if (audio) {
@@ -242,6 +277,7 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     impl_->last_video_frame = std::chrono::steady_clock::now();
     impl_->running = true;
     if (debug_enabled()) {
+        const auto& target = impl_->display->target();
         std::cerr << "OPAL display=" << display_kind_name(target.kind)
                   << " name=" << target.name
                   << " mode=" << target.mode.width << 'x' << target.mode.height << '@' << target.mode.refresh_hz
