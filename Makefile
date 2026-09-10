@@ -46,6 +46,7 @@ SWRLIBS := $(shell $(PKG_CONFIG) --libs libswresample 2>/dev/null)
 CPPFLAGS += -Iinclude $(FFMPEG_CFLAGS) $(SDL3_CFLAGS)
 
 PROFILE_SRCS := src/media_profile.cpp
+LOW_LATENCY_THREAD_SRCS := src/low_latency_thread.cpp
 VIDEO_CRYPTO_SRCS := src/video_crypto.cpp
 VIDEO_PACKET_SRCS := src/video_packet.cpp
 VIDEO_REASSEMBLY_SRCS := src/video_reassembly.cpp
@@ -101,6 +102,7 @@ LINUX_CAPTURE_SRCS := src/video_capture.cpp src/pipewire_capture.cpp src/flv_str
 LINUX_APP_SRCS := \
 	src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp \
 	src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp \
+	$(LOW_LATENCY_THREAD_SRCS) \
 	$(PROFILE_SRCS) \
 	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
@@ -255,6 +257,7 @@ MACOS_APP_SRCS := \
 	src/main.cpp src/setup.cpp src/platform/macos/host.cpp src/client.cpp src/session.cpp \
 	src/platform/macos/system_backend.mm \
 	src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp \
+	$(LOW_LATENCY_THREAD_SRCS) \
 	$(PROFILE_SRCS) \
 	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
@@ -348,6 +351,7 @@ WINDOWS_APP_SRCS := \
 	src/main.cpp src/setup.cpp src/platform/windows/host.cpp src/client.cpp src/session.cpp \
 	src/platform/windows/system_backend.cpp \
 	src/config.cpp src/crypto.cpp src/platform/windows/media.cpp src/platform/windows/wake.cpp \
+	$(LOW_LATENCY_THREAD_SRCS) \
 	$(PROFILE_SRCS) \
 	src/platform/windows/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/platform/windows/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \

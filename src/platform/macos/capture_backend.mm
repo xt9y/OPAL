@@ -182,7 +182,9 @@ public:
 
         output_ = [[OpalScreenStreamOutput alloc] init];
         output_.owner = this;
-        queue_ = dispatch_queue_create("de.xt9y.opal.capture.video", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_attr_t queue_attributes = dispatch_queue_attr_make_with_qos_class(
+            DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
+        queue_ = dispatch_queue_create("de.xt9y.opal.capture.video", queue_attributes);
         stream_ = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:output_];
         [filter release];
         [configuration release];

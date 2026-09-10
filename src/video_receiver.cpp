@@ -2,6 +2,7 @@
 
 #include <opal/audio_output.hpp>
 #include <opal/latency_window.hpp>
+#include <opal/low_latency_thread.hpp>
 #include <opal/udp_transport.hpp>
 #include <opal/video_backlog.hpp>
 #include <opal/video_decoder.hpp>
@@ -167,6 +168,7 @@ struct VideoReceiver::Impl{
     }
 
     void media_loop(){
+        prioritize_low_latency_thread();
         while(run.load()){
             if(stall_reset_requested.exchange(false)){decoder.flush();clear_latest_frame();latest_video_ts.store(0);}
             if(audio_reset_requested.exchange(false)){audio_output.reset_to(latest_video_ts.load());audio_queued_debug.store(audio_output.queued_ms());}
@@ -249,7 +251,7 @@ struct VideoReceiver::Impl{
         return true;
     }
 
-    void direct_loop(){std::array<std::array<std::uint8_t,kVideoMaxDatagramBytes+1>,kUdpReceiveBatchMax>wire{};std::array<UdpReceiveSlot,kUdpReceiveBatchMax>slots{};for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=wire[i];while(run.load()){const int batch=recv_datagrams_batch(owned_path->socket.fd,slots,20);if(batch>0)for(int index=0;index<batch&&run.load();++index){auto&slot=slots[static_cast<std::size_t>(index)];kernel_drops.store(std::max<std::uint64_t>(kernel_drops.load(),slot.kernel_drops));if(slot.size)accept_wire(std::span<const std::uint8_t>(slot.buffer.data(),slot.size));}control_tick();if(!recover_stall())break;}media_cv.notify_all();}
+    void direct_loop(){prioritize_low_latency_thread();std::array<std::array<std::uint8_t,kVideoMaxDatagramBytes+1>,kUdpReceiveBatchMax>wire{};std::array<UdpReceiveSlot,kUdpReceiveBatchMax>slots{};for(std::size_t i=0;i<slots.size();++i)slots[i].buffer=wire[i];while(run.load()){const int batch=recv_datagrams_batch(owned_path->socket.fd,slots,20);if(batch>0)for(int index=0;index<batch&&run.load();++index){auto&slot=slots[static_cast<std::size_t>(index)];kernel_drops.store(std::max<std::uint64_t>(kernel_drops.load(),slot.kernel_drops));if(slot.size)accept_wire(std::span<const std::uint8_t>(slot.buffer.data(),slot.size));}control_tick();if(!recover_stall())break;}media_cv.notify_all();}
     void native_control_loop(){while(run.load()){control_tick();if(!recover_stall())break;std::this_thread::sleep_for(std::chrono::milliseconds(20));}media_cv.notify_all();}
 };
 

@@ -4,6 +4,7 @@
 #include <opal/connection_code.hpp>
 #include <opal/crypto.hpp>
 #include <opal/input.hpp>
+#include <opal/low_latency_thread.hpp>
 #include <opal/session.hpp>
 #include <opal/tailnet.hpp>
 #include <opal/video_present.hpp>
@@ -79,6 +80,7 @@ private:
     ClipboardSender sender_;ClipboardReceiver receiver_;std::mutex mu_;std::optional<std::string>pending_remote_;Clock::time_point next_poll_{};unsigned long generation_=0;bool primed_=false;
 };
 void run_sdl_control(SessionSupervisor&session,VideoPresenter&presenter,ClientClipboardBridge&clipboard){
+    prioritize_low_latency_thread();
     HeldInputState held;unsigned long generation=session.control_generation();bool run=true,captured=true;auto size=presenter.window_size();float mouse_x=0.f,mouse_y=0.f;(void)SDL_GetMouseState(&mouse_x,&mouse_y);int virtual_x=std::clamp(static_cast<int>(std::lround(mouse_x)),0,std::max(0,size.first-1)),virtual_y=std::clamp(static_cast<int>(std::lround(mouse_y)),0,std::max(0,size.second-1));captured=presenter.set_mouse_capture(true);send_pointer(session,virtual_x,virtual_y,size.first,size.second);
     while(run&&session.running()){
         bool did_work=false,pointer_dirty=false;
