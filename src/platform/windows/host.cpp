@@ -1,4 +1,5 @@
 #include <opal/config.hpp>
+#include <opal/windows_idd.hpp>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -36,6 +37,15 @@ bool windows_debug_enabled()
 {
     const char* value = std::getenv("OPAL_DEBUG");
     return value && *value && std::string(value) != "0";
+}
+
+bool windows_headless_provider_ready()
+{
+    const auto idd = windows_idd_status();
+    if (idd.device_present && idd.adapter_ready) return true;
+    std::cerr << "OPAL Windows hosting requires the OPAL IddCx virtual display driver so the host remains usable with its physical monitor off.\n"
+              << "Install Visual Studio MSBuild + Windows Driver Kit, run 'make windows-headless && make install', then restart Windows if requested.\n";
+    return false;
 }
 
 class WindowsHostPowerGuard {
@@ -148,6 +158,7 @@ namespace opal {
 int host_setup()
 {
     ensure_windows_input_helper_environment();
+    if (!windows_headless_provider_ready()) return 1;
     return windows_host_setup_impl();
 }
 
@@ -167,6 +178,13 @@ int host_daemon()
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         CloseHandle(single_instance);
         return 0;
+    }
+
+    HANDLE stop_event = CreateEventW(nullptr, TRUE, FALSE, kHostStopEventName);
+    if (!stop_event) {
+        ReleaseMutex(single_instance);
+        CloseHandle(single_instance);
+        return 1;
     }
 
     HANDLE stop_event = CreateEventW(nullptr, TRUE, FALSE, kHostStopEventName);
