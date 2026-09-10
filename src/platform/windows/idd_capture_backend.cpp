@@ -71,6 +71,19 @@ public:
         error_ = {};
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
 
+        // Prefer Desktop Duplication for an active IddCx monitor. When Windows
+        // exposes the virtual output through DXGI this keeps the frame on the
+        // GPU all the way into the encoder. The legacy driver IOCTL path stays
+        // available for systems where virtual-output duplication is rejected.
+        auto direct = make_capture_backend();
+        if (direct && direct->start(stream, target)) {
+            timestamp_quality_ = direct->timestamp_quality();
+            direct_ = std::move(direct);
+            running_ = true;
+            return true;
+        }
+        if (direct) direct->stop();
+
         driver_ = CreateFileW(idd::kDevicePath, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -129,6 +142,18 @@ public:
     bool next(NativeVideoFrame& frame, int timeout_ms) override
     {
         frame = {};
+        if (direct_) {
+            const bool ok = direct_->next(frame, timeout_ms);
+            timestamp_quality_ = direct_->timestamp_quality();
+            if (!ok) {
+                const auto direct_error = direct_->last_platform_error();
+                if (direct_error) {
+                    error_ = direct_error;
+                    running_ = false;
+                }
+            }
+            return ok;
+        }
         if (!running_ || !driver_) return false;
         const auto deadline = std::chrono::steady_clock::now() +
                               std::chrono::milliseconds(std::max(0, timeout_ms));
@@ -202,6 +227,10 @@ public:
     void stop() override
     {
         running_ = false;
+        if (direct_) {
+            direct_->stop();
+            direct_.reset();
+        }
         reply_.clear();
         release_com(texture_);
         release_com(context_);
@@ -222,6 +251,7 @@ public:
 
     std::string backend_name() const override
     {
+        if (direct_) return "iddcx-dxgi-direct+" + direct_->backend_name();
         return "iddcx-device-frame+d3d11-upload";
     }
 
@@ -258,6 +288,7 @@ private:
     }
 
     bool running_ = false;
+    std::unique_ptr<CaptureBackend> direct_;
     HANDLE driver_ = nullptr;
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
