@@ -24,11 +24,11 @@ int automatic_stream_fps(int display_refresh_hz,int capture_max_fps){
 
 int automatic_bitrate_kbps(int width,int height,int fps){
     fps=std::clamp(fps,15,240);
-    if(width<=0||height<=0)return 60000;
+    if(width<=0||height<=0)return 40000;
     constexpr long long reference=1920LL*1080LL*60LL;
     long long pixel_rate=static_cast<long long>(width)*height*fps;
-    long long bitrate=18000LL+(12000LL*pixel_rate)/reference;
-    return static_cast<int>(std::clamp<long long>(bitrate,20000,100000));
+    long long bitrate=12000LL+(8000LL*pixel_rate)/reference;
+    return static_cast<int>(std::clamp<long long>(bitrate,12000,70000));
 }
 
 std::uint64_t capture_stale_budget_us(int fps){
