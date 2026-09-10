@@ -232,6 +232,8 @@ APPLE_FRAMEWORKS := \
 	-framework ScreenCaptureKit \
 	-framework CoreMedia \
 	-framework CoreVideo \
+	-framework Metal \
+	-framework QuartzCore \
 	-framework VideoToolbox \
 	-framework AudioToolbox
 
@@ -256,7 +258,7 @@ MACOS_APP_SRCS := \
 	$(PROFILE_SRCS) \
 	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
-	$(VIDEO_SENDER_SRCS) $(MACOS_VIDEO_SRCS) src/video_present.cpp \
+	$(VIDEO_SENDER_SRCS) $(MACOS_VIDEO_SRCS) src/platform/macos/video_present.mm \
 	$(CONTROL_COMMON_SRCS) src/udp_socket_ops.cpp \
 	$(INPUT_SRCS) src/clipboard.cpp src/platform/macos/clipboard_shim.mm src/tailnet.cpp
 
