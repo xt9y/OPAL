@@ -186,13 +186,6 @@ int host_daemon()
         CloseHandle(single_instance);
         return 1;
     }
-
-    HANDLE stop_event = CreateEventW(nullptr, TRUE, FALSE, kHostStopEventName);
-    if (!stop_event) {
-        ReleaseMutex(single_instance);
-        CloseHandle(single_instance);
-        return 1;
-    }
     (void)ResetEvent(stop_event);
 
     const DWORD pid = GetCurrentProcessId();
