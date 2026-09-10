@@ -2,6 +2,7 @@
 #include <opal/clipboard.hpp>
 #include <opal/config.hpp>
 #include <opal/crypto.hpp>
+#include <opal/host_display.hpp>
 #include <opal/input.hpp>
 #include <opal/local_discovery.hpp>
 #include <opal/media.hpp>
@@ -55,7 +56,7 @@ std::string remap_pointer_line(const std::string&line){if(line.rfind("POINTER ",
 bool input_send(const std::string&s){const auto mapped=remap_pointer_line(s);std::lock_guard<std::mutex>l(input_mu);if(input_write_locked(mapped))return true;return input_write_locked(mapped);}
 void track_input(const std::string&line,HeldInputState&held){std::istringstream ss(line);std::string t;ss>>t;if(t=="KEY"){int c=0,d=0;if(ss>>c>>d){if(d)held.press_key(c);else held.release_key(c);}}else if(t=="BUTTON"){int b=0,d=0;if(ss>>b>>d){if(d)held.press_button(b);else held.release_button(b);}}}
 bool parse_media_ready(const std::string&line,std::uint32_t&generation,StreamOptions&stream,bool&debug){std::istringstream in(line);std::string word,extra;unsigned long long gen=0;int width=0,height=0,fps=0,dbg=0;if(!(in>>word>>gen>>width>>height>>fps>>dbg)||in>>extra||word!="MEDIA_RECEIVER_READY"||gen==0||gen>0xffffffffULL)return false;const bool native=width==0&&height==0;const bool bounded=width>=16&&height>=16&&width<=16384&&height<=16384;if((!native&&!bounded)||fps<15||fps>240||(dbg!=0&&dbg!=1))return false;generation=static_cast<std::uint32_t>(gen);stream={width,height,fps};debug=dbg==1;return true;}
-std::string host_meta(){std::string mac=host_cfg.get("host","mac");if(mac.empty())mac="-";auto tailnet=local_tailnet_ipv4();if(tailnet.empty())tailnet="-";return "HOST_META "+std::to_string(host_desktop_width)+" "+std::to_string(host_desktop_height)+" "+mac+" "+tailnet;}
+std::string host_meta(){int width=host_desktop_width,height=host_desktop_height;const auto display=active_host_display();if(display.valid&&display.mode.width>0&&display.mode.height>0){width=display.mode.width;height=display.mode.height;}std::string mac=host_cfg.get("host","mac");if(mac.empty())mac="-";auto tailnet=local_tailnet_ipv4();if(tailnet.empty())tailnet="-";return "HOST_META "+std::to_string(width)+" "+std::to_string(height)+" "+mac+" "+tailnet;}
 
 class HostClipboardBridge {
 public:
@@ -155,9 +156,9 @@ bool run_peer_session(UdpSocket socket,const RendezvousIntroduction&intro,const 
     std::string error;if(!peer.start(std::move(options),error)){std::cerr<<"OPAL peer session failed: "<<(error.empty()?"unknown error":error)<<"\n";for(const auto&r:held.release_commands())input_send(r);return false;}
     if(clipboard)clipboard->attach(&peer);
     if(!was_authorized){authorize(client_public_key,"client");rotate_pairing_password();append_test_log("OPAL_TEST_AUTH_LOG","PAIR");}else append_test_log("OPAL_TEST_AUTH_LOG","AUTH");
-    peer.send_input(host_meta());if(debug_enabled())std::cerr<<"OPAL host peer path="<<peer.path_name()<<" session="<<intro.session_id.substr(0,8)<<"...\n";
+    std::string last_meta=host_meta();peer.send_input(last_meta);auto next_meta=Clock::now()+std::chrono::milliseconds(250);if(debug_enabled())std::cerr<<"OPAL host peer path="<<peer.path_name()<<" session="<<intro.session_id.substr(0,8)<<"...\n";
     int test_close_ms=0;if(const char*v=std::getenv("OPAL_TEST_CLOSE_FIRST_PEER_MS");v&&*v)try{test_close_ms=std::clamp(std::stoi(v),100,10000);}catch(...){test_close_ms=0;}const bool test_close_this_session=test_close_ms>0&&!test_close_used.exchange(true);const auto test_close_at=Clock::now()+std::chrono::milliseconds(test_close_ms);
-    while(peer.running()){if(test_close_this_session&&Clock::now()>=test_close_at){peer.stop();break;}if(clipboard&&!local_path)clipboard->pump();std::this_thread::sleep_for(std::chrono::milliseconds(local_path?100:20));}if(clipboard)clipboard->detach(&peer);if(sender_start_thread.joinable())sender_start_thread.join();sender.stop();for(const auto&r:held.release_commands())input_send(r);peer.stop();return true;
+    while(peer.running()){const auto now=Clock::now();if(test_close_this_session&&now>=test_close_at){peer.stop();break;}if(now>=next_meta){const auto meta=host_meta();if(meta!=last_meta){if(!peer.send_input(meta))break;last_meta=meta;}next_meta=now+std::chrono::milliseconds(250);}if(clipboard&&!local_path)clipboard->pump();std::this_thread::sleep_for(std::chrono::milliseconds(local_path?100:20));}if(clipboard)clipboard->detach(&peer);if(sender_start_thread.joinable())sender_start_thread.join();sender.stop();for(const auto&r:held.release_commands())input_send(r);peer.stop();return true;
 }
 
 bool run_native_session(RendezvousClient&rendezvous,const RendezvousMessage&offer,const std::string&host_public_key,HostClipboardBridge*clipboard){RendezvousIntroduction intro;std::string error;if(!rendezvous.accept_offer(offer,host_public_key,G.identity_key,intro,error)){std::cerr<<"OPAL rendezvous accept failed: "<<error<<"\n";return false;}RelayAllocation allocation;std::string relay_error;std::optional<PeerRelayFallback> relay;if(rendezvous.request_relay(intro.session_id,host_public_key,G.identity_key,allocation,relay_error))relay=PeerRelayFallback{allocation.endpoint,allocation.allocation_id,RelayRole::Host};auto socket=rendezvous.take_socket();if(socket.fd<0){std::cerr<<"OPAL rendezvous socket unavailable after introduction\n";return false;}return run_peer_session(socket,intro,offer.public_key,host_public_key,false,relay,clipboard);}
