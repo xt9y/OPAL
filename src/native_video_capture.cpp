@@ -22,6 +22,8 @@
 namespace opal {
 namespace {
 
+constexpr auto kPhysicalDisplayHealthDelay = std::chrono::milliseconds(750);
+
 bool debug_enabled()
 {
     const char* value = std::getenv("OPAL_DEBUG");
@@ -59,6 +61,7 @@ struct VideoCapture::Impl {
     bool running = false;
     bool terminal = false;
     bool audio_requested = false;
+    std::chrono::steady_clock::time_point last_video_frame{};
     std::string error;
 
     void recycle_storage()
@@ -130,6 +133,18 @@ struct VideoCapture::Impl {
         running = false;
     }
 
+    bool physical_display_unhealthy_after_capture_gap()
+    {
+        if (!display || display->target().virtual_display()) return false;
+        const auto now = std::chrono::steady_clock::now();
+        if (last_video_frame.time_since_epoch().count() == 0) {
+            last_video_frame = now;
+            return false;
+        }
+        if (now - last_video_frame < kPhysicalDisplayHealthDelay) return false;
+        return !display->healthy();
+    }
+
     bool poll(EncodedMediaView& view, int video_wait_ms)
     {
         recycle_storage();
@@ -144,13 +159,29 @@ struct VideoCapture::Impl {
         }
 
         recycle_storage();
-        if (video && video->next(storage, video_wait_ms)) return make_view(view);
-        if (display && !display->healthy()) {
-            request_virtual_display_fallback();
-            mark_terminal("host display became unavailable");
+        if (video && video->next(storage, video_wait_ms)) {
+            last_video_frame = std::chrono::steady_clock::now();
+            return make_view(view);
+        }
+
+        if (display && display->target().virtual_display() && !display->healthy()) {
+            mark_terminal("virtual host display became unavailable");
             return false;
         }
-        if (video && video->ended()) mark_terminal();
+
+        if (physical_display_unhealthy_after_capture_gap()) {
+            if (debug_enabled())
+                std::cerr << "OPAL physical display unavailable after capture starvation; preferring virtual display on restart\n";
+            request_virtual_display_fallback();
+            mark_terminal("physical host display became unavailable");
+            return false;
+        }
+
+        if (video && video->ended()) {
+            if (display && !display->target().virtual_display() && !display->healthy())
+                request_virtual_display_fallback();
+            mark_terminal();
+        }
         return false;
     }
 };
@@ -171,6 +202,7 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     impl_->config_revision = 0;
     impl_->video_config_revision = 0;
     impl_->audio_config_revision = 0;
+    impl_->last_video_frame = {};
 
     impl_->display = std::make_unique<HostDisplayManager>();
     if (!impl_->display->prepare(stream)) {
@@ -207,6 +239,7 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
         }
     }
 
+    impl_->last_video_frame = std::chrono::steady_clock::now();
     impl_->running = true;
     if (debug_enabled()) {
         std::cerr << "OPAL display=" << display_kind_name(target.kind)
@@ -326,6 +359,7 @@ void VideoCapture::stop()
     impl_->config_revision = 0;
     impl_->video_config_revision = 0;
     impl_->audio_config_revision = 0;
+    impl_->last_video_frame = {};
     impl_->terminal = false;
 }
 
