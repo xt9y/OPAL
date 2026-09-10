@@ -511,7 +511,7 @@ void write_default_config(const Paths& paths)
     config.set("video", "fullscreen", "true");
     config.set("audio", "enabled", "true");
     config.set("network", "mode", "opal-native");
-    config.set("network", "transport", "rendezvous+direct-udp+relay");
+    config.set("network", "transport", "tailscale");
     (void)config.save(paths.config);
 }
 
@@ -530,15 +530,7 @@ void show_doctor_failure(const std::string& name, PlatformComponent component, P
 
 int ensure_tailnet()
 {
-    if (!tailscale_cli_available()) {
-        std::cerr << "Tailscale is not installed; continuing with LAN/rendezvous/relay connectivity.\n";
-        return 1;
-    }
-    if (!tailscale_connected()) {
-        std::cerr << "Tailscale is installed but not connected. Connect Tailscale, then retry.\n";
-        return 1;
-    }
-    return 0;
+    return require_tailscale();
 }
 
 int init()
