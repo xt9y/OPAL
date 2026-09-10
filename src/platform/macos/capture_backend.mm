@@ -172,7 +172,10 @@ public:
         configuration.width = std::max(16, width);
         configuration.height = std::max(16, height);
         configuration.minimumFrameInterval = CMTimeMake(1, requested_fps);
-        configuration.queueDepth = 3;
+        // Remote desktop cares about the newest frame, never capture backlog.
+        // A deeper ScreenCaptureKit queue can turn a transient encoder stall
+        // into whole frames of glass-to-glass latency.
+        configuration.queueDepth = 1;
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         configuration.showsCursor = YES;
         configuration.scalesToFit = YES;
