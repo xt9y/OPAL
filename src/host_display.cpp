@@ -83,19 +83,12 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
         return true;
     }
 
-    const PlatformError virtual_error = backend_->last_platform_error();
-    if (prefer_virtual) {
-        target = {};
-        if (backend_->probe(target)) {
-            adopt_display(std::move(target), backend_, target_, active_);
-            return true;
-        }
-    }
-
-    error_ = virtual_error ? virtual_error : backend_->last_platform_error();
+    error_ = backend_->last_platform_error();
     if (!error_) {
         error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                  "could not create a usable host display", false};
+                  prefer_virtual ? "could not create the requested virtual host display"
+                                 : "could not create a usable host display",
+                  false};
     }
     return false;
 }
