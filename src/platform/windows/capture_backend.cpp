@@ -614,7 +614,10 @@ private:
     CursorUpdate update_cursor(OutputCapture& output, std::size_t output_index,
                                const DXGI_OUTDUPL_FRAME_INFO& info)
     {
-        return cursor_.update(output.duplication, output_index, output.desc, info, error_);
+        (void)output;
+        (void)output_index;
+        (void)info;
+        return CursorUpdate::None;
     }
 
     AcquireResult acquire_latest(OutputCapture& output, std::size_t output_index, int timeout_ms)

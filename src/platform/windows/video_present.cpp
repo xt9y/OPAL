@@ -509,12 +509,13 @@ std::pair<int, int> VideoPresenter::window_size() const
     return {width, height};
 }
 
-bool VideoPresenter::set_relative_mouse_mode(bool enabled)
+bool VideoPresenter::set_mouse_capture(bool enabled)
 {
     if (!impl_ || !impl_->window) return false;
-    if (!SDL_SetWindowRelativeMouseMode(impl_->window, enabled)) return false;
+    if (!SDL_SetWindowRelativeMouseMode(impl_->window, false)) return false;
     if (!SDL_SetWindowMouseGrab(impl_->window, enabled)) return false;
-    return enabled ? SDL_HideCursor() : SDL_ShowCursor();
+    if (!SDL_ShowCursor()) return false;
+    return true;
 }
 
 std::size_t VideoPresenter::pending_frame_count() const { return 0; }

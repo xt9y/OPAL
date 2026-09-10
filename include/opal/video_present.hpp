@@ -20,7 +20,7 @@ public:
     bool present(DecodedVideoFrame frame);
     std::pair<int,int> drawable_size() const;
     std::pair<int,int> window_size() const;
-    bool set_relative_mouse_mode(bool enabled);
+    bool set_mouse_capture(bool enabled);
     std::size_t pending_frame_count() const;
     std::uint64_t presented_frames() const;
     std::string backend_name() const;

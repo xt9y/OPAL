@@ -177,7 +177,7 @@ public:
         // into whole frames of glass-to-glass latency.
         configuration.queueDepth = 1;
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-        configuration.showsCursor = YES;
+        configuration.showsCursor = NO;
         configuration.scalesToFit = YES;
 
         output_ = [[OpalScreenStreamOutput alloc] init];
