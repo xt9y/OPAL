@@ -65,7 +65,7 @@ public:
         return start(stream, nullptr);
     }
 
-    bool start(const StreamOptions&, const DisplayTarget*) override
+    bool start(const StreamOptions& stream, const DisplayTarget* target) override
     {
         stop();
         error_ = {};
@@ -106,7 +106,22 @@ public:
             return false;
         }
 
-        reply_.resize(idd::kFrameReplyBytes);
+        std::uint32_t expected_width = 0;
+        std::uint32_t expected_height = 0;
+        if (target && target->mode.width > 0 && target->mode.height > 0) {
+            expected_width = static_cast<std::uint32_t>(std::min(target->mode.width, static_cast<int>(idd::kMaxWidth)));
+            expected_height = static_cast<std::uint32_t>(std::min(target->mode.height, static_cast<int>(idd::kMaxHeight)));
+        } else if (stream.max_width > 0 && stream.max_height > 0) {
+            expected_width = static_cast<std::uint32_t>(std::min(stream.max_width, static_cast<int>(idd::kMaxWidth)));
+            expected_height = static_cast<std::uint32_t>(std::min(stream.max_height, static_cast<int>(idd::kMaxHeight)));
+        }
+        if (!expected_width || !expected_height) {
+            expected_width = idd::kMaxWidth;
+            expected_height = idd::kMaxHeight;
+        }
+        const std::size_t frame_bytes = static_cast<std::size_t>(expected_width) *
+                                        static_cast<std::size_t>(expected_height) * idd::kBytesPerPixel;
+        reply_.resize(sizeof(idd::SharedFrameHeader) + frame_bytes);
         running_ = true;
         return true;
     }
@@ -168,6 +183,11 @@ public:
             }
 
             const DWORD win_error = GetLastError();
+            if (win_error == ERROR_INSUFFICIENT_BUFFER) {
+                set_error("OPAL indirect display mode exceeded its negotiated capture buffer");
+                running_ = false;
+                return false;
+            }
             if (win_error != ERROR_NO_MORE_ITEMS && win_error != ERROR_RETRY && win_error != ERROR_NOT_READY) {
                 set_error("OPAL indirect display frame IOCTL failed (Win32 " +
                           std::to_string(win_error) + ")");
