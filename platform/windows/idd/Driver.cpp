@@ -77,17 +77,18 @@ bool FrameStore::publish(ID3D11Texture2D* surface, ID3D11Device* device, ID3D11D
     if (FAILED(context->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &mapped)) || !mapped.pData) return false;
 
     const std::uint32_t stride = desc.Width * kBytesPerPixel;
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(stride) * desc.Height);
+    const std::size_t frame_bytes = static_cast<std::size_t>(stride) * desc.Height;
+    scratch_.resize(frame_bytes);
     const auto* source = static_cast<const std::uint8_t*>(mapped.pData);
     for (std::uint32_t y = 0; y < desc.Height; ++y)
-        std::memcpy(pixels.data() + static_cast<std::size_t>(y) * stride,
+        std::memcpy(scratch_.data() + static_cast<std::size_t>(y) * stride,
                     source + static_cast<std::size_t>(y) * mapped.RowPitch, stride);
     context->Unmap(staging_.Get(), 0);
 
     LARGE_INTEGER qpc{};
     QueryPerformanceCounter(&qpc);
     std::lock_guard<std::mutex> lock(mu_);
-    pixels_ = std::move(pixels);
+    pixels_.swap(scratch_);
     header_.magic = kFrameMagic;
     header_.version = kProtocolVersion;
     ++header_.sequence;
