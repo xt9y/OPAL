@@ -17,8 +17,8 @@ std::uint32_t loss_per_mille(const VideoFeedbackSample&s){const std::uint64_t to
 
 BitrateController::BitrateController(int ceiling_kbps){
     ceiling_=std::max(1000,ceiling_kbps);
-    floor_=std::min(ceiling_,std::max(4000,ceiling_*35/100));
-    target_=std::clamp(ceiling_*60/100,floor_,ceiling_);
+    floor_=std::min(ceiling_,std::max(5000,ceiling_*30/100));
+    target_=std::clamp(ceiling_*70/100,floor_,ceiling_);
 }
 
 int BitrateController::on_feedback(const VideoFeedbackSample &sample,std::chrono::steady_clock::time_point now){
@@ -29,14 +29,14 @@ int BitrateController::on_feedback(const VideoFeedbackSample &sample,std::chrono
     }
     const auto loss=loss_per_mille(sample);
     const std::uint32_t queue_delay=(sample.rtt_us&&baseline_rtt_us_&&sample.rtt_us>baseline_rtt_us_)?sample.rtt_us-baseline_rtt_us_:0;
-    const bool severe=loss>=20||queue_delay>=15000||sample.decode_age_us>=80000;
-    const bool pressured=loss>=5||queue_delay>=8000||sample.decode_age_us>=45000;
-    if(severe){target_=std::max(floor_,target_*80/100);last_adjust_=now;return target_;}
-    if(pressured){target_=std::max(floor_,target_*90/100);last_adjust_=now;return target_;}
-    const bool clean=loss<=1&&queue_delay<=3000&&(sample.decode_age_us==0||sample.decode_age_us<=25000);
-    if(clean&&(last_adjust_.time_since_epoch().count()==0||now-last_adjust_>=std::chrono::milliseconds(300))){
-        const int startup_ceiling=ceiling_*85/100;
-        const int step=target_<startup_ceiling?std::max(500,target_/10):std::max(250,target_/20);
+    const bool severe=loss>=10||queue_delay>=6000||sample.decode_age_us>=35000;
+    const bool pressured=loss>=2||queue_delay>=2500||sample.decode_age_us>=22000;
+    if(severe){target_=std::max(floor_,target_*75/100);last_adjust_=now;return target_;}
+    if(pressured){target_=std::max(floor_,target_*85/100);last_adjust_=now;return target_;}
+    const bool clean=loss==0&&queue_delay<=1000&&(sample.decode_age_us==0||sample.decode_age_us<=18000);
+    if(clean&&(last_adjust_.time_since_epoch().count()==0||now-last_adjust_>=std::chrono::milliseconds(750))){
+        const int startup_ceiling=ceiling_*80/100;
+        const int step=target_<startup_ceiling?std::max(400,target_/12):std::max(200,target_/25);
         target_=std::min(ceiling_,target_+step);last_adjust_=now;
     }
     return target_;
