@@ -417,21 +417,22 @@ install: all
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(WINDOWS_BINDIR)/opal.exe"; \
 	$(INSTALL) -m 0755 "$(INPUT)" "$(WINDOWS_BINDIR)/opal-input.exe"; \
 	if [ -n "$(strip $(WINDOWS_MSBUILD))" ]; then \
-		$(MAKE) --no-print-directory windows-headless; \
-		inf="$$(find "$(BUILD)/idd" -type f -iname 'OpalDisplay.inf' -print -quit)"; \
-		[ -n "$$inf" ] || { echo 'Could not locate built OPAL display-driver INF.' >&2; exit 1; }; \
-		installer_win="$$(cygpath -w "$(WINDOWS_IDD_INSTALLER)")"; \
-		inf_win="$$(cygpath -w "$$inf")"; \
-		if OPAL_IDD_INSTALLER="$$installer_win" OPAL_IDD_INF="$$inf_win" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$p=Start-Process -FilePath $$env:OPAL_IDD_INSTALLER -ArgumentList @("install") -Verb RunAs -Wait -PassThru; exit $$p.ExitCode'; then \
-			:; \
+		if $(MAKE) --no-print-directory windows-headless; then \
+			inf="$$(find "$(BUILD)/idd" -type f -iname 'OpalDisplay.inf' -print -quit)"; \
+			installer_win="$$(cygpath -w "$(WINDOWS_IDD_INSTALLER)")"; \
+			inf_win="$$(cygpath -w "$$inf")"; \
+			if [ -n "$$inf" ] && OPAL_IDD_INSTALLER="$$installer_win" OPAL_IDD_INF="$$inf_win" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$p=Start-Process -FilePath $$env:OPAL_IDD_INSTALLER -ArgumentList @("install") -Verb RunAs -Wait -PassThru; exit $$p.ExitCode'; then \
+				$(INSTALL) -m 0755 "$(WINDOWS_IDD_INSTALLER)" "$(WINDOWS_BINDIR)/opal-display-install.exe"; \
+			else \
+				rc=$$?; \
+				if [ "$$rc" -eq 10 ]; then echo 'OPAL virtual display driver installed; Windows restart required.'; \
+				else echo 'OPAL virtual display driver could not be installed; continuing with physical-display hosting.' >&2; fi; \
+			fi; \
 		else \
-			rc=$$?; \
-			if [ "$$rc" -eq 10 ]; then echo 'OPAL virtual display driver installed; Windows restart required.'; \
-			else echo "OPAL virtual display driver installation failed (exit $$rc). Check driver signing policy and WDK package output." >&2; exit "$$rc"; fi; \
+			echo 'OPAL virtual display driver could not be built; continuing with physical-display hosting.' >&2; \
 		fi; \
-		$(INSTALL) -m 0755 "$(WINDOWS_IDD_INSTALLER)" "$(WINDOWS_BINDIR)/opal-display-install.exe"; \
 	else \
-		echo 'OPAL headless Windows support not installed: Visual Studio MSBuild + WDK were not found. Monitor-attached OPAL remains available.'; \
+		echo 'OPAL virtual display driver build unavailable; continuing with physical-display hosting.' >&2; \
 	fi; \
 	win_bin="$$(cygpath -w "$(WINDOWS_BINDIR)")"; \
 	OPAL_INSTALL_BIN="$$win_bin" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$bin = $$env:OPAL_INSTALL_BIN; $$path = [Environment]::GetEnvironmentVariable("Path", "User"); $$parts = @($$path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) -and $$_ -ne $$bin -and $$_ -notmatch "(?i)\\opal\\build$$" }); $$newPath = (@($$bin) + $$parts) -join ";"; [Environment]::SetEnvironmentVariable("Path", $$newPath, "User"); Write-Host "Installed OPAL to $$bin"'; \
