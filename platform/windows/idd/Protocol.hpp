@@ -19,14 +19,13 @@ inline constexpr std::size_t kMaxFrameBytes =
     static_cast<std::size_t>(kMaxWidth) * static_cast<std::size_t>(kMaxHeight) * kBytesPerPixel;
 
 inline constexpr wchar_t kDevicePath[] = L"\\\\.\\OpalDisplay";
-inline constexpr wchar_t kFrameMappingName[] = L"Global\\xt9y.OPAL.DisplayFrame";
-inline constexpr wchar_t kFrameEventName[] = L"Global\\xt9y.OPAL.DisplayFrameReady";
 
 #ifdef _WIN32
 inline constexpr DWORD kIoctlGetStatus = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS);
 inline constexpr DWORD kIoctlCreateMonitor = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS);
 inline constexpr DWORD kIoctlSetMode = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS);
 inline constexpr DWORD kIoctlDestroyMonitor = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS);
+inline constexpr DWORD kIoctlGetFrame = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_OUT_DIRECT, FILE_READ_ACCESS);
 #endif
 
 struct DisplayModeRequest {
@@ -46,6 +45,12 @@ struct DriverStatus {
     std::uint32_t reserved = 0;
 };
 
+struct FrameRequest {
+    std::uint32_t version = kProtocolVersion;
+    std::uint32_t reserved = 0;
+    std::int64_t last_sequence = 0;
+};
+
 struct alignas(64) SharedFrameHeader {
     std::uint32_t magic = kFrameMagic;
     std::uint32_t version = kProtocolVersion;
@@ -59,6 +64,6 @@ struct alignas(64) SharedFrameHeader {
     std::uint32_t reserved = 0;
 };
 
-inline constexpr std::size_t kFrameMappingBytes = sizeof(SharedFrameHeader) + kMaxFrameBytes;
+inline constexpr std::size_t kFrameReplyBytes = sizeof(SharedFrameHeader) + kMaxFrameBytes;
 
 }
