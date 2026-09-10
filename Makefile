@@ -85,12 +85,17 @@ CXXFLAGS += -pthread
 NATIVE_CAPTURE_PKGS := libportal libpipewire-0.3 libswscale wayland-client
 NATIVE_CAPTURE_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
 NATIVE_CAPTURE_LIBS := $(shell $(PKG_CONFIG) --libs $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
+WAYLAND_CLIENT_LIBS := $(shell $(PKG_CONFIG) --libs wayland-client 2>/dev/null)
 CPPFLAGS += $(NATIVE_CAPTURE_CFLAGS) -I$(BUILD) -DOPAL_HAVE_NATIVE_PIPEWIRE=1
 
 LINUX_PROTOCOL_XML := platform/linux/protocols/zkde-screencast-unstable-v1.xml
 LINUX_PROTOCOL_HEADER := $(BUILD)/zkde-screencast-client-protocol.h
 LINUX_PROTOCOL_CODE := $(BUILD)/zkde-screencast-protocol.c
 LINUX_PROTOCOL_OBJ := $(BUILD)/zkde-screencast-protocol.o
+LINUX_FAKE_INPUT_XML := platform/linux/protocols/fake-input.xml
+LINUX_FAKE_INPUT_HEADER := $(BUILD)/fake-input-client-protocol.h
+LINUX_FAKE_INPUT_CODE := $(BUILD)/fake-input-protocol.c
+LINUX_FAKE_INPUT_OBJ := $(BUILD)/fake-input-protocol.o
 
 LINUX_HEADLESS_SRCS := \
 	src/host_display.cpp \
@@ -123,6 +128,15 @@ $(LINUX_PROTOCOL_CODE): $(LINUX_PROTOCOL_XML) | $(BUILD)
 $(LINUX_PROTOCOL_OBJ): $(LINUX_PROTOCOL_CODE) $(LINUX_PROTOCOL_HEADER)
 	$(CC) $(NATIVE_CAPTURE_CFLAGS) -I$(BUILD) -c $(LINUX_PROTOCOL_CODE) -o $@
 
+$(LINUX_FAKE_INPUT_HEADER): $(LINUX_FAKE_INPUT_XML) | $(BUILD)
+	wayland-scanner client-header $< $@
+
+$(LINUX_FAKE_INPUT_CODE): $(LINUX_FAKE_INPUT_XML) | $(BUILD)
+	wayland-scanner private-code $< $@
+
+$(LINUX_FAKE_INPUT_OBJ): $(LINUX_FAKE_INPUT_CODE) $(LINUX_FAKE_INPUT_HEADER)
+	$(CC) $(NATIVE_CAPTURE_CFLAGS) -I$(BUILD) -c $(LINUX_FAKE_INPUT_CODE) -o $@
+
 deps-check:
 	@set -e; \
 	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config.' >&2; exit 1; }; \
@@ -140,8 +154,8 @@ deps-check:
 $(PRODUCT): $(LINUX_APP_SRCS) $(LINUX_PROTOCOL_OBJ) include/opal/*.hpp | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LINUX_APP_SRCS) $(LINUX_PROTOCOL_OBJ) $(LDFLAGS) $(LINUX_LIBS) -o $@
 
-$(INPUT): src/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
+$(INPUT): src/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp $(LINUX_FAKE_INPUT_OBJ) | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp $(LINUX_FAKE_INPUT_OBJ) $(WAYLAND_CLIENT_LIBS) -o $@
 
 all: $(PRODUCT) $(INPUT)
 
@@ -154,6 +168,7 @@ install: all
 	$(INSTALL) -m 0644 system/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
 	$(INSTALL) -m 0644 system/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"; \
 	$(INSTALL) -m 0644 system/de.xt9y.opal.desktop "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.desktop"; \
+	$(INSTALL) -m 0644 system/de.xt9y.opal.input.desktop "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.input.desktop"; \
 	if [ -z "$(DESTDIR)" ]; then \
 		$(MAKE) --no-print-directory firewall-install; \
 		if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
@@ -175,7 +190,7 @@ uninstall:
 	if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory firewall-remove; fi; \
 	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
-	rm -f "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.desktop"; \
+	rm -f "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.desktop" "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.input.desktop"; \
 	rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null || true
 
 firewall-install:
