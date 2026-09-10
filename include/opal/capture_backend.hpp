@@ -14,7 +14,12 @@ namespace opal {
 class CaptureBackend {
 public:
     virtual ~CaptureBackend() = default;
-    virtual bool start(const StreamOptions& stream, const DisplayTarget* target = nullptr) = 0;
+    virtual bool start(const StreamOptions& stream) = 0;
+    virtual bool start(const StreamOptions& stream, const DisplayTarget* target)
+    {
+        (void)target;
+        return start(stream);
+    }
     virtual bool next(NativeVideoFrame& frame, int timeout_ms) = 0;
     virtual void stop() = 0;
     virtual CaptureTimestampQuality timestamp_quality() const = 0;
