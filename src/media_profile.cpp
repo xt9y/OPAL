@@ -46,18 +46,16 @@ int low_latency_h264_slices(int width,int height){
 }
 
 std::uint64_t sender_burst_budget_bytes(int bitrate_kbps,int fps,bool keyframe){
-    if(keyframe)return 8ULL*1200ULL;
     bitrate_kbps=std::clamp(bitrate_kbps,1000,100000);
     fps=std::clamp(fps,15,240);
     const std::uint64_t average=(static_cast<std::uint64_t>(bitrate_kbps)*1000ULL)/(8ULL*static_cast<std::uint64_t>(fps));
-    const std::uint64_t scaled=average/4ULL;
-    return std::clamp<std::uint64_t>(scaled,12ULL*1024ULL,64ULL*1024ULL);
+    if(keyframe)return std::clamp<std::uint64_t>(average*4ULL,128ULL*1024ULL,512ULL*1024ULL);
+    return std::clamp<std::uint64_t>(average,32ULL*1024ULL,128ULL*1024ULL);
 }
 
 int sender_pacing_rate_kbps(int bitrate_kbps,bool keyframe){
     const long long bitrate=std::clamp<long long>(bitrate_kbps,1000,100000);
-    if(keyframe)return static_cast<int>(bitrate*4);
-    return static_cast<int>((bitrate*6+4)/5);
+    return static_cast<int>(bitrate*(keyframe?8:6));
 }
 
 int encoder_reconfigure_bitrate_kbps(int active_kbps,int target_kbps,std::uint64_t since_restart_ms){
