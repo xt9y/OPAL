@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <newdev.h>
 #include <setupapi.h>
+#include <initguid.h>
 #include <devguid.h>
 
 #include <algorithm>
