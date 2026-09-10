@@ -1,6 +1,7 @@
 #include <opal/host_display.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <utility>
 
@@ -8,6 +9,7 @@ namespace opal {
 namespace {
 std::mutex active_display_mu;
 ActiveHostDisplay active_display_state;
+std::atomic<bool> force_virtual_once{false};
 
 void publish_display(const DisplayTarget& target, const std::string& backend)
 {
@@ -23,6 +25,14 @@ void clear_display()
 {
     std::lock_guard<std::mutex> lock(active_display_mu);
     active_display_state = {};
+}
+
+void adopt_display(DisplayTarget&& target, std::unique_ptr<DisplayBackend>& backend,
+                   DisplayTarget& active_target, bool& active)
+{
+    active_target = std::move(target);
+    active = true;
+    publish_display(active_target, backend->backend_name());
 }
 }
 
@@ -61,27 +71,33 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
     }
 
     DisplayTarget target;
-    if (backend_->probe(target)) {
-        target_ = std::move(target);
-        active_ = true;
-        publish_display(target_, backend_->backend_name());
+    const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
+    if (!prefer_virtual && backend_->probe(target)) {
+        adopt_display(std::move(target), backend_, target_, active_);
         return true;
     }
 
     const auto mode = display_mode_for_stream(stream);
-    if (!backend_->ensure(mode, target)) {
-        error_ = backend_->last_platform_error();
-        if (!error_) {
-            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                      "could not create a usable host display", false};
-        }
-        return false;
+    if (backend_->ensure(mode, target)) {
+        adopt_display(std::move(target), backend_, target_, active_);
+        return true;
     }
 
-    target_ = std::move(target);
-    active_ = true;
-    publish_display(target_, backend_->backend_name());
-    return true;
+    const PlatformError virtual_error = backend_->last_platform_error();
+    if (prefer_virtual) {
+        target = {};
+        if (backend_->probe(target)) {
+            adopt_display(std::move(target), backend_, target_, active_);
+            return true;
+        }
+    }
+
+    error_ = virtual_error ? virtual_error : backend_->last_platform_error();
+    if (!error_) {
+        error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                  "could not create a usable host display", false};
+    }
+    return false;
 }
 
 bool HostDisplayManager::healthy() const
@@ -114,6 +130,11 @@ ActiveHostDisplay active_host_display()
 {
     std::lock_guard<std::mutex> lock(active_display_mu);
     return active_display_state;
+}
+
+void request_virtual_display_fallback() noexcept
+{
+    force_virtual_once.store(true, std::memory_order_release);
 }
 
 }
