@@ -406,7 +406,7 @@ NTSTATUS OpalDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     status = WdfDeviceCreate(&init, &attributes, &device);
     if (!NT_SUCCESS(status)) return status;
 
-    DECLARE_CONST_UNICODE_STRING(symbolic_link, L"\\DosDevices\\OpalDisplay");
+    DECLARE_CONST_UNICODE_STRING(symbolic_link, L"\\DosDevices\\Global\\OpalDisplay");
     status = WdfDeviceCreateSymbolicLink(device, &symbolic_link);
     if (!NT_SUCCESS(status)) return status;
     status = IddCxDeviceInitialize(device);
