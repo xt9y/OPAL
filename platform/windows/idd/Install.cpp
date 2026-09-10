@@ -130,17 +130,163 @@ std::wstring environment_value(const wchar_t* name)
     return value;
 }
 
+std::wstring parent_path(const std::wstring& path)
+{
+    const auto pos = path.find_last_of(L"\\/");
+    return pos == std::wstring::npos ? std::wstring{} : path.substr(0, pos);
+}
+
+std::wstring join_path(const std::wstring& directory, const wchar_t* name)
+{
+    if (directory.empty()) return name ? std::wstring(name) : std::wstring{};
+    if (!name || !*name) return directory;
+    const wchar_t last = directory.back();
+    return directory + ((last == L'\\' || last == L'/') ? L"" : L"\\") + name;
+}
+
+bool file_exists(const std::wstring& path)
+{
+    if (path.empty()) return false;
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+bool complete_driver_package(const std::wstring& inf)
+{
+    const auto directory = parent_path(inf);
+    return file_exists(inf) &&
+           file_exists(join_path(directory, L"opaldisplay.cat")) &&
+           file_exists(join_path(directory, L"OPALDisplay.dll"));
+}
+
+std::wstring resolve_package_inf(const wchar_t* value)
+{
+    const auto input = absolute_path(value);
+    if (input.empty()) return {};
+    if (complete_driver_package(input)) return input;
+
+    const auto packaged = join_path(join_path(parent_path(input), L"OpalDisplay"), L"OpalDisplay.inf");
+    if (complete_driver_package(packaged)) return packaged;
+    return {};
+}
+
+std::wstring find_test_certificate(const std::wstring& package_inf)
+{
+    const auto package_directory = parent_path(package_inf);
+    const std::wstring candidates[] = {
+        join_path(package_directory, L"OPALDisplay.cer"),
+        join_path(parent_path(package_directory), L"OPALDisplay.cer")
+    };
+    for (const auto& candidate : candidates)
+        if (file_exists(candidate)) return candidate;
+    return {};
+}
+
+std::wstring quote_argument(const std::wstring& value)
+{
+    if (value.find_first_of(L" \t\"") == std::wstring::npos) return value;
+    std::wstring result = L"\"";
+    std::size_t slashes = 0;
+    for (const wchar_t c : value) {
+        if (c == L'\\') {
+            ++slashes;
+            continue;
+        }
+        if (c == L'\"') {
+            result.append(slashes * 2 + 1, L'\\');
+            result.push_back(c);
+            slashes = 0;
+            continue;
+        }
+        result.append(slashes, L'\\');
+        slashes = 0;
+        result.push_back(c);
+    }
+    result.append(slashes * 2, L'\\');
+    result.push_back(L'\"');
+    return result;
+}
+
+std::wstring system_executable(const wchar_t* name)
+{
+    wchar_t directory[MAX_PATH]{};
+    const UINT written = GetSystemDirectoryW(directory, MAX_PATH);
+    if (!written || written >= MAX_PATH) return {};
+    return join_path(directory, name);
+}
+
+bool run_process(const std::wstring& executable, const std::vector<std::wstring>& arguments)
+{
+    if (executable.empty()) return false;
+    std::wstring command = quote_argument(executable);
+    for (const auto& argument : arguments) {
+        command.push_back(L' ');
+        command += quote_argument(argument);
+    }
+    std::vector<wchar_t> command_line(command.begin(), command.end());
+    command_line.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process))
+        return false;
+
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    const bool read_exit = GetExitCodeProcess(process.hProcess, &exit_code) != FALSE;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return read_exit && exit_code == 0;
+}
+
+bool trust_test_certificate(const std::wstring& certificate)
+{
+    if (certificate.empty()) return true;
+    const auto certutil = system_executable(L"certutil.exe");
+    if (certutil.empty()) return false;
+    return run_process(certutil, {L"-addstore", L"-f", L"Root", certificate}) &&
+           run_process(certutil, {L"-addstore", L"-f", L"TrustedPublisher", certificate});
+}
+
+std::string win32_message(DWORD error)
+{
+    char* buffer = nullptr;
+    const DWORD size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                                          FORMAT_MESSAGE_IGNORE_INSERTS,
+                                      nullptr, error, 0, reinterpret_cast<char*>(&buffer), 0, nullptr);
+    std::string result;
+    if (size && buffer) {
+        result.assign(buffer, size);
+        while (!result.empty() && (result.back() == '\r' || result.back() == '\n' || result.back() == ' '))
+            result.pop_back();
+    }
+    if (buffer) LocalFree(buffer);
+    return result;
+}
+
 int install_driver(const wchar_t* inf)
 {
-    const auto path = absolute_path(inf);
+    const auto path = resolve_package_inf(inf);
     if (path.empty()) {
-        std::wcerr << L"Could not resolve driver INF path.\n";
+        std::wcerr << L"Could not locate a complete OPAL driver package (.inf + .cat + .dll).\n";
+        return 1;
+    }
+
+    const auto certificate = find_test_certificate(path);
+    if (!certificate.empty() && !trust_test_certificate(certificate)) {
+        std::wcerr << L"Could not trust the WDK test certificate: " << certificate << L"\n";
         return 1;
     }
 
     const bool created = root_device_exists() || create_root_device();
     if (!created) {
-        std::cerr << "Could not create ROOT\\OPALDISPLAY device. Win32=" << GetLastError() << "\n";
+        const DWORD error = GetLastError();
+        std::cerr << "Could not create ROOT\\OPALDISPLAY device. Win32=" << error;
+        const auto message = win32_message(error);
+        if (!message.empty()) std::cerr << " (" << message << ")";
+        std::cerr << "\n";
         return 1;
     }
 
@@ -149,7 +295,12 @@ int install_driver(const wchar_t* inf)
                                              INSTALLFLAG_FORCE, &reboot)) {
         const DWORD error = GetLastError();
         (void)remove_root_devices();
-        std::cerr << "Could not install OPAL display driver. Win32=" << error << "\n";
+        std::cerr << "Could not install OPAL display driver. Win32=" << error;
+        const auto message = win32_message(error);
+        if (!message.empty()) std::cerr << " (" << message << ")";
+        std::cerr << "\nSee C:\\Windows\\INF\\setupapi.dev.log for the exact PnP failure.\n";
+        std::cerr << "If Windows rejects the WDK test signature, enable test signing from an elevated "
+                     "terminal with: bcdedit /set testsigning on\n";
         return 1;
     }
 
@@ -162,7 +313,11 @@ int install_driver(const wchar_t* inf)
 int uninstall_driver()
 {
     if (!remove_root_devices()) {
-        std::cerr << "Could not remove OPAL virtual display device. Win32=" << GetLastError() << "\n";
+        const DWORD error = GetLastError();
+        std::cerr << "Could not remove OPAL virtual display device. Win32=" << error;
+        const auto message = win32_message(error);
+        if (!message.empty()) std::cerr << " (" << message << ")";
+        std::cerr << "\n";
         return 1;
     }
     std::cout << "OPAL virtual display device removed.\n";
