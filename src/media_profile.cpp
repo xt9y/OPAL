@@ -33,7 +33,10 @@ int automatic_bitrate_kbps(int width,int height,int fps){
 
 std::uint64_t capture_stale_budget_us(int fps){
     fps=std::clamp(fps,15,240);
-    return static_cast<std::uint64_t>(std::clamp(2000000/fps,8000,150000));
+    // Once a frame is more than ~1.25 frame periods old, sending it only
+    // turns a transient stall into visible catch-up latency. Drop and recover
+    // on a fresh frame instead.
+    return static_cast<std::uint64_t>(std::clamp(1250000/fps,6000,80000));
 }
 
 int normal_gop_frames(int fps){
