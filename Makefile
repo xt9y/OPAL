@@ -6,6 +6,7 @@ OPAL_OS ?= $(if $(filter Windows_NT,$(OS)),windows,$(if $(filter MINGW% MSYS% CY
 
 .DEFAULT_GOAL := all
 
+CC ?= cc
 CXX ?= c++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic
 PKG_CONFIG ?= pkg-config
@@ -15,6 +16,7 @@ BINDIR ?= $(PREFIX)/bin
 LIBEXECDIR ?= $(PREFIX)/libexec/opal
 SYSTEMDUSERDIR ?= $(PREFIX)/lib/systemd/user
 UDEVDIR ?= /usr/lib/udev/rules.d
+APPLICATIONSDIR ?= $(PREFIX)/share/applications
 PUBLIC_HOST ?= rendezvous.opal.xt9y.de
 RENDEZVOUS_PORT ?= 47992
 BUILD := build
@@ -80,12 +82,26 @@ $(BUILD):
 ifeq ($(OPAL_OS),linux)
 
 CXXFLAGS += -pthread
-NATIVE_CAPTURE_PKGS := libportal libpipewire-0.3 libswscale
+NATIVE_CAPTURE_PKGS := libportal libpipewire-0.3 libswscale wayland-client
 NATIVE_CAPTURE_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
 NATIVE_CAPTURE_LIBS := $(shell $(PKG_CONFIG) --libs $(NATIVE_CAPTURE_PKGS) 2>/dev/null)
-CPPFLAGS += $(NATIVE_CAPTURE_CFLAGS) -DOPAL_HAVE_NATIVE_PIPEWIRE=1
+CPPFLAGS += $(NATIVE_CAPTURE_CFLAGS) -I$(BUILD) -DOPAL_HAVE_NATIVE_PIPEWIRE=1
 
-LINUX_CAPTURE_SRCS := src/video_capture.cpp src/pipewire_capture.cpp src/flv_stream.cpp
+LINUX_PROTOCOL_XML := platform/linux/protocols/zkde-screencast-unstable-v1.xml
+LINUX_PROTOCOL_HEADER := $(BUILD)/zkde-screencast-client-protocol.h
+LINUX_PROTOCOL_CODE := $(BUILD)/zkde-screencast-protocol.c
+LINUX_PROTOCOL_OBJ := $(BUILD)/zkde-screencast-protocol.o
+
+LINUX_HEADLESS_SRCS := \
+	src/host_display.cpp \
+	src/platform/linux/display_backend.cpp \
+	src/platform/linux/headless_session.cpp \
+	src/platform/linux/kwin_virtual_display.cpp \
+	src/platform/linux/capture_backend.cpp \
+	src/platform/linux/video_encoder_backend.cpp \
+	src/native_video_pipeline.cpp
+
+LINUX_CAPTURE_SRCS := src/video_capture.cpp src/pipewire_capture.cpp src/flv_stream.cpp $(LINUX_HEADLESS_SRCS)
 LINUX_APP_SRCS := \
 	src/main.cpp src/setup.cpp src/host.cpp src/client.cpp src/session.cpp src/system.cpp \
 	src/config.cpp src/crypto.cpp src/media.cpp src/wake.cpp \
@@ -98,21 +114,31 @@ LINUX_APP_SRCS := \
 
 LINUX_LIBS := -lcrypto -lpthread $(AVLIBS) $(NATIVE_CAPTURE_LIBS) $(SWRLIBS) $(SDL3_LIBS)
 
+$(LINUX_PROTOCOL_HEADER): $(LINUX_PROTOCOL_XML) | $(BUILD)
+	wayland-scanner client-header $< $@
+
+$(LINUX_PROTOCOL_CODE): $(LINUX_PROTOCOL_XML) | $(BUILD)
+	wayland-scanner private-code $< $@
+
+$(LINUX_PROTOCOL_OBJ): $(LINUX_PROTOCOL_CODE) $(LINUX_PROTOCOL_HEADER)
+	$(CC) $(NATIVE_CAPTURE_CFLAGS) -I$(BUILD) -c $(LINUX_PROTOCOL_CODE) -o $@
+
 deps-check:
 	@set -e; \
 	command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo 'Missing pkg-config.' >&2; exit 1; }; \
+	command -v wayland-scanner >/dev/null 2>&1 || { echo 'Missing wayland-scanner (wayland package).' >&2; exit 1; }; \
 	missing=''; \
 	for pkg in openssl sdl3 libavformat libavcodec libavutil libswresample $(NATIVE_CAPTURE_PKGS); do \
 		if ! "$(PKG_CONFIG)" --exists "$$pkg"; then missing="$$missing $$pkg"; fi; \
 	done; \
 	if [ -n "$$missing" ]; then \
 		echo "Missing Linux build modules:$$missing" >&2; \
-		echo 'Install SDL3, OpenSSL, FFmpeg, PipeWire and libportal development packages.' >&2; \
+		echo 'Install SDL3, OpenSSL, FFmpeg, PipeWire, libportal and Wayland development packages.' >&2; \
 		exit 1; \
 	fi
 
-$(PRODUCT): $(LINUX_APP_SRCS) include/opal/*.hpp | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LINUX_APP_SRCS) $(LDFLAGS) $(LINUX_LIBS) -o $@
+$(PRODUCT): $(LINUX_APP_SRCS) $(LINUX_PROTOCOL_OBJ) include/opal/*.hpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LINUX_APP_SRCS) $(LINUX_PROTOCOL_OBJ) $(LDFLAGS) $(LINUX_LIBS) -o $@
 
 $(INPUT): src/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/input_helper.cpp -o $@
@@ -121,12 +147,13 @@ all: $(PRODUCT) $(INPUT)
 
 install: all
 	@set -e; \
-	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)" "$(DESTDIR)$(SYSTEMDUSERDIR)" "$(DESTDIR)$(UDEVDIR)"; \
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(LIBEXECDIR)" "$(DESTDIR)$(SYSTEMDUSERDIR)" "$(DESTDIR)$(UDEVDIR)" "$(DESTDIR)$(APPLICATIONSDIR)"; \
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(DESTDIR)$(BINDIR)/opal"; \
 	$(INSTALL) -m 0755 "$(INPUT)" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
 	$(INSTALL) -m 0644 system/opal-host.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service"; \
 	$(INSTALL) -m 0644 system/opal-bridge.service "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
 	$(INSTALL) -m 0644 system/70-opal-uinput.rules "$(DESTDIR)$(UDEVDIR)/70-opal-uinput.rules"; \
+	$(INSTALL) -m 0644 system/de.xt9y.opal.desktop "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.desktop"; \
 	if [ -z "$(DESTDIR)" ]; then \
 		$(MAKE) --no-print-directory firewall-install; \
 		if command -v modprobe >/dev/null 2>&1; then modprobe uinput || true; fi; \
@@ -134,6 +161,11 @@ install: all
 			udevadm control --reload-rules; \
 			udevadm trigger --action=change --sysname-match=uinput; \
 			udevadm settle; \
+		fi; \
+		login_user="$${SUDO_USER:-$${USER:-}}"; \
+		if command -v loginctl >/dev/null 2>&1 && [ -n "$$login_user" ] && [ "$$login_user" != root ]; then \
+			if [ "$$(id -u)" -eq 0 ]; then loginctl enable-linger "$$login_user" >/dev/null 2>&1 || true; \
+			elif command -v sudo >/dev/null 2>&1; then sudo loginctl enable-linger "$$login_user" >/dev/null 2>&1 || true; fi; \
 		fi; \
 	fi; \
 	echo "Installed OPAL to $(DESTDIR)$(PREFIX)"
@@ -143,6 +175,7 @@ uninstall:
 	if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory firewall-remove; fi; \
 	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
+	rm -f "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.desktop"; \
 	rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null || true
 
 firewall-install:
