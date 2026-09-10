@@ -8,7 +8,7 @@
 namespace opal {
 struct DecodedVideoFrame;
 struct SessionOptions {
-    std::string rendezvous_id;
+    std::string connection_id;
     std::string expected_host_public_key;
     std::string tailnet_address;
     std::string client_public_key;
