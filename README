@@ -95,11 +95,17 @@ In PowerShell, install the Microsoft WDK toolset:
 
   winget configure -f 'https://raw.githubusercontent.com/microsoft/Windows-driver-samples/main/_wdk_utils/winget/configs/wdk-vscommunity.dsc.yaml'
 
+Local WDK builds are test-signed. In an elevated PowerShell terminal, enable Windows test-signing once:
+
+  bcdedit /set testsigning on
+
+Restart Windows after changing test-signing. If Secure Boot prevents the command, Secure Boot must be disabled before Windows can load a locally test-signed IDD. A publicly distributed build should use a Microsoft-signed production driver instead.
+
 Then reopen MSYS2 UCRT64 in the OPAL repository and run:
 
   make install
 
-make install automatically builds and installs the OPAL virtual display driver and may request administrator permission. Restart Windows if OPAL reports that a restart is required.
+make install automatically builds the complete WDK driver package, trusts the generated WDK test certificate in the machine Root and TrustedPublisher stores, and installs the OPAL virtual display driver. It may request administrator permission. Restart Windows if OPAL reports that a restart is required.
 
 To build only the Windows virtual-display package:
 
