@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi1_2.h>
 
 #include <opal/capture_backend.hpp>
 #include <opal/windows_idd_capture.hpp>
@@ -16,6 +17,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cwchar>
+#include <cwctype>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -25,10 +28,12 @@
 namespace opal {
 namespace {
 
+using Clock = std::chrono::steady_clock;
+
 std::uint64_t monotonic_us()
 {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
+        Clock::now().time_since_epoch()).count());
 }
 
 std::uint64_t qpc_capture_time_us(std::uint64_t frame_qpc, std::uint64_t callback_us,
@@ -56,6 +61,55 @@ void release_com(T*& value)
     value = nullptr;
 }
 
+bool contains_case_insensitive(const wchar_t* value, const wchar_t* needle)
+{
+    if (!value || !needle || !*needle) return false;
+    std::wstring haystack(value);
+    std::wstring pattern(needle);
+    std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towupper(c));
+    });
+    std::transform(pattern.begin(), pattern.end(), pattern.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towupper(c));
+    });
+    return haystack.find(pattern) != std::wstring::npos;
+}
+
+bool opal_display_text(const wchar_t* value)
+{
+    return contains_case_insensitive(value, L"OPALDISPLAY") ||
+           contains_case_insensitive(value, L"OPAL VIRTUAL DISPLAY");
+}
+
+bool gdi_device_is_opal(const wchar_t* gdi_name)
+{
+    if (!gdi_name || !*gdi_name) return false;
+    for (DWORD index = 0;; ++index) {
+        DISPLAY_DEVICEW adapter{};
+        adapter.cb = sizeof(adapter);
+        if (!EnumDisplayDevicesW(nullptr, index, &adapter, 0)) break;
+        if (_wcsicmp(adapter.DeviceName, gdi_name) != 0) continue;
+        if (opal_display_text(adapter.DeviceID) || opal_display_text(adapter.DeviceString)) return true;
+
+        DISPLAY_DEVICEW monitor{};
+        monitor.cb = sizeof(monitor);
+        if (EnumDisplayDevicesW(adapter.DeviceName, 0, &monitor, EDD_GET_DEVICE_INTERFACE_NAME) &&
+            (opal_display_text(monitor.DeviceID) || opal_display_text(monitor.DeviceString)))
+            return true;
+        return false;
+    }
+    return false;
+}
+
+PlatformError dxgi_error(HRESULT value, std::string message, bool fallback = true)
+{
+    char suffix[32]{};
+    std::snprintf(suffix, sizeof(suffix), " (HRESULT 0x%08lx)", static_cast<unsigned long>(value));
+    return {PlatformComponent::Capture,
+            value == DXGI_ERROR_UNSUPPORTED ? PlatformFailure::Unsupported : PlatformFailure::OsError,
+            std::move(message) + suffix, fallback};
+}
+
 bool activate_idd_topology()
 {
     constexpr UINT32 flags = SDC_APPLY | SDC_TOPOLOGY_EXTEND |
@@ -79,6 +133,246 @@ bool transient_frame_wait_error(DWORD error)
     }
 }
 
+struct IddDxgiFrameOwner {
+    IDXGIOutputDuplication* duplication = nullptr;
+    ID3D11Texture2D* texture = nullptr;
+
+    ~IddDxgiFrameOwner()
+    {
+        release_com(texture);
+        if (duplication) {
+            (void)duplication->ReleaseFrame();
+            duplication->Release();
+            duplication = nullptr;
+        }
+    }
+};
+
+// Once IddCx has attached the OPAL monitor to the Windows desktop, capture it
+// like a real display. This keeps the frame on the GPU and avoids the legacy
+// driver -> CPU staging -> large IOCTL -> D3D upload path.
+class WindowsIddDxgiCaptureBackend final : public CaptureBackend {
+public:
+    ~WindowsIddDxgiCaptureBackend() override { stop(); }
+
+    bool start(const StreamOptions& stream) override
+    {
+        return start(stream, nullptr);
+    }
+
+    bool start(const StreamOptions&, const DisplayTarget* target) override
+    {
+        stop();
+        error_ = {};
+        timestamp_quality_ = CaptureTimestampQuality::Estimated;
+        if (!target || target->capture_kind != DisplayCaptureKind::WindowsIddSwapchain) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::InvalidState,
+                      "targeted IDD DXGI capture requires the OPAL virtual display", true};
+            return false;
+        }
+
+        const auto deadline = Clock::now() + std::chrono::seconds(3);
+        do {
+            if (open_opal_output()) {
+                running_ = true;
+                error_ = {};
+                return true;
+            }
+            reset_dxgi();
+            if (Clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        } while (true);
+
+        if (!error_) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      "OPAL virtual display did not attach to a DXGI desktop output", true};
+        }
+        return false;
+    }
+
+    bool next(NativeVideoFrame& frame, int timeout_ms) override
+    {
+        frame = {};
+        if (!running_ || !duplication_) return false;
+
+        DXGI_OUTDUPL_FRAME_INFO info{};
+        IDXGIResource* resource = nullptr;
+        const HRESULT hr = duplication_->AcquireNextFrame(
+            static_cast<UINT>(std::max(0, timeout_ms)), &info, &resource);
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
+        if (FAILED(hr) || !resource) {
+            if (resource) resource->Release();
+            error_ = dxgi_error(hr, "OPAL virtual display AcquireNextFrame failed");
+            running_ = false;
+            return false;
+        }
+
+        ID3D11Texture2D* texture = nullptr;
+        const HRESULT texture_hr = resource->QueryInterface(
+            __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+        resource->Release();
+        if (FAILED(texture_hr) || !texture) {
+            (void)duplication_->ReleaseFrame();
+            error_ = dxgi_error(texture_hr, "OPAL virtual display frame is not a D3D11 texture");
+            running_ = false;
+            return false;
+        }
+
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+        if (!desc.Width || !desc.Height ||
+            (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+             desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)) {
+            texture->Release();
+            (void)duplication_->ReleaseFrame();
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "OPAL virtual display DXGI surface is not BGRA8", true};
+            running_ = false;
+            return false;
+        }
+
+        // Desktop Duplication can wake for metadata/pointer-only changes. The
+        // virtual host has no separate cursor compositor here, so only publish
+        // actual desktop presents.
+        if (info.LastPresentTime.QuadPart == 0) {
+            texture->Release();
+            (void)duplication_->ReleaseFrame();
+            return false;
+        }
+
+        const auto callback_us = monotonic_us();
+        CaptureTimestampQuality quality = CaptureTimestampQuality::Estimated;
+        const auto capture_us = qpc_capture_time_us(
+            static_cast<std::uint64_t>(info.LastPresentTime.QuadPart), callback_us, quality);
+        timestamp_quality_ = quality;
+
+        duplication_->AddRef();
+        auto owner = std::make_shared<IddDxgiFrameOwner>();
+        owner->duplication = duplication_;
+        owner->texture = texture;
+
+        frame.kind = NativeVideoFrameKind::Opaque;
+        frame.width = static_cast<int>(desc.Width);
+        frame.height = static_cast<int>(desc.Height);
+        frame.pixel_format = static_cast<std::uint32_t>(desc.Format);
+        frame.capture_time_us = capture_us;
+        frame.opaque = texture;
+        frame.owner = std::move(owner);
+        return true;
+    }
+
+    void stop() override
+    {
+        running_ = false;
+        reset_dxgi();
+        timestamp_quality_ = CaptureTimestampQuality::Estimated;
+    }
+
+    CaptureTimestampQuality timestamp_quality() const override { return timestamp_quality_; }
+    std::string backend_name() const override { return "iddcx-targeted-dxgi+d3d11"; }
+    PlatformError last_platform_error() const override { return error_; }
+
+private:
+    bool open_opal_output()
+    {
+        IDXGIFactory1* factory = nullptr;
+        HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory));
+        if (FAILED(hr) || !factory) {
+            error_ = dxgi_error(hr, "DXGI factory creation failed while locating OPAL virtual display");
+            return false;
+        }
+
+        IDXGIAdapter1* found_adapter = nullptr;
+        IDXGIOutput1* found_output = nullptr;
+        for (UINT adapter_index = 0; !found_output; ++adapter_index) {
+            IDXGIAdapter1* candidate = nullptr;
+            hr = factory->EnumAdapters1(adapter_index, &candidate);
+            if (hr == DXGI_ERROR_NOT_FOUND) break;
+            if (FAILED(hr) || !candidate) continue;
+
+            for (UINT output_index = 0;; ++output_index) {
+                IDXGIOutput* base = nullptr;
+                const HRESULT output_hr = candidate->EnumOutputs(output_index, &base);
+                if (output_hr == DXGI_ERROR_NOT_FOUND) break;
+                if (FAILED(output_hr) || !base) continue;
+
+                DXGI_OUTPUT_DESC desc{};
+                const bool matches = SUCCEEDED(base->GetDesc(&desc)) && desc.AttachedToDesktop &&
+                                     gdi_device_is_opal(desc.DeviceName);
+                if (matches) {
+                    IDXGIOutput1* output1 = nullptr;
+                    const HRESULT query_hr = base->QueryInterface(
+                        __uuidof(IDXGIOutput1), reinterpret_cast<void**>(&output1));
+                    if (SUCCEEDED(query_hr) && output1) {
+                        candidate->AddRef();
+                        found_adapter = candidate;
+                        found_output = output1;
+                    }
+                }
+                base->Release();
+                if (found_output) break;
+            }
+            candidate->Release();
+        }
+        factory->Release();
+
+        if (!found_adapter || !found_output) {
+            release_com(found_adapter);
+            release_com(found_output);
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      "OPAL virtual display is connected but not attached to the DXGI desktop yet", true};
+            return false;
+        }
+
+        adapter_ = found_adapter;
+        output_ = found_output;
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        constexpr D3D_FEATURE_LEVEL levels[] = {
+            D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0
+        };
+        D3D_FEATURE_LEVEL selected{};
+        hr = D3D11CreateDevice(adapter_, D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags,
+                               levels, static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION,
+                               &device_, &selected, &context_);
+        if (hr == E_INVALIDARG) {
+            hr = D3D11CreateDevice(adapter_, D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags,
+                                   levels + 1, static_cast<UINT>(std::size(levels) - 1), D3D11_SDK_VERSION,
+                                   &device_, &selected, &context_);
+        }
+        if (FAILED(hr) || !device_ || !context_) {
+            error_ = dxgi_error(hr, "could not create D3D11 device for OPAL virtual display");
+            return false;
+        }
+
+        hr = output_->DuplicateOutput(device_, &duplication_);
+        if (FAILED(hr) || !duplication_) {
+            error_ = dxgi_error(hr, "could not duplicate the OPAL virtual display output");
+            return false;
+        }
+        return true;
+    }
+
+    void reset_dxgi()
+    {
+        release_com(duplication_);
+        if (context_) context_->ClearState();
+        release_com(context_);
+        release_com(device_);
+        release_com(output_);
+        release_com(adapter_);
+    }
+
+    bool running_ = false;
+    IDXGIAdapter1* adapter_ = nullptr;
+    IDXGIOutput1* output_ = nullptr;
+    IDXGIOutputDuplication* duplication_ = nullptr;
+    ID3D11Device* device_ = nullptr;
+    ID3D11DeviceContext* context_ = nullptr;
+    CaptureTimestampQuality timestamp_quality_ = CaptureTimestampQuality::Estimated;
+    PlatformError error_{};
+};
+
 class WindowsIddCaptureBackend final : public CaptureBackend {
 public:
     ~WindowsIddCaptureBackend() override { stop(); }
@@ -95,21 +389,21 @@ public:
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
 
         const bool idd_target = target && target->capture_kind == DisplayCaptureKind::WindowsIddSwapchain;
-        if (idd_target && activate_idd_topology())
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (idd_target) (void)activate_idd_topology();
 
-        // Keep the direct path available for a future target-aware DXGI backend.
-        // The generic Windows backend currently rejects WindowsIddSwapchain so
-        // this falls through to the dedicated driver frame channel.
-        auto direct = make_capture_backend();
-        if (direct && direct->start(stream, target)) {
+        // Preferred path: once Windows attaches the IddCx monitor, duplicate
+        // that exact output directly and keep its D3D11 texture on the GPU.
+        auto direct = std::make_unique<WindowsIddDxgiCaptureBackend>();
+        if (direct->start(stream, target)) {
             timestamp_quality_ = direct->timestamp_quality();
             direct_ = std::move(direct);
             running_ = true;
             return true;
         }
-        if (direct) direct->stop();
+        direct->stop();
 
+        // Compatibility fallback for machines where IddCx creates a swapchain
+        // but does not expose the virtual target through Desktop Duplication.
         driver_ = CreateFileW(idd::kDevicePath, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -181,7 +475,7 @@ public:
             return ok;
         }
         if (!running_ || !driver_) return false;
-        const auto deadline = std::chrono::steady_clock::now() +
+        const auto deadline = Clock::now() +
                               std::chrono::milliseconds(std::max(0, timeout_ms));
 
         for (;;) {
@@ -194,7 +488,7 @@ public:
                                             &returned, nullptr);
             if (ok) {
                 if (returned == 0) {
-                    if (timeout_ms <= 0 || std::chrono::steady_clock::now() >= deadline) return false;
+                    if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     continue;
                 }
@@ -250,7 +544,7 @@ public:
                 running_ = false;
                 return false;
             }
-            if (timeout_ms <= 0 || std::chrono::steady_clock::now() >= deadline) return false;
+            if (timeout_ms <= 0 || Clock::now() >= deadline) return false;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -282,7 +576,7 @@ public:
 
     std::string backend_name() const override
     {
-        if (direct_) return "iddcx-dxgi-direct+" + direct_->backend_name();
+        if (direct_) return direct_->backend_name();
         return "iddcx-device-frame+d3d11-upload";
     }
 
