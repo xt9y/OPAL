@@ -147,4 +147,14 @@ std::string local_tailnet_ipv4()
     return executable.empty() ? std::string{} : local_tailnet_ipv4_for(executable);
 }
 
+bool warm_tailnet_peer(const std::string& address)
+{
+    if (!is_tailnet_ipv4(address)) return false;
+    const auto executable = active_tailscale_cli_path();
+    if (executable.empty()) return false;
+    const std::string arguments = "ping --c 4 --timeout 500ms --until-direct=true " + shell_quote(address);
+    const auto output = read_command_text(tailscale_command_for(executable, arguments));
+    return output.find("pong from") != std::string::npos && output.find("via DERP") == std::string::npos;
+}
+
 }

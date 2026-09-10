@@ -39,4 +39,5 @@ bool tailscale_connected();
 int require_tailscale();
 std::vector<std::string> tailnet_peer_ipv4s();
 std::string local_tailnet_ipv4();
+bool warm_tailnet_peer(const std::string& address);
 }

@@ -46,8 +46,9 @@ struct SessionSupervisor::Impl {
         for(const auto&candidate:candidates){
             TailnetClientResult attempt;std::string attempt_error;
             if(discover_tailnet_host(options.connection_id,options.client_public_key,candidate,attempt,attempt_error,kTailnetDiscoveryTimeoutMs)){
+                const bool direct_warmed=warm_tailnet_peer(candidate);
                 found=std::move(attempt);options.tailnet_address=candidate;{std::lock_guard<std::mutex>lock(state_mu);remote_tailnet_value=candidate;}
-                if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<found.host.host<<":"<<found.host.port<<" local="<<local_tailnet<<"\n";
+                if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<found.host.host<<":"<<found.host.port<<" local="<<local_tailnet<<" direct_warm="<<(direct_warmed?"yes":"relay-or-unknown")<<"\n";
                 break;
             }
             discovery_error=attempt_error;
