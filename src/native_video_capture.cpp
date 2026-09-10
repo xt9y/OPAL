@@ -149,6 +149,12 @@ struct VideoCapture::Impl {
     {
         recycle_storage();
 
+        if (video && video->next(storage, video_wait_ms)) {
+            last_video_frame = std::chrono::steady_clock::now();
+            return make_view(view);
+        }
+
+        recycle_storage();
         if (audio) {
             if (audio->next(storage, 0)) return make_view(view);
             const auto audio_error = audio->last_platform_error();
@@ -156,12 +162,6 @@ struct VideoCapture::Impl {
                 mark_terminal(audio_error.message);
                 return false;
             }
-        }
-
-        recycle_storage();
-        if (video && video->next(storage, video_wait_ms)) {
-            last_video_frame = std::chrono::steady_clock::now();
-            return make_view(view);
         }
 
         if (display && display->target().virtual_display() && !display->healthy()) {
