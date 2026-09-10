@@ -149,7 +149,8 @@ Commands:
   opal                                      Wake and connect at up to 1080p / local refresh
   opal [--mode max|1080p|1440p|4k] [--fps 15-240]
                                             Connect with temporary stream overrides
-  opal select                               Select a saved host
+  opal select                               Select a saved host and show connection details
+  opal list                                 Alias for opal select
   opal new                                  Run OPAL setup / add another host
   opal remove                               Remove a saved host
   opal stop                                 Stop OPAL host services
@@ -243,7 +244,7 @@ int main(int argc, char** argv)
 #endif
         return opal::clean();
     }
-    if (action == "select" && argc == 2) return opal::interactive_select();
+    if ((action == "select" || action == "list") && argc == 2) return opal::interactive_select();
     if (action == "new" && argc == 2) return opal::interactive_setup();
     if (action == "remove" && argc == 2) return opal::interactive_remove();
     if (action == "doctor" && argc == 2) return opal::doctor();
