@@ -134,16 +134,11 @@ struct VideoDecoder::Impl {
             if((scratch->flags&AV_FRAME_FLAG_CORRUPT)!=0||scratch->decode_error_flags!=0){av_frame_unref(scratch);clear_latest();return false;}
             AVFrame *ready=scratch;
             if(hw_pix_fmt!=AV_PIX_FMT_NONE&&scratch->format==hw_pix_fmt){
-#if defined(__APPLE__)
-                // VideoToolbox already owns a CVPixelBuffer in data[3]. Keep
-                // that hardware frame alive through presentation instead of
-                // synchronously copying the full frame back to CPU memory.
-                if(scratch->format!=AV_PIX_FMT_VIDEOTOOLBOX)
-#endif
-                {
-                    ready=export_hardware_frame();
-                    if(!ready){av_frame_unref(scratch);clear_latest();return false;}
-                }
+                // Keep hardware synchronization and any GPU->CPU transfer on
+                // the decode worker. Presentation shares the SDL event thread,
+                // so deferring this until present() makes the whole client lag.
+                ready=export_hardware_frame();
+                if(!ready){av_frame_unref(scratch);clear_latest();return false;}
             }
             av_frame_unref(latest);
             if(ready==scratch)av_frame_move_ref(latest,scratch);
