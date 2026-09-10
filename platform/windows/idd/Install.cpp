@@ -11,12 +11,69 @@
 #include <algorithm>
 #include <cwchar>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
 constexpr wchar_t kHardwareId[] = L"Root\\OPALDISPLAY";
 constexpr wchar_t kInfEnvironment[] = L"OPAL_IDD_INF";
+constexpr wchar_t kInstallLogName[] = L"opal-display-install.log";
+
+std::wstring installer_log_path()
+{
+    std::vector<wchar_t> buffer(32768, L'\0');
+    const DWORD written = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (!written || written >= buffer.size()) return kInstallLogName;
+    std::wstring path(buffer.data(), written);
+    const auto slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return kInstallLogName;
+    path.resize(slash + 1);
+    path += kInstallLogName;
+    return path;
+}
+
+void reset_install_log()
+{
+    const auto path = installer_log_path();
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+}
+
+void append_install_log(const std::string& message)
+{
+    const auto path = installer_log_path();
+    HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    if (!message.empty())
+        (void)WriteFile(file, message.data(), static_cast<DWORD>(message.size()), &written, nullptr);
+    static constexpr char newline[] = "\r\n";
+    (void)WriteFile(file, newline, 2, &written, nullptr);
+    CloseHandle(file);
+}
+
+std::string utf8(const std::wstring& value)
+{
+    if (value.empty()) return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                                           nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return {};
+    std::string result(static_cast<std::size_t>(needed), '\0');
+    if (WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                            result.data(), needed, nullptr, nullptr) != needed)
+        return {};
+    return result;
+}
+
+int report_failure(const std::string& message, int code = 1)
+{
+    std::cerr << message << "\n";
+    append_install_log(message);
+    return code;
+}
 
 bool hardware_ids_contain(const std::vector<wchar_t>& values, const wchar_t* wanted)
 {
@@ -266,28 +323,41 @@ std::string win32_message(DWORD error)
     return result;
 }
 
+std::string error_with_code(const char* prefix, DWORD error)
+{
+    std::ostringstream stream;
+    stream << prefix << " Win32=" << error;
+    const auto message = win32_message(error);
+    if (!message.empty()) stream << " (" << message << ")";
+    return stream.str();
+}
+
 int install_driver(const wchar_t* inf)
 {
+    reset_install_log();
+    append_install_log("OPAL Windows virtual display installation");
+
     const auto path = resolve_package_inf(inf);
-    if (path.empty()) {
-        std::wcerr << L"Could not locate a complete OPAL driver package (.inf + .cat + .dll).\n";
-        return 1;
-    }
+    if (path.empty())
+        return report_failure("Could not locate a complete OPAL driver package (.inf + .cat + .dll).");
+    append_install_log("Package INF: " + utf8(path));
 
     const auto certificate = find_test_certificate(path);
-    if (!certificate.empty() && !trust_test_certificate(certificate)) {
-        std::wcerr << L"Could not trust the WDK test certificate: " << certificate << L"\n";
-        return 1;
+    if (!certificate.empty()) {
+        append_install_log("WDK test certificate: " + utf8(certificate));
+        if (!trust_test_certificate(certificate))
+            return report_failure("Could not trust the generated WDK test certificate: " + utf8(certificate));
+        append_install_log("WDK test certificate trusted in LocalMachine Root and TrustedPublisher.");
+    } else {
+        append_install_log("No local WDK test certificate found; assuming the package uses an already trusted signer.");
     }
 
-    const bool created = root_device_exists() || create_root_device();
+    const bool already_exists = root_device_exists();
+    append_install_log(already_exists ? "ROOT\\OPALDISPLAY already exists." : "Creating ROOT\\OPALDISPLAY.");
+    const bool created = already_exists || create_root_device();
     if (!created) {
         const DWORD error = GetLastError();
-        std::cerr << "Could not create ROOT\\OPALDISPLAY device. Win32=" << error;
-        const auto message = win32_message(error);
-        if (!message.empty()) std::cerr << " (" << message << ")";
-        std::cerr << "\n";
-        return 1;
+        return report_failure(error_with_code("Could not create ROOT\\OPALDISPLAY device.", error));
     }
 
     BOOL reboot = FALSE;
@@ -295,18 +365,17 @@ int install_driver(const wchar_t* inf)
                                              INSTALLFLAG_FORCE, &reboot)) {
         const DWORD error = GetLastError();
         (void)remove_root_devices();
-        std::cerr << "Could not install OPAL display driver. Win32=" << error;
-        const auto message = win32_message(error);
-        if (!message.empty()) std::cerr << " (" << message << ")";
-        std::cerr << "\nSee C:\\Windows\\INF\\setupapi.dev.log for the exact PnP failure.\n";
-        std::cerr << "If Windows rejects the WDK test signature, enable test signing from an elevated "
-                     "terminal with: bcdedit /set testsigning on\n";
-        return 1;
+        auto message = error_with_code("Could not install OPAL display driver.", error);
+        message += "\nSee C:\\Windows\\INF\\setupapi.dev.log for the exact PnP failure.";
+        message += "\nFor the local WDK test-signed build, run as Administrator: bcdedit /set testsigning on, then restart Windows.";
+        return report_failure(message);
     }
 
-    std::cout << "OPAL virtual display driver installed.";
-    if (reboot) std::cout << " A Windows restart is required.";
-    std::cout << "\n";
+    const std::string success = reboot
+        ? "OPAL virtual display driver installed. A Windows restart is required."
+        : "OPAL virtual display driver installed.";
+    append_install_log(success);
+    std::cout << success << "\n";
     return reboot ? 10 : 0;
 }
 
@@ -314,11 +383,7 @@ int uninstall_driver()
 {
     if (!remove_root_devices()) {
         const DWORD error = GetLastError();
-        std::cerr << "Could not remove OPAL virtual display device. Win32=" << error;
-        const auto message = win32_message(error);
-        if (!message.empty()) std::cerr << " (" << message << ")";
-        std::cerr << "\n";
-        return 1;
+        return report_failure(error_with_code("Could not remove OPAL virtual display device.", error));
     }
     std::cout << "OPAL virtual display device removed.\n";
     return 0;
@@ -333,8 +398,8 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 3) inf = argv[2];
         else inf = environment_value(kInfEnvironment);
         if (inf.empty()) {
-            std::wcerr << L"No OPAL display-driver INF path was provided.\n";
-            return 2;
+            reset_install_log();
+            return report_failure("No OPAL display-driver INF path was provided.", 2);
         }
         return install_driver(inf.c_str());
     }
