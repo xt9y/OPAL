@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <cwchar>
 #include <cwctype>
@@ -148,9 +149,6 @@ struct IddDxgiFrameOwner {
     }
 };
 
-// Once IddCx has attached the OPAL monitor to the Windows desktop, capture it
-// like a real display. This keeps the frame on the GPU and avoids the legacy
-// driver -> CPU staging -> large IOCTL -> D3D upload path.
 class WindowsIddDxgiCaptureBackend final : public CaptureBackend {
 public:
     ~WindowsIddDxgiCaptureBackend() override { stop(); }
@@ -231,9 +229,6 @@ public:
             return false;
         }
 
-        // Desktop Duplication can wake for metadata/pointer-only changes. The
-        // virtual host has no separate cursor compositor here, so only publish
-        // actual desktop presents.
         if (info.LastPresentTime.QuadPart == 0) {
             texture->Release();
             (void)duplication_->ReleaseFrame();
@@ -391,8 +386,6 @@ public:
         const bool idd_target = target && target->capture_kind == DisplayCaptureKind::WindowsIddSwapchain;
         if (idd_target) (void)activate_idd_topology();
 
-        // Preferred path: once Windows attaches the IddCx monitor, duplicate
-        // that exact output directly and keep its D3D11 texture on the GPU.
         auto direct = std::make_unique<WindowsIddDxgiCaptureBackend>();
         if (direct->start(stream, target)) {
             timestamp_quality_ = direct->timestamp_quality();
@@ -402,8 +395,6 @@ public:
         }
         direct->stop();
 
-        // Compatibility fallback for machines where IddCx creates a swapchain
-        // but does not expose the virtual target through Desktop Duplication.
         driver_ = CreateFileW(idd::kDevicePath, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
