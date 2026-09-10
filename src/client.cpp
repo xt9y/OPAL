@@ -1,10 +1,11 @@
 #include <opal/client.hpp>
 #include <opal/clipboard.hpp>
 #include <opal/config.hpp>
+#include <opal/connection_code.hpp>
 #include <opal/crypto.hpp>
 #include <opal/input.hpp>
-#include <opal/rendezvous_protocol.hpp>
 #include <opal/session.hpp>
+#include <opal/tailnet.hpp>
 #include <opal/video_present.hpp>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -100,31 +101,33 @@ void run_sdl_control(SessionSupervisor&session,VideoPresenter&presenter,ClientCl
     }
     release_held(session,held,generation);(void)presenter.set_relative_mouse_mode(false);
 }
-int error_code_for(const std::string&message){if(message.find("identity")!=std::string::npos)return 3;if(message.find("authentication")!=std::string::npos||message.find("pairing")!=std::string::npos)return 4;if(message.find("rendezvous")!=std::string::npos||message.find("offline")!=std::string::npos)return 2;return 1;}
-bool saved_legacy(const Ini&hosts,const std::string&name){return hosts.get(name,"rendezvous_id").empty()&&!hosts.get(name,"address").empty();}
+int error_code_for(const std::string&message){if(message.find("identity")!=std::string::npos)return 3;if(message.find("authentication")!=std::string::npos||message.find("pairing")!=std::string::npos)return 4;if(message.find("Tailscale")!=std::string::npos||message.find("tailnet")!=std::string::npos)return 2;return 1;}
+std::string saved_connection_id(const Ini&hosts,const std::string&name){auto id=hosts.get(name,"connection_id");if(id.empty())id=hosts.get(name,"rendezvous_id");return id;}
+bool saved_legacy(const Ini&hosts,const std::string&name){return saved_connection_id(hosts,name).empty()&&!hosts.get(name,"address").empty();}
 }
 
-int hosts_add(const std::string&name,const std::string&address,const std::string&mac){auto p=Paths::load();ensure_layout(p);std::string id;if(!parse_connection_code(address,id)){std::cerr<<"host must be an OPAL connection code (XXXX-XXXX-XXXX)\n";return 1;}Ini h;h.load(p.hosts);h.set(name,"rendezvous_id",id);h.set(name,"connection_code",format_connection_code(id));h.set(name,"paired","false");if(!mac.empty())h.set(name,"mac",mac);if(!h.save(p.hosts))return 1;std::cout<<"saved host "<<name<<" -> "<<format_connection_code(id)<<"\n";return 0;}
-int hosts_list(){auto p=Paths::load();Ini h;if(!h.load(p.hosts)){std::cout<<"No saved hosts.\n";return 0;}for(auto&[s,v]:h.sections())if(!s.empty()){auto id=h.get(s,"rendezvous_id");std::cout<<s<<(id.empty()?"  legacy (re-pair required)":"  "+format_connection_code(id))<<"\n";}return 0;}
+int hosts_add(const std::string&name,const std::string&address,const std::string&mac){auto p=Paths::load();ensure_layout(p);std::string id;if(!parse_connection_code(address,id)){std::cerr<<"host must be an OPAL connection code (XXXX-XXXX-XXXX)\n";return 1;}Ini h;h.load(p.hosts);h.set(name,"connection_id",id);h.set(name,"connection_code",format_connection_code(id));h.set(name,"paired","false");if(!mac.empty())h.set(name,"mac",mac);if(!h.save(p.hosts))return 1;std::cout<<"saved host "<<name<<" -> "<<format_connection_code(id)<<"\n";return 0;}
+int hosts_list(){auto p=Paths::load();Ini h;if(!h.load(p.hosts)){std::cout<<"No saved hosts.\n";return 0;}for(auto&[s,v]:h.sections())if(!s.empty()){auto id=saved_connection_id(h,s);std::cout<<s<<(id.empty()?"  legacy (re-pair required)":"  "+format_connection_code(id))<<"\n";}return 0;}
 
 int client_connect(const std::string&target_in,const std::string&password_arg,const StreamOptions&stream){
+    if(require_tailscale()!=0)return 2;
     const bool headless_test=env_enabled("OPAL_TEST_HEADLESS");
     if(!headless_test&&!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)){std::cerr<<"SDL3 video initialization failed: "<<SDL_GetError()<<"\n";return 1;}
     const StreamOptions resolved_stream=resolve_stream_options(stream,headless_test);
     auto quit_sdl=[&](){if(!headless_test)SDL_Quit();};
     ClientClipboardBridge clipboard;
-    auto p=Paths::load();ensure_layout(p);if(!ensure_identity(p.identity_key,p.identity_pub)){std::cerr<<"client identity generation failed\n";quit_sdl();return 1;}Ini hosts;hosts.load(p.hosts);const bool saved=hosts.sections().count(target_in)>0;std::string rendezvous_id,expected_host_key,tailnet_address;
-    if(saved){if(saved_legacy(hosts,target_in)){std::cerr<<"saved host uses an obsolete OPAL host format; remove it and pair again with its current OPAL connection code\n";quit_sdl();return 2;}rendezvous_id=hosts.get(target_in,"rendezvous_id");expected_host_key=hosts.get(target_in,"host_public_key");tailnet_address=hosts.get(target_in,"tailnet_address");}else if(!parse_connection_code(target_in,rendezvous_id)){std::cerr<<"invalid OPAL connection code; expected XXXX-XXXX-XXXX\n";quit_sdl();return 2;}
-    if(rendezvous_id.empty()){std::cerr<<"saved OPAL host has no rendezvous identity\n";quit_sdl();return 2;}
-    SessionOptions options;options.rendezvous_id=rendezvous_id;options.expected_host_public_key=expected_host_key;options.tailnet_address=tailnet_address;options.client_public_key=public_key_hex(p.identity_pub);options.client_private_key_path=p.identity_key.string();options.paired=saved&&hosts.get(target_in,"paired")=="true"&&!expected_host_key.empty();options.pairing_password=password_arg;if(!headless_test)options.clipboard_control=[&clipboard](const std::string&line){clipboard.receive_control(line);};options.label=saved?target_in:"client";options.stream=resolved_stream;
+    auto p=Paths::load();ensure_layout(p);if(!ensure_identity(p.identity_key,p.identity_pub)){std::cerr<<"client identity generation failed\n";quit_sdl();return 1;}Ini hosts;hosts.load(p.hosts);const bool saved=hosts.sections().count(target_in)>0;std::string connection_id,expected_host_key,tailnet_address;
+    if(saved){if(saved_legacy(hosts,target_in)){std::cerr<<"saved host uses an obsolete OPAL host format; remove it and pair again with its current OPAL connection code\n";quit_sdl();return 2;}connection_id=saved_connection_id(hosts,target_in);expected_host_key=hosts.get(target_in,"host_public_key");tailnet_address=hosts.get(target_in,"tailnet_address");}else if(!parse_connection_code(target_in,connection_id)){std::cerr<<"invalid OPAL connection code; expected XXXX-XXXX-XXXX\n";quit_sdl();return 2;}
+    if(connection_id.empty()){std::cerr<<"saved OPAL host has no connection identity\n";quit_sdl();return 2;}
+    SessionOptions options;options.connection_id=connection_id;options.expected_host_public_key=expected_host_key;options.tailnet_address=tailnet_address;options.client_public_key=public_key_hex(p.identity_pub);options.client_private_key_path=p.identity_key.string();options.paired=saved&&hosts.get(target_in,"paired")=="true"&&!expected_host_key.empty();options.pairing_password=password_arg;if(!headless_test)options.clipboard_control=[&clipboard](const std::string&line){clipboard.receive_control(line);};options.label=saved?target_in:"client";options.stream=resolved_stream;
     if(!options.paired&&options.pairing_password.empty())options.pairing_password_provider=[](){std::string password;std::cout<<"Pairing password: "<<std::flush;std::cin>>password;return password;};
     SessionSupervisor session(std::move(options));if(!session.start()){auto message=session.last_error();if(message.empty())message="cannot connect to OPAL host";std::cerr<<message<<"\n";quit_sdl();return error_code_for(message);}
     if(!headless_test)clipboard.start(session);
 
-    const std::string section=saved?target_in:format_connection_code(rendezvous_id);hosts.set(section,"rendezvous_id",rendezvous_id);hosts.set(section,"connection_code",format_connection_code(rendezvous_id));hosts.set(section,"host_public_key",session.host_public_key());hosts.set(section,"paired",session.paired()?"true":"false");auto learned_mac=session.remote_mac();if(!learned_mac.empty())hosts.set(section,"mac",learned_mac);auto learned_tailnet=session.remote_tailnet_address();if(!learned_tailnet.empty())hosts.set(section,"tailnet_address",learned_tailnet);if(hosts.get(section,"mouse_sensitivity").empty())hosts.set(section,"mouse_sensitivity","1.0");hosts.save(p.hosts);
+    const std::string section=saved?target_in:format_connection_code(connection_id);hosts.set(section,"connection_id",connection_id);hosts.set(section,"connection_code",format_connection_code(connection_id));hosts.set(section,"host_public_key",session.host_public_key());hosts.set(section,"paired",session.paired()?"true":"false");auto learned_mac=session.remote_mac();if(!learned_mac.empty())hosts.set(section,"mac",learned_mac);auto learned_tailnet=session.remote_tailnet_address();if(!learned_tailnet.empty())hosts.set(section,"tailnet_address",learned_tailnet);if(hosts.get(section,"mouse_sensitivity").empty())hosts.set(section,"mouse_sensitivity","1.0");hosts.save(p.hosts);
 
     for(int i=0;i<1000&&!session.media_started()&&session.running();++i){if(!headless_test)clipboard.pump(session);std::this_thread::sleep_for(std::chrono::milliseconds(10));}
-    if(!session.media_started()){auto message=session.last_error();std::cerr<<(message.empty()?"direct video did not start":message)<<"\n";session.stop();quit_sdl();return 1;}
+    if(!session.media_started()){auto message=session.last_error();std::cerr<<(message.empty()?"Tailscale video did not start":message)<<"\n";session.stop();quit_sdl();return 1;}
     learned_tailnet=session.remote_tailnet_address();if(!learned_tailnet.empty()){hosts.set(section,"tailnet_address",learned_tailnet);hosts.save(p.hosts);}
 
     if(headless_test){std::cout<<"Connected.\n"<<std::flush;while(session.running())std::this_thread::sleep_for(std::chrono::milliseconds(100));session.stop();return 0;}
