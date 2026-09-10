@@ -1,0 +1,87 @@
+#include <opal/host_display.hpp>
+
+#include <algorithm>
+#include <utility>
+
+namespace opal {
+
+DisplayMode display_mode_for_stream(const StreamOptions& stream)
+{
+    DisplayMode mode;
+    mode.width = stream.max_width > 0 ? std::clamp(stream.max_width, 640, 7680) : 1920;
+    mode.height = stream.max_height > 0 ? std::clamp(stream.max_height, 480, 4320) : 1080;
+    mode.refresh_hz = std::clamp(stream.fps, 15, 240);
+    mode.scale = 1.0f;
+    return mode;
+}
+
+const char* display_kind_name(DisplayKind kind) noexcept
+{
+    switch (kind) {
+        case DisplayKind::Physical: return "physical";
+        case DisplayKind::VirtualExistingSession: return "virtual-existing-session";
+        case DisplayKind::VirtualManagedSession: return "virtual-managed-session";
+    }
+    return "unknown";
+}
+
+HostDisplayManager::HostDisplayManager() : backend_(make_display_backend()) {}
+HostDisplayManager::~HostDisplayManager() { stop(); }
+
+bool HostDisplayManager::prepare(const StreamOptions& stream)
+{
+    stop();
+    if (!backend_) {
+        error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                  "display backend unavailable", false};
+        return false;
+    }
+
+    DisplayTarget target;
+    if (backend_->probe(target)) {
+        target_ = std::move(target);
+        active_ = true;
+        return true;
+    }
+
+    const auto mode = display_mode_for_stream(stream);
+    if (!backend_->ensure(mode, target)) {
+        error_ = backend_->last_platform_error();
+        if (!error_) {
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      "could not create a usable host display", false};
+        }
+        return false;
+    }
+
+    target_ = std::move(target);
+    active_ = true;
+    return true;
+}
+
+bool HostDisplayManager::healthy() const
+{
+    return active_ && backend_ && backend_->healthy(target_);
+}
+
+void HostDisplayManager::stop()
+{
+    if (backend_ && active_) backend_->release(target_);
+    target_ = {};
+    error_ = {};
+    active_ = false;
+}
+
+std::string HostDisplayManager::backend_name() const
+{
+    if (!backend_) return "unavailable";
+    return backend_->backend_name();
+}
+
+PlatformError HostDisplayManager::last_platform_error() const
+{
+    if (error_) return error_;
+    return backend_ ? backend_->last_platform_error() : PlatformError{};
+}
+
+}
