@@ -171,8 +171,67 @@ BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM data)
     return TRUE;
 }
 
+class MonitorConfigurationApi {
+public:
+    MonitorConfigurationApi()
+    {
+        module_ = LoadLibraryW(L"Dxva2.dll");
+        if (!module_) return;
+        get_count_ = reinterpret_cast<GetCountFn>(GetProcAddress(module_, "GetNumberOfPhysicalMonitorsFromHMONITOR"));
+        get_monitors_ = reinterpret_cast<GetMonitorsFn>(GetProcAddress(module_, "GetPhysicalMonitorsFromHMONITOR"));
+        destroy_monitors_ = reinterpret_cast<DestroyMonitorsFn>(GetProcAddress(module_, "DestroyPhysicalMonitors"));
+        get_vcp_ = reinterpret_cast<GetVcpFn>(GetProcAddress(module_, "GetVCPFeatureAndVCPFeatureReply"));
+    }
+
+    ~MonitorConfigurationApi()
+    {
+        if (module_) FreeLibrary(module_);
+    }
+
+    bool valid() const noexcept
+    {
+        return get_count_ && get_monitors_ && destroy_monitors_ && get_vcp_;
+    }
+
+    BOOL get_count(HMONITOR monitor, LPDWORD count) const
+    {
+        return get_count_ ? get_count_(monitor, count) : FALSE;
+    }
+
+    BOOL get_monitors(HMONITOR monitor, DWORD count, LPPHYSICAL_MONITOR monitors) const
+    {
+        return get_monitors_ ? get_monitors_(monitor, count, monitors) : FALSE;
+    }
+
+    BOOL destroy(DWORD count, LPPHYSICAL_MONITOR monitors) const
+    {
+        return destroy_monitors_ ? destroy_monitors_(count, monitors) : FALSE;
+    }
+
+    BOOL get_vcp(HANDLE monitor, BYTE code, LPMC_VCP_CODE_TYPE type,
+                 LPDWORD current, LPDWORD maximum) const
+    {
+        return get_vcp_ ? get_vcp_(monitor, code, type, current, maximum) : FALSE;
+    }
+
+private:
+    using GetCountFn = BOOL (WINAPI*)(HMONITOR, LPDWORD);
+    using GetMonitorsFn = BOOL (WINAPI*)(HMONITOR, DWORD, LPPHYSICAL_MONITOR);
+    using DestroyMonitorsFn = BOOL (WINAPI*)(DWORD, LPPHYSICAL_MONITOR);
+    using GetVcpFn = BOOL (WINAPI*)(HANDLE, BYTE, LPMC_VCP_CODE_TYPE, LPDWORD, LPDWORD);
+
+    HMODULE module_ = nullptr;
+    GetCountFn get_count_ = nullptr;
+    GetMonitorsFn get_monitors_ = nullptr;
+    DestroyMonitorsFn destroy_monitors_ = nullptr;
+    GetVcpFn get_vcp_ = nullptr;
+};
+
 PhysicalSignal ddc_power_signal()
 {
+    MonitorConfigurationApi api;
+    if (!api.valid()) return PhysicalSignal::Unknown;
+
     std::vector<HMONITOR> monitors;
     if (!EnumDisplayMonitors(nullptr, nullptr, collect_monitor,
                              reinterpret_cast<LPARAM>(&monitors)))
@@ -183,12 +242,12 @@ PhysicalSignal ddc_power_signal()
     unsigned unknown = 0;
     for (HMONITOR monitor : monitors) {
         DWORD count = 0;
-        if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, &count) || count == 0) {
+        if (!api.get_count(monitor, &count) || count == 0) {
             ++unknown;
             continue;
         }
         std::vector<PHYSICAL_MONITOR> physical(count);
-        if (!GetPhysicalMonitorsFromHMONITOR(monitor, count, physical.data())) {
+        if (!api.get_monitors(monitor, count, physical.data())) {
             ++unknown;
             continue;
         }
@@ -197,8 +256,7 @@ PhysicalSignal ddc_power_signal()
             DWORD current = 0;
             DWORD maximum = 0;
             MC_VCP_CODE_TYPE type{};
-            if (!GetVCPFeatureAndVCPFeatureReply(item.hPhysicalMonitor, kVcpPowerMode,
-                                                  &type, &current, &maximum)) {
+            if (!api.get_vcp(item.hPhysicalMonitor, kVcpPowerMode, &type, &current, &maximum)) {
                 ++unknown;
                 continue;
             }
@@ -206,7 +264,7 @@ PhysicalSignal ddc_power_signal()
             else if (current >= 0x02 && current <= 0x05) ++known_off;
             else ++unknown;
         }
-        DestroyPhysicalMonitors(count, physical.data());
+        (void)api.destroy(count, physical.data());
     }
 
     if (any_on) return PhysicalSignal::Available;
@@ -218,16 +276,23 @@ class SessionDisplayPower {
 public:
     SessionDisplayPower()
     {
+        module_ = LoadLibraryW(L"PowrProf.dll");
+        if (!module_) return;
+        register_ = reinterpret_cast<RegisterFn>(GetProcAddress(module_, "PowerSettingRegisterNotification"));
+        unregister_ = reinterpret_cast<UnregisterFn>(GetProcAddress(module_, "PowerSettingUnregisterNotification"));
+        if (!register_ || !unregister_) return;
+
         parameters_.Callback = &SessionDisplayPower::callback;
         parameters_.Context = this;
-        if (PowerSettingRegisterNotification(&kSessionDisplayStatus, DEVICE_NOTIFY_CALLBACK,
-                                             &parameters_, &registration_) != ERROR_SUCCESS)
+        if (register_(&kSessionDisplayStatus, DEVICE_NOTIFY_CALLBACK,
+                      &parameters_, &registration_) != ERROR_SUCCESS)
             registration_ = nullptr;
     }
 
     ~SessionDisplayPower()
     {
-        if (registration_) PowerSettingUnregisterNotification(registration_);
+        if (registration_ && unregister_) (void)unregister_(registration_);
+        if (module_) FreeLibrary(module_);
     }
 
     PhysicalSignal signal() const noexcept
@@ -236,6 +301,9 @@ public:
     }
 
 private:
+    using RegisterFn = DWORD (WINAPI*)(LPCGUID, DWORD, HANDLE, PHPOWERNOTIFY);
+    using UnregisterFn = DWORD (WINAPI*)(HPOWERNOTIFY);
+
     static ULONG CALLBACK callback(PVOID context, ULONG type, PVOID setting)
     {
         if (!context || type != PBT_POWERSETTINGCHANGE || !setting) return ERROR_SUCCESS;
@@ -256,6 +324,9 @@ private:
         return ERROR_SUCCESS;
     }
 
+    HMODULE module_ = nullptr;
+    RegisterFn register_ = nullptr;
+    UnregisterFn unregister_ = nullptr;
     DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS parameters_{};
     HPOWERNOTIFY registration_ = nullptr;
     std::atomic<int> state_{static_cast<int>(PhysicalSignal::Unknown)};
