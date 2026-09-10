@@ -17,7 +17,8 @@ inline bool is_tailnet_ipv4(const std::string&address){
         while(pos<address.size()&&address[pos]>='0'&&address[pos]<='9'){
             value=value*10+(address[pos]-'0');++pos;++digits;if(value>255)return false;
         }
-        if(digits==0)return false;octets[index]=value;
+        if(digits==0)return false;
+        octets[index]=value;
         if(index<3){if(pos>=address.size()||address[pos]!='.')return false;++pos;}
     }
     return pos==address.size()&&octets[0]==100&&octets[1]>=64&&octets[1]<=127;
