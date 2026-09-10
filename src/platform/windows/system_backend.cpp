@@ -4,6 +4,7 @@
 #include <opal/platform_error.hpp>
 #include <opal/system.hpp>
 #include <opal/tailnet.hpp>
+#include <opal/windows_idd.hpp>
 
 #include <SDL3/SDL.h>
 
@@ -566,8 +567,30 @@ int doctor()
     if (media_foundation_h264_hardware_encoder_available()) show_doctor_item("Media Foundation H.264 hardware encoder", true);
     else show_doctor_failure("Media Foundation H.264 hardware encoder", PlatformComponent::Encoder, PlatformFailure::Unavailable);
 
+    const bool physical_display = windows_physical_display_present();
+    std::cout << "[info] physical display=" << (physical_display ? "present" : "none") << '\n';
+
     if (dxgi_desktop_duplication_available()) show_doctor_item("DXGI Desktop Duplication", true);
-    else show_doctor_failure("DXGI Desktop Duplication", PlatformComponent::Capture, PlatformFailure::Unavailable);
+    else if (physical_display)
+        show_doctor_failure("DXGI Desktop Duplication", PlatformComponent::Capture, PlatformFailure::Unavailable);
+    else
+        std::cout << "[info] DXGI Desktop Duplication=inactive (no physical output)\n";
+
+    const auto idd = windows_idd_status();
+    if (idd.device_present) {
+        show_doctor_item("OPAL IddCx virtual display driver", true);
+        show_doctor_item("OPAL IddCx adapter ready", idd.adapter_ready);
+        if (idd.monitor_active) {
+            std::cout << "[ok]   OPAL virtual monitor active "
+                      << idd.width << 'x' << idd.height << '@' << idd.refresh_hz << "Hz\n";
+        } else {
+            std::cout << "[info] OPAL virtual monitor=inactive\n";
+        }
+    } else {
+        show_doctor_failure("OPAL IddCx virtual display driver", PlatformComponent::Capture,
+                            PlatformFailure::DependencyMissing);
+    }
+    show_doctor_item("Usable headless display provider", physical_display || (idd.device_present && idd.adapter_ready));
 
     if (wasapi_render_endpoint_available()) show_doctor_item("WASAPI loopback render endpoint", true);
     else show_doctor_failure("WASAPI loopback render endpoint", PlatformComponent::AudioCapture, PlatformFailure::Unavailable);
@@ -581,7 +604,7 @@ int doctor()
     show_doctor_item("Host daemon running", host_daemon_running());
     show_doctor_item("OPAL state initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=win32-unicode\n";
-    std::cout << "[info] host capture=dxgi-desktop-duplication encoder=media-foundation-hardware-lowlatency input=sendinput clipboard=win32-unicode audio=wasapi-loopback+aac\n";
+    std::cout << "[info] host capture=dxgi-physical+iddcx-virtual encoder=media-foundation-hardware-lowlatency input=sendinput clipboard=win32-unicode audio=wasapi-loopback+aac\n";
     return 0;
 }
 
