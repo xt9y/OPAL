@@ -1,9 +1,8 @@
 #include <opal/session.hpp>
 #include <opal/crypto.hpp>
-#include <opal/local_discovery.hpp>
 #include <opal/peer_session.hpp>
-#include <opal/rendezvous_client.hpp>
 #include <opal/tailnet.hpp>
+#include <opal/tailnet_discovery.hpp>
 #include <opal/video_receiver.hpp>
 
 #include <algorithm>
@@ -12,21 +11,14 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
-#include <optional>
 #include <sstream>
 #include <thread>
-#include <utility>
 #include <vector>
 
 namespace opal { namespace {
 using namespace std::chrono_literals;
-enum class BootstrapPath { Unset, Lan, Tailnet, Rendezvous };
-enum class RoutePolicy { Auto, Lan, Tailscale, Rendezvous, Relay, Invalid };
 bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 bool pointer_command(const std::string&s){return s.rfind("POINTER ",0)==0;}
-bool rendezvous_timeout(const std::string&s){return s=="rendezvous timeout"||s=="rendezvous protocol timeout"||s=="rendezvous introduction timeout";}
-RoutePolicy route_policy(){const char*v=std::getenv("OPAL_FORCE_ROUTE");if(!v||!*v)return RoutePolicy::Auto;const std::string route(v);if(route=="auto")return RoutePolicy::Auto;if(route=="lan")return RoutePolicy::Lan;if(route=="tailscale")return RoutePolicy::Tailscale;if(route=="rendezvous")return RoutePolicy::Rendezvous;if(route=="relay")return RoutePolicy::Relay;return RoutePolicy::Invalid;}
-const char*route_policy_name(RoutePolicy route){switch(route){case RoutePolicy::Auto:return "auto";case RoutePolicy::Lan:return "lan";case RoutePolicy::Tailscale:return "tailscale";case RoutePolicy::Rendezvous:return "rendezvous";case RoutePolicy::Relay:return "relay";case RoutePolicy::Invalid:return "invalid";}return "invalid";}
 const char*receiver_failure_name(VideoReceiverFailure reason){switch(reason){case VideoReceiverFailure::NoFailure:return "none";case VideoReceiverFailure::PresenterOpen:return "presenter-open";case VideoReceiverFailure::Present:return "present";case VideoReceiverFailure::MediaStall:return "media-stall";}return "unknown";}
 }
 
@@ -41,108 +33,52 @@ struct SessionSupervisor::Impl {
     void teardown_current(){std::unique_ptr<VideoReceiver>old_receiver;std::unique_ptr<PeerSession>old_peer;{std::lock_guard<std::mutex>lock(session_mu);old_receiver=std::move(receiver);old_peer=std::move(peer);}if(old_receiver)old_receiver->stop();if(old_peer)old_peer->stop();}
 
     bool connect_generation(std::uint32_t gen,bool allow_pair){
-        const auto route=route_policy();
-        if(route==RoutePolicy::Invalid){set_error("invalid OPAL_FORCE_ROUTE; expected lan, tailscale, rendezvous, relay, or auto");return false;}
-        if(debug_enabled())std::cerr<<"OPAL route="<<route_policy_name(route)<<"\n";
-        RendezvousIntroduction intro;UdpSocket socket;std::optional<PeerRelayFallback> relay_fallback;BootstrapPath bootstrap=BootstrapPath::Unset;
-        auto adopt_direct=[&](LocalDiscoveryClientResult&found,BootstrapPath path){bootstrap=path;socket=found.socket;found.socket={};intro.rendezvous_id=found.rendezvous_id;intro.session_id=found.session_id;intro.peer_public_key=found.host_public_key;intro.local_nonce=found.client_nonce;intro.peer_nonce=found.host_nonce;intro.peer_observed=found.host;};
+        if(!tailscale_cli_available()){set_error("Tailscale is not installed");return false;}
+        const auto local_tailnet=local_tailnet_ipv4();
+        if(local_tailnet.empty()){set_error("Tailscale is installed but not connected");return false;}
 
-        if(route==RoutePolicy::Auto||route==RoutePolicy::Lan){
-            LocalDiscoveryClientResult lan;std::string lan_error;
-            if(debug_enabled())std::cerr<<"OPAL discovery=lan\n";
-            if(discover_local_host(options.rendezvous_id,options.client_public_key,lan,lan_error)){
-                adopt_direct(lan,BootstrapPath::Lan);
-                if(debug_enabled())std::cerr<<"OPAL discovery=lan host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<"\n";
-            }else{
-                if(debug_enabled())std::cerr<<"OPAL discovery=lan miss reason="<<(lan_error.empty()?"not-found":lan_error)<<"\n";
-                if(route==RoutePolicy::Lan){set_error("host not found on LAN"+(lan_error.empty()?std::string{}:std::string(": ")+lan_error));return false;}
+        std::vector<std::string>candidates;
+        if(is_tailnet_ipv4(options.tailnet_address)&&options.tailnet_address!=local_tailnet)candidates.push_back(options.tailnet_address);
+        for(const auto&peer_address:tailnet_peer_ipv4s())if(peer_address!=local_tailnet&&std::find(candidates.begin(),candidates.end(),peer_address)==candidates.end())candidates.push_back(peer_address);
+        if(debug_enabled())std::cerr<<"OPAL discovery=tailnet candidates="<<candidates.size()<<" local="<<local_tailnet<<"\n";
+
+        TailnetClientResult found;std::string discovery_error;
+        for(const auto&candidate:candidates){
+            TailnetClientResult attempt;std::string attempt_error;
+            if(discover_tailnet_host(options.connection_id,options.client_public_key,candidate,attempt,attempt_error,kTailnetDiscoveryTimeoutMs)){
+                found=std::move(attempt);options.tailnet_address=candidate;{std::lock_guard<std::mutex>lock(state_mu);remote_tailnet_value=candidate;}
+                if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<found.host.host<<":"<<found.host.port<<" local="<<local_tailnet<<"\n";
+                break;
             }
+            discovery_error=attempt_error;
+            if(debug_enabled())std::cerr<<"OPAL discovery=tailnet miss host="<<candidate<<" reason="<<(attempt_error.empty()?"not-found":attempt_error)<<"\n";
         }
-
-        if(bootstrap==BootstrapPath::Unset&&(route==RoutePolicy::Auto||route==RoutePolicy::Tailscale)){
-            const auto local_tailnet=local_tailnet_ipv4();
-            if(!local_tailnet.empty()){
-                std::vector<std::string>candidates;
-                if(is_tailnet_ipv4(options.tailnet_address))candidates.push_back(options.tailnet_address);
-                for(const auto&peer_address:tailnet_peer_ipv4s())if(peer_address!=local_tailnet&&std::find(candidates.begin(),candidates.end(),peer_address)==candidates.end())candidates.push_back(peer_address);
-                if(debug_enabled())std::cerr<<"OPAL discovery=tailnet candidates="<<candidates.size()<<" local="<<local_tailnet<<"\n";
-                for(const auto&candidate:candidates){
-                    LocalDiscoveryClientResult tailnet;std::string tailnet_error;
-                    if(discover_local_host(options.rendezvous_id,options.client_public_key,tailnet,tailnet_error,kTailnetDiscoveryTimeoutMs,candidate,kLocalDiscoveryPort)){
-                        adopt_direct(tailnet,BootstrapPath::Tailnet);options.tailnet_address=candidate;{std::lock_guard<std::mutex>lock(state_mu);remote_tailnet_value=candidate;}
-                        if(debug_enabled())std::cerr<<"OPAL discovery=tailnet host="<<intro.peer_observed.host<<":"<<intro.peer_observed.port<<" local="<<local_tailnet<<"\n";
-                        break;
-                    }
-                    if(debug_enabled())std::cerr<<"OPAL discovery=tailnet miss host="<<candidate<<" reason="<<(tailnet_error.empty()?"not-found":tailnet_error)<<"\n";
-                }
-            }else if(debug_enabled())std::cerr<<"OPAL discovery=tailnet skip reason=tailscale0-unavailable\n";
-            if(bootstrap==BootstrapPath::Unset&&route==RoutePolicy::Tailscale){set_error(local_tailnet.empty()?"forced Tailscale route unavailable":"host not found on Tailscale");return false;}
-        }
-
-        if(bootstrap==BootstrapPath::Unset&&(route==RoutePolicy::Auto||route==RoutePolicy::Rendezvous||route==RoutePolicy::Relay)){
-            bootstrap=BootstrapPath::Rendezvous;const auto config=default_rendezvous_config();if(debug_enabled())std::cerr<<"OPAL discovery=rendezvous endpoint="<<config.host<<":"<<config.port<<"\n";RendezvousClient rendezvous;
-            const std::string prefix=route==RoutePolicy::Auto?"host not found on LAN or Tailscale; ":std::string{};
-            if(!rendezvous.open(config)){set_error(prefix+"OPAL rendezvous service unreachable at "+config.host+":"+std::to_string(config.port));return false;}
-            std::string connect_error;if(!rendezvous.introduce(options.rendezvous_id,options.client_public_key,intro,connect_error)){if(rendezvous_timeout(connect_error))set_error(prefix+"OPAL rendezvous service did not respond at "+config.host+":"+std::to_string(config.port));else set_error(prefix+(connect_error.empty()?std::string("OPAL host is offline"):connect_error));return false;}
-            if(route==RoutePolicy::Auto||route==RoutePolicy::Relay){
-                RelayAllocation relay;std::string relay_error;
-                if(rendezvous.request_relay(intro.session_id,options.client_public_key,options.client_private_key_path,relay,relay_error))relay_fallback=PeerRelayFallback{relay.endpoint,relay.allocation_id,RelayRole::Client};
-                else if(route==RoutePolicy::Relay){set_error("OPAL relay unavailable"+(relay_error.empty()?std::string{}:std::string(": ")+relay_error));return false;}
-                else if(debug_enabled())std::cerr<<"OPAL relay=unavailable reason="<<(relay_error.empty()?"not-allocated":relay_error)<<"\n";
-            }
-            socket=rendezvous.take_socket();if(socket.fd<0){set_error("rendezvous did not preserve peer socket");return false;}
-        }
-        if(bootstrap==BootstrapPath::Unset){set_error("requested OPAL route unavailable");return false;}
+        if(!found.socket.valid()){set_error(candidates.empty()?"no Tailscale peers available":(discovery_error.empty()?"host not found on Tailscale":discovery_error));return false;}
 
         std::string expected;{std::lock_guard<std::mutex>lock(state_mu);expected=!options.expected_host_public_key.empty()?options.expected_host_public_key:host_key_value;}
-        if(paired_state.load()&&expected.empty()){close_udp_socket(socket);set_error("saved host identity unavailable");return false;}if(!expected.empty()&&!secure_equal(expected,intro.peer_public_key)){close_udp_socket(socket);set_error("host identity changed; refusing connection");return false;}
-        const bool pairing=!paired_state.load();if(pairing&&!allow_pair){close_udp_socket(socket);set_error("paired recovery cannot fall back to pairing");return false;}
+        if(paired_state.load()&&expected.empty()){close_udp_socket(found.socket);set_error("saved host identity unavailable");return false;}
+        if(!expected.empty()&&!secure_equal(expected,found.host_public_key)){close_udp_socket(found.socket);set_error("host identity changed; refusing connection");return false;}
+
+        const bool pairing=!paired_state.load();
+        if(pairing&&!allow_pair){close_udp_socket(found.socket);set_error("paired recovery cannot fall back to pairing");return false;}
         std::string password;
-        if(pairing){password=normalize_pairing_code(options.pairing_password);if(password.empty()&&options.pairing_password_provider)password=normalize_pairing_code(options.pairing_password_provider());if(password.empty()){close_udp_socket(socket);set_error("pairing password required");return false;}options.pairing_password=password;}
+        if(pairing){password=normalize_pairing_code(options.pairing_password);if(password.empty()&&options.pairing_password_provider)password=normalize_pairing_code(options.pairing_password_provider());if(password.empty()){close_udp_socket(found.socket);set_error("pairing password required");return false;}options.pairing_password=password;}
 
         auto next_receiver=std::make_unique<VideoReceiver>();auto next_peer=std::make_unique<PeerSession>();PeerSession*peer_ptr=next_peer.get();VideoReceiver*receiver_ptr=next_receiver.get();
-        PeerSessionOptions peer_options;peer_options.client_side=true;peer_options.socket=socket;peer_options.peer=intro.peer_observed;
-        if(route==RoutePolicy::Relay&&relay_fallback){peer_options.peer=relay_fallback->endpoint;peer_options.relay=*relay_fallback;peer_options.direct_handshake_timeout_ms=1;}
-        else{
-            if(route==RoutePolicy::Auto&&bootstrap==BootstrapPath::Rendezvous&&!intro.peer_local.host.empty()&&intro.peer_local.port)peer_options.lan_peer=intro.peer_local;
-            if(route==RoutePolicy::Auto&&relay_fallback)peer_options.relay=*relay_fallback;
-            if(bootstrap==BootstrapPath::Tailnet)peer_options.direct_handshake_timeout_ms=kTailnetPeerHandshakeTimeoutMs;
-        }
-        peer_options.handshake.rendezvous_id=intro.rendezvous_id;peer_options.handshake.session_id=intro.session_id;peer_options.handshake.generation=1;peer_options.handshake.client_identity=options.client_public_key;peer_options.handshake.host_identity=intro.peer_public_key;peer_options.handshake.client_nonce=intro.local_nonce;peer_options.handshake.host_nonce=intro.peer_nonce;peer_options.handshake.auth_binding=pairing?"pairing":"paired";peer_options.identity_private_key=options.client_private_key_path;peer_options.pairing_password=password;
+        PeerSessionOptions peer_options;peer_options.client_side=true;peer_options.socket=found.socket;peer_options.peer=found.host;peer_options.handshake_timeout_ms=kTailnetPeerHandshakeTimeoutMs;peer_options.handshake.connection_id=found.connection_id;peer_options.handshake.session_id=found.session_id;peer_options.handshake.generation=1;peer_options.handshake.client_identity=options.client_public_key;peer_options.handshake.host_identity=found.host_public_key;peer_options.handshake.client_nonce=found.client_nonce;peer_options.handshake.host_nonce=found.host_nonce;peer_options.handshake.auth_binding=pairing?"pairing":"paired";peer_options.identity_private_key=options.client_private_key_path;peer_options.pairing_password=password;
         peer_options.reliable_input=[this,receiver_ptr](const std::string&line){if(line.rfind("HOST_META ",0)==0){parse_host_meta(line);return;}if(line.rfind("CLIP ",0)==0){if(options.clipboard_control)options.clipboard_control(line);return;}if(line.rfind("MEDIA_ERROR ",0)==0){set_error(line.substr(12));return;}receiver_ptr->handle_control_line(line);};
-        peer_options.media_datagram=[receiver_ptr](std::span<const std::uint8_t>wire){receiver_ptr->accept_datagram(wire);};
-        peer_options.media_inline=true;
+        peer_options.media_datagram=[receiver_ptr](std::span<const std::uint8_t>wire){receiver_ptr->accept_datagram(wire);};peer_options.media_inline=true;
         std::string peer_error;if(!next_peer->start(std::move(peer_options),peer_error)){set_error(peer_error.empty()?"peer session failed":peer_error);return false;}
-        if(!next_receiver->start_native(next_peer->media_keys(),next_peer->session_id(),gen,[peer_ptr](const std::string&line){return peer_ptr->send_input(line);})){
-            next_peer->stop();set_error("could not start native video receiver");return false;
-        }
+        if(!next_receiver->start_native(next_peer->media_keys(),next_peer->session_id(),gen,[peer_ptr](const std::string&line){return peer_ptr->send_input(line);})){next_peer->stop();set_error("could not start native video receiver");return false;}
         const int debug=debug_enabled()?1:0;const std::string ready="MEDIA_RECEIVER_READY "+std::to_string(gen)+" "+std::to_string(options.stream.max_width)+" "+std::to_string(options.stream.max_height)+" "+std::to_string(options.stream.fps)+" "+std::to_string(debug);if(!next_peer->send_input(ready)){next_receiver->stop();next_peer->stop();set_error("could not announce media receiver readiness");return false;}
-        {std::lock_guard<std::mutex>lock(state_mu);host_key_value=intro.peer_public_key;options.expected_host_public_key=intro.peer_public_key;if(bootstrap==BootstrapPath::Lan)path_value="lan-direct";else if(bootstrap==BootstrapPath::Tailnet)path_value="tailnet-direct";else if(route==RoutePolicy::Rendezvous)path_value="rendezvous-direct";else path_value=next_peer->path_name();error.clear();}
-        paired_state.store(true);generation.store(gen);{std::lock_guard<std::mutex>lock(session_mu);peer=std::move(next_peer);receiver=std::move(next_receiver);}if(debug_enabled())std::cerr<<"OPAL network path="<<path_value<<" session="<<intro.session_id.substr(0,8)<<"... media_generation="<<gen<<"\n";return true;
+        {std::lock_guard<std::mutex>lock(state_mu);host_key_value=found.host_public_key;options.expected_host_public_key=found.host_public_key;path_value=next_peer->path_name();error.clear();}
+        paired_state.store(true);generation.store(gen);{std::lock_guard<std::mutex>lock(session_mu);peer=std::move(next_peer);receiver=std::move(next_receiver);}if(debug_enabled())std::cerr<<"OPAL network path="<<path_value<<" session="<<found.session_id.substr(0,8)<<"... media_generation="<<gen<<"\n";return true;
     }
 
-    std::string unhealthy_reason(){
-        std::lock_guard<std::mutex>lock(session_mu);
-        if(!peer)return "peer-missing";
-        if(!peer->running()){auto why=peer->last_error();return why.empty()?"peer-stopped":why;}
-        if(!receiver)return "receiver-missing";
-        if(receiver->failed())return std::string("receiver-")+receiver_failure_name(receiver->failure_reason());
-        return{};
-    }
-    bool current_healthy(){return unhealthy_reason().empty();}
-    void monitor(){
-        while(run.load()){
-            std::this_thread::sleep_for(100ms);if(!run.load())break;
-            auto reason=unhealthy_reason();if(reason.empty())continue;
-            const auto failed_generation=static_cast<std::uint32_t>(generation.load());set_error(reason);
-            if(debug_enabled())std::cerr<<"OPAL generation="<<failed_generation<<" unhealthy reason="<<reason<<"\n";
-            teardown_current();bool restored=false;
-            for(int attempt=0;attempt<5&&run.load();++attempt){const auto next=failed_generation+1;if(connect_generation(next,false)){restored=true;if(debug_enabled())std::cerr<<"OPAL peer session recovered media_generation="<<next<<" path="<<path_value<<"\n";break;}std::this_thread::sleep_for(std::chrono::milliseconds(250*(1<<std::min(attempt,4))));}
-            if(!restored){run.store(false);break;}
-        }
-    }
+    std::string unhealthy_reason(){std::lock_guard<std::mutex>lock(session_mu);if(!peer)return "peer-missing";if(!peer->running()){auto why=peer->last_error();return why.empty()?"peer-stopped":why;}if(!receiver)return "receiver-missing";if(receiver->failed())return std::string("receiver-")+receiver_failure_name(receiver->failure_reason());return{};}
+    void monitor(){while(run.load()){std::this_thread::sleep_for(100ms);if(!run.load())break;auto reason=unhealthy_reason();if(reason.empty())continue;const auto failed_generation=static_cast<std::uint32_t>(generation.load());set_error(reason);if(debug_enabled())std::cerr<<"OPAL generation="<<failed_generation<<" unhealthy reason="<<reason<<"\n";teardown_current();bool restored=false;for(int attempt=0;attempt<5&&run.load();++attempt){const auto next=failed_generation+1;if(connect_generation(next,false)){restored=true;if(debug_enabled())std::cerr<<"OPAL peer session recovered media_generation="<<next<<" path="<<path_value<<"\n";break;}std::this_thread::sleep_for(std::chrono::milliseconds(250*(1<<std::min(attempt,4))));}if(!restored){run.store(false);break;}}}
 
-    bool start(){if(run.load())return true;if(options.rendezvous_id.empty()||options.client_public_key.empty()||options.client_private_key_path.empty()){set_error("invalid native session configuration");return false;}run.store(true);if(!connect_generation(1,true)){run.store(false);teardown_current();return false;}monitor_thread=std::thread([this]{monitor();});return true;}
+    bool start(){if(run.load())return true;if(options.connection_id.empty()||options.client_public_key.empty()||options.client_private_key_path.empty()){set_error("invalid Tailscale session configuration");return false;}run.store(true);if(!connect_generation(1,true)){run.store(false);teardown_current();return false;}monitor_thread=std::thread([this]{monitor();});return true;}
     void stop(){const bool was=run.exchange(false);if(monitor_thread.joinable())monitor_thread.join();teardown_current();if(!was)return;}
     bool send_input(const std::string&command){if(command.empty()||!run.load())return false;std::lock_guard<std::mutex>lock(session_mu);if(!peer||!peer->running())return false;return pointer_command(command)?peer->send_pointer(command):peer->send_input(command);}
     std::uint64_t reliable_pending()const{std::lock_guard<std::mutex>lock(session_mu);return peer?peer->reliable_pending():0;}
