@@ -42,20 +42,6 @@ bool sdl_video_available(std::string &driver)
     return !driver.empty();
 }
 
-bool macos_active_display_available()
-{
-    std::uint32_t count = 0;
-    return CGGetActiveDisplayList(0, nullptr, &count) == kCGErrorSuccess && count > 0;
-}
-
-bool macos_virtual_display_runtime_available()
-{
-    return NSClassFromString(@"CGVirtualDisplayDescriptor") != Nil &&
-           NSClassFromString(@"CGVirtualDisplay") != Nil &&
-           NSClassFromString(@"CGVirtualDisplaySettings") != Nil &&
-           NSClassFromString(@"CGVirtualDisplayMode") != Nil;
-}
-
 bool videotoolbox_h264_hardware_encoder_available()
 {
     CFArrayRef encoders = nullptr;
@@ -253,22 +239,14 @@ void write_default_config(const Paths &paths)
     config.set("video", "fullscreen", "true");
     config.set("audio", "enabled", "true");
     config.set("network", "mode", "opal-native");
-    config.set("network", "transport", "rendezvous+direct-udp+relay");
+    config.set("network", "transport", "tailscale");
     (void)config.save(paths.config);
 }
 }
 
 int ensure_tailnet()
 {
-    if (!tailscale_cli_available()) {
-        std::cerr << "Tailscale is not installed; continuing with LAN/rendezvous/relay connectivity.\n";
-        return 1;
-    }
-    if (!tailscale_connected()) {
-        std::cerr << "Tailscale is installed but not connected. Run 'sudo tailscale up' (Homebrew daemon) or connect Tailscale.app, then retry.\n";
-        return 1;
-    }
-    return 0;
+    return require_tailscale();
 }
 
 int init()
@@ -303,29 +281,20 @@ int doctor()
     if (CGPreflightScreenCaptureAccess()) show_doctor_item("Screen Recording permission", true);
     else show_doctor_failure("Screen Recording permission", PlatformComponent::Capture, PlatformFailure::PermissionDenied);
 
-    const bool physical_display = macos_active_display_available();
-    const bool virtual_runtime = macos_virtual_display_runtime_available();
-    show_doctor_item("Active CoreGraphics display", physical_display);
-    if (virtual_runtime) show_doctor_item("CGVirtualDisplay runtime", true);
-    else show_doctor_failure("CGVirtualDisplay runtime", PlatformComponent::Capture, PlatformFailure::Unsupported);
-    if (physical_display || virtual_runtime)
-        show_doctor_item("Headless display fallback ready", true);
-    else
-        show_doctor_failure("Headless display fallback", PlatformComponent::Capture, PlatformFailure::Unavailable);
-
     const auto input_status = input_helper_status();
     if (!input_status.present) show_doctor_failure("Accessibility input helper missing", PlatformComponent::Input, PlatformFailure::DependencyMissing);
     else if (!input_status.authorized) show_doctor_failure("Accessibility input helper", PlatformComponent::Input, PlatformFailure::PermissionDenied);
     else show_doctor_item("Accessibility input helper", true);
 
-    if (tailscale_connected()) show_doctor_item("Tailscale WAN underlay connected", true);
-    else if (tailscale_cli_available()) show_doctor_failure("Tailscale WAN underlay installed but disconnected", PlatformComponent::Datagram, PlatformFailure::Unavailable);
-    else show_doctor_failure("Tailscale WAN underlay", PlatformComponent::Datagram, PlatformFailure::DependencyMissing);
+    if (tailscale_connected()) show_doctor_item("Tailscale connected", true);
+    else if (tailscale_cli_available()) show_doctor_failure("Tailscale installed but disconnected", PlatformComponent::Datagram, PlatformFailure::Unavailable);
+    else show_doctor_failure("Tailscale required", PlatformComponent::Datagram, PlatformFailure::DependencyMissing);
 
     show_doctor_item("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
     show_doctor_item("~/.opal initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=nspasteboard\n";
-    std::cout << "[info] host capture=screencapturekit display=coregraphics-physical+virtual encoder=videotoolbox-hardware-lowlatency input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
+    std::cout << "[info] host capture=screencapturekit encoder=videotoolbox-hardware-lowlatency input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
+    std::cout << "[info] networking=tailscale-only + OPAL authenticated encrypted peer session\n";
     return 0;
 }
 
