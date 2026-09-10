@@ -441,7 +441,7 @@ install: all
 		[ -n "$$inf" ] || { echo 'Could not locate built OPAL display-driver INF.' >&2; exit 1; }; \
 		installer_win="$$(cygpath -w "$(WINDOWS_IDD_INSTALLER)")"; \
 		inf_win="$$(cygpath -w "$$inf")"; \
-		if OPAL_IDD_INSTALLER="$$installer_win" OPAL_IDD_INF="$$inf_win" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$p=Start-Process -FilePath $$env:OPAL_IDD_INSTALLER -ArgumentList @("install", $$env:OPAL_IDD_INF) -Verb RunAs -Wait -PassThru; exit $$p.ExitCode'; then \
+		if OPAL_IDD_INSTALLER="$$installer_win" OPAL_IDD_INF="$$inf_win" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$p=Start-Process -FilePath $$env:OPAL_IDD_INSTALLER -ArgumentList @("install") -Verb RunAs -Wait -PassThru; exit $$p.ExitCode'; then \
 			:; \
 		else \
 			rc=$$?; \
