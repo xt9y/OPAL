@@ -154,7 +154,7 @@ Commands:
   opal new                                  Run OPAL setup / add another host
   opal remove                               Remove a saved host
   opal stop                                 Stop OPAL host services
-  opal restart                              Restart OPAL services
+  opal restart                              Restart host service or reconnect client
   opal clean                                Remove OPAL state
   opal doctor                               Check local OPAL requirements
   opal version                              Show the OPAL version
@@ -236,7 +236,9 @@ int main(int argc, char** argv)
 #if defined(_WIN32)
         if (!windows_prepare_host_lifecycle()) return 1;
 #endif
-        return opal::restart_services();
+        const int stopped = opal::host_service(false);
+        if (stopped != 0) return stopped;
+        return opal::interactive_run();
     }
     if (action == "clean" && argc == 2) {
 #if defined(_WIN32)
