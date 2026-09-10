@@ -62,6 +62,7 @@ struct VideoCapture::Impl {
     bool terminal = false;
     bool audio_requested = false;
     bool video_frame_seen = false;
+    bool prefer_virtual = false;
     std::chrono::steady_clock::time_point last_video_frame{};
     std::string error;
 
@@ -187,6 +188,9 @@ struct VideoCapture::Impl {
         if (physical_display_failed_after_capture_gap()) {
             if (debug_enabled())
                 std::cerr << "OPAL physical display produced no usable video; preferring virtual display on restart\n";
+#if defined(_WIN32)
+            prefer_virtual = true;
+#endif
             request_virtual_display_fallback();
             mark_terminal("physical host display became unavailable");
             return false;
@@ -195,6 +199,7 @@ struct VideoCapture::Impl {
         if (video && video->ended()) {
             if (display && !display->target().virtual_display()) {
 #if defined(_WIN32)
+                prefer_virtual = true;
                 request_virtual_display_fallback();
 #else
                 if (!display->healthy()) request_virtual_display_fallback();
@@ -225,6 +230,10 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     impl_->video_frame_seen = false;
     impl_->last_video_frame = {};
 
+#if defined(_WIN32)
+    if (impl_->prefer_virtual) request_virtual_display_fallback();
+#endif
+
     impl_->display = std::make_unique<HostDisplayManager>();
     if (!impl_->display->prepare(stream)) {
         impl_->capture_error();
@@ -232,11 +241,15 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
         impl_->display.reset();
         return false;
     }
+#if defined(_WIN32)
+    if (impl_->display->target().virtual_display()) impl_->prefer_virtual = true;
+#endif
 
     if (!impl_->start_video(stream, bitrate_kbps)) {
 #if defined(_WIN32)
         const bool failed_physical = impl_->display && !impl_->display->target().virtual_display();
         if (failed_physical) {
+            impl_->prefer_virtual = true;
             impl_->display->stop();
             impl_->display.reset();
             impl_->error.clear();
