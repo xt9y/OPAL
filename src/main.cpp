@@ -146,7 +146,7 @@ static void help()
     std::cout << R"(OPAL - performance-first Linux + Apple Silicon macOS + Windows remote desktop
 
 Commands:
-  opal                                      Wake and connect at up to 1080p / local refresh
+  opal                                      Wake and connect at up to 1080p / 60 fps
   opal [--mode max|1080p|1440p|4k] [--fps 15-240]
                                             Connect with temporary stream overrides
   opal select                               Select a saved host and show connection details
@@ -162,7 +162,7 @@ Commands:
 
 Tailscale is required on both computers. OPAL establishes its own authenticated,
 end-to-end encrypted direct session over the tailnet with no public fallback service.
-Default FPS follows the client display refresh up to 240 Hz; --fps always overrides it.
+Default stream target is 1920x1080 at 60 fps; --mode and --fps override it.
 Stream overrides apply only to the current connection. Resolution modes never upscale the host.
 Config lives in the platform OPAL data directory (or OPAL_HOME for testing).
 Release remote control with Ctrl+Alt+Shift+W; quit with Ctrl+Alt+Shift+Q.

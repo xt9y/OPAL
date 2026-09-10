@@ -7,7 +7,7 @@ struct StreamOptions {
     int max_width=1920;
     int max_height=1080;
     int fps=60;
-    bool automatic_fps=true;
+    bool automatic_fps=false;
 };
 
 StreamOptions default_stream_options();
