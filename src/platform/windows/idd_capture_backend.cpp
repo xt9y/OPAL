@@ -31,6 +31,24 @@ std::uint64_t monotonic_us()
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+std::uint64_t qpc_capture_time_us(std::uint64_t frame_qpc, std::uint64_t callback_us,
+                                  CaptureTimestampQuality& quality)
+{
+    quality = CaptureTimestampQuality::Estimated;
+    if (frame_qpc == 0) return callback_us;
+    LARGE_INTEGER now{};
+    LARGE_INTEGER frequency{};
+    if (!QueryPerformanceCounter(&now) || !QueryPerformanceFrequency(&frequency) ||
+        frequency.QuadPart <= 0 || now.QuadPart < 0 ||
+        static_cast<std::uint64_t>(now.QuadPart) < frame_qpc)
+        return callback_us;
+    const auto delta = static_cast<long double>(static_cast<std::uint64_t>(now.QuadPart) - frame_qpc);
+    const auto age_us = delta * 1000000.0L / static_cast<long double>(frequency.QuadPart);
+    if (age_us < 0.0L || age_us > static_cast<long double>(callback_us)) return callback_us;
+    quality = CaptureTimestampQuality::Exact;
+    return callback_us - static_cast<std::uint64_t>(age_us);
+}
+
 template <class T>
 void release_com(T*& value)
 {
@@ -51,6 +69,7 @@ public:
     {
         stop();
         error_ = {};
+        timestamp_quality_ = CaptureTimestampQuality::Estimated;
 
         driver_ = CreateFileW(idd::kDevicePath, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
@@ -130,12 +149,17 @@ public:
                 context_->UpdateSubresource(texture_, 0, nullptr, pixels, header->stride, 0);
                 last_sequence_ = header->sequence;
 
+                const auto callback_us = monotonic_us();
+                CaptureTimestampQuality frame_quality = CaptureTimestampQuality::Estimated;
+                const auto capture_us = qpc_capture_time_us(header->qpc, callback_us, frame_quality);
+                timestamp_quality_ = frame_quality;
+
                 texture_->AddRef();
                 frame.kind = NativeVideoFrameKind::Opaque;
                 frame.width = static_cast<int>(header->width);
                 frame.height = static_cast<int>(header->height);
                 frame.pixel_format = static_cast<std::uint32_t>(DXGI_FORMAT_B8G8R8A8_UNORM);
-                frame.capture_time_us = monotonic_us();
+                frame.capture_time_us = capture_us;
                 frame.opaque = texture_;
                 frame.owner = std::shared_ptr<void>(texture_, [](void* value) {
                     static_cast<ID3D11Texture2D*>(value)->Release();
@@ -168,11 +192,12 @@ public:
         }
         width_ = height_ = 0;
         last_sequence_ = 0;
+        timestamp_quality_ = CaptureTimestampQuality::Estimated;
     }
 
     CaptureTimestampQuality timestamp_quality() const override
     {
-        return CaptureTimestampQuality::Estimated;
+        return timestamp_quality_;
     }
 
     std::string backend_name() const override
@@ -221,6 +246,7 @@ private:
     std::uint32_t height_ = 0;
     std::int64_t last_sequence_ = 0;
     std::vector<std::uint8_t> reply_;
+    CaptureTimestampQuality timestamp_quality_ = CaptureTimestampQuality::Estimated;
     PlatformError error_{};
 };
 
