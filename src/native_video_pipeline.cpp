@@ -1,5 +1,16 @@
 #include <opal/native_video_pipeline.hpp>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <d3d11.h>
+#endif
+
 #include <chrono>
 #include <utility>
 
@@ -17,6 +28,105 @@ std::uint64_t monotonic_us()
 {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+template <class T>
+void release_windows_com(T*& value)
+{
+    if (value) value->Release();
+    value = nullptr;
+}
+
+struct WindowsIddCopyCache {
+    ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
+    ID3D11Texture2D* texture = nullptr;
+    UINT width = 0;
+    UINT height = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+    ~WindowsIddCopyCache() { reset(); }
+
+    void reset()
+    {
+        release_windows_com(texture);
+        release_windows_com(context);
+        release_windows_com(device);
+        width = 0;
+        height = 0;
+        format = DXGI_FORMAT_UNKNOWN;
+    }
+
+    bool copy_and_release(NativeVideoFrame& frame, PlatformError& error)
+    {
+        auto* source = static_cast<ID3D11Texture2D*>(frame.opaque);
+        if (!source) return false;
+
+        D3D11_TEXTURE2D_DESC source_desc{};
+        source->GetDesc(&source_desc);
+        ID3D11Device* source_device = nullptr;
+        source->GetDevice(&source_device);
+        if (!source_device) {
+            error = {PlatformComponent::Capture, PlatformFailure::InvalidState,
+                     "OPAL IDD DXGI frame has no D3D11 device", true};
+            return false;
+        }
+
+        const bool recreate = !device || device != source_device || !texture ||
+                              width != source_desc.Width || height != source_desc.Height ||
+                              format != source_desc.Format;
+        if (recreate) {
+            reset();
+            device = source_device;
+            source_device = nullptr;
+            device->GetImmediateContext(&context);
+            if (!context) {
+                error = {PlatformComponent::Capture, PlatformFailure::InvalidState,
+                         "OPAL IDD D3D11 device has no immediate context", true};
+                reset();
+                return false;
+            }
+
+            D3D11_TEXTURE2D_DESC copy_desc{};
+            copy_desc.Width = source_desc.Width;
+            copy_desc.Height = source_desc.Height;
+            copy_desc.MipLevels = 1;
+            copy_desc.ArraySize = 1;
+            copy_desc.Format = source_desc.Format;
+            copy_desc.SampleDesc.Count = 1;
+            copy_desc.Usage = D3D11_USAGE_DEFAULT;
+            copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            const HRESULT hr = device->CreateTexture2D(&copy_desc, nullptr, &texture);
+            if (FAILED(hr) || !texture) {
+                error = {PlatformComponent::Capture, PlatformFailure::OsError,
+                         "could not allocate GPU copy for OPAL IDD frame", true};
+                reset();
+                return false;
+            }
+            width = source_desc.Width;
+            height = source_desc.Height;
+            format = source_desc.Format;
+        }
+        release_windows_com(source_device);
+
+        context->CopyResource(texture, source);
+        texture->AddRef();
+        auto copy_owner = std::shared_ptr<void>(texture, [](void* value) {
+            static_cast<ID3D11Texture2D*>(value)->Release();
+        });
+
+        frame.opaque = texture;
+        frame.owner = std::move(copy_owner);
+        return true;
+    }
+};
+
+bool detach_idd_duplication_frame(CaptureBackend* capture, NativeVideoFrame& frame,
+                                  PlatformError& error)
+{
+    if (!capture || capture->backend_name() != "iddcx-targeted-dxgi+d3d11") return true;
+    static thread_local WindowsIddCopyCache cache;
+    return cache.copy_and_release(frame, error);
 }
 #endif
 
@@ -37,6 +147,7 @@ bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps, c
 {
     stop();
     terminal_ = false;
+    pipeline_error_ = {};
     if (!capture_ || !encoder_) return false;
     if (!capture_->start(stream, target)) {
         terminal_ = static_cast<bool>(capture_->last_platform_error());
@@ -51,10 +162,6 @@ bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps, c
     config_revision_ = 0;
     first_frame_ = true;
     running_ = true;
-
-    // The sender starts with an invalid H.264 dependency chain. Force the very
-    // first encoded frame to be an IDR so a static desktop cannot sit forever
-    // waiting for a later desktop update before the decoder can start.
     encoder_->request_idr();
     return true;
 }
@@ -72,9 +179,11 @@ bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
         return false;
     }
 #if defined(_WIN32)
-    // Desktop Duplication's first LastPresentTime can describe when unchanged
-    // pixels were last presented, not when OPAL acquired the current desktop
-    // snapshot. Do not classify that bootstrap snapshot as pipeline backlog.
+    if (!detach_idd_duplication_frame(capture_.get(), frame, pipeline_error_)) {
+        terminal_ = true;
+        running_ = false;
+        return false;
+    }
     if (first_frame_) frame.capture_time_us = monotonic_us();
 #endif
     first_frame_ = false;
@@ -118,6 +227,7 @@ void NativeVideoPipeline::stop()
     config_revision_ = 0;
     terminal_ = false;
     first_frame_ = true;
+    pipeline_error_ = {};
 }
 
 const MediaConfig& NativeVideoPipeline::config() const
@@ -143,6 +253,7 @@ std::string NativeVideoPipeline::backend_name() const
 
 PlatformError NativeVideoPipeline::last_platform_error() const
 {
+    if (pipeline_error_) return pipeline_error_;
     if (encoder_) {
         auto error = encoder_->last_platform_error();
         if (error) return error;
