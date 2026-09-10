@@ -34,6 +34,22 @@ bool wayland_socket_available()
     return std::filesystem::exists(socket, error) && !error;
 }
 
+void enable_virtual_input(const DisplayMode& mode)
+{
+    setenv("OPAL_KWIN_VIRTUAL_INPUT", "1", 1);
+    const auto width = std::to_string(mode.width);
+    const auto height = std::to_string(mode.height);
+    setenv("OPAL_KWIN_VIRTUAL_WIDTH", width.c_str(), 1);
+    setenv("OPAL_KWIN_VIRTUAL_HEIGHT", height.c_str(), 1);
+}
+
+void disable_virtual_input()
+{
+    unsetenv("OPAL_KWIN_VIRTUAL_INPUT");
+    unsetenv("OPAL_KWIN_VIRTUAL_WIDTH");
+    unsetenv("OPAL_KWIN_VIRTUAL_HEIGHT");
+}
+
 class LinuxDisplayBackend final : public DisplayBackend {
 public:
     ~LinuxDisplayBackend() override { reset(); }
@@ -56,8 +72,6 @@ public:
                 return true;
             }
             kwin_.reset();
-            // A non-KWin Wayland compositor is still a usable graphical
-            // desktop. Its normal portal capture path remains authoritative.
             if (!environment_value("KDE_FULL_SESSION") && !environment_value("KDE_SESSION_VERSION")) {
                 target = {};
                 target.kind = DisplayKind::Physical;
@@ -100,12 +114,13 @@ public:
             target.pipewire_node = node;
             target.owned_by_opal = true;
             backend_ = "kwin-virtual-output";
+            enable_virtual_input(mode);
+            virtual_input_enabled_ = true;
             return true;
         }
 
         session_ = std::make_unique<HeadlessSession>();
         if (!session_->start(mode)) return fail(session_->last_error());
-
         if (!connect_managed_kwin()) return fail("managed KWin started but its screencast interface did not become ready");
 
         std::uint32_t node = 0;
@@ -122,6 +137,8 @@ public:
         target.pipewire_node = node;
         target.owned_by_opal = true;
         backend_ = "kwin-managed-plasma";
+        enable_virtual_input(mode);
+        virtual_input_enabled_ = true;
         return true;
     }
 
@@ -145,6 +162,8 @@ public:
             target.pipewire_node = node;
             target.owned_by_opal = true;
             backend_ = "kwin-managed-plasma";
+            enable_virtual_input(mode);
+            virtual_input_enabled_ = true;
             return true;
         }
 
@@ -160,6 +179,8 @@ public:
         target.pipewire_node = node;
         target.owned_by_opal = true;
         backend_ = "kwin-virtual-output";
+        enable_virtual_input(mode);
+        virtual_input_enabled_ = true;
         return true;
     }
 
@@ -193,7 +214,8 @@ private:
             kwin_.reset();
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         } while (std::chrono::steady_clock::now() < deadline);
-        if (!last_error.empty()) error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable, last_error, false};
+        if (!last_error.empty())
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable, last_error, false};
         return false;
     }
 
@@ -208,6 +230,10 @@ private:
 
     void reset_resources()
     {
+        if (virtual_input_enabled_) {
+            disable_virtual_input();
+            virtual_input_enabled_ = false;
+        }
         if (kwin_) kwin_->close();
         kwin_.reset();
         if (session_) session_->stop();
@@ -224,6 +250,7 @@ private:
     std::unique_ptr<HeadlessSession> session_;
     std::string backend_ = "linux-display";
     PlatformError error_{};
+    bool virtual_input_enabled_ = false;
 };
 
 }
