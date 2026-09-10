@@ -61,6 +61,7 @@ struct VideoCapture::Impl {
     bool running = false;
     bool terminal = false;
     bool audio_requested = false;
+    bool video_frame_seen = false;
     std::chrono::steady_clock::time_point last_video_frame{};
     std::string error;
 
@@ -145,7 +146,7 @@ struct VideoCapture::Impl {
         running = false;
     }
 
-    bool physical_display_unhealthy_after_capture_gap()
+    bool physical_display_failed_after_capture_gap()
     {
         if (!display || display->target().virtual_display()) return false;
         const auto now = std::chrono::steady_clock::now();
@@ -154,6 +155,7 @@ struct VideoCapture::Impl {
             return false;
         }
         if (now - last_video_frame < kPhysicalDisplayHealthDelay) return false;
+        if (!video_frame_seen) return true;
         return !display->healthy();
     }
 
@@ -162,6 +164,7 @@ struct VideoCapture::Impl {
         recycle_storage();
 
         if (video && video->next(storage, video_wait_ms)) {
+            video_frame_seen = true;
             last_video_frame = std::chrono::steady_clock::now();
             return make_view(view);
         }
@@ -181,9 +184,9 @@ struct VideoCapture::Impl {
             return false;
         }
 
-        if (physical_display_unhealthy_after_capture_gap()) {
+        if (physical_display_failed_after_capture_gap()) {
             if (debug_enabled())
-                std::cerr << "OPAL physical display unavailable after capture starvation; preferring virtual display on restart\n";
+                std::cerr << "OPAL physical display produced no usable video; preferring virtual display on restart\n";
             request_virtual_display_fallback();
             mark_terminal("physical host display became unavailable");
             return false;
@@ -219,6 +222,7 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     impl_->config_revision = 0;
     impl_->video_config_revision = 0;
     impl_->audio_config_revision = 0;
+    impl_->video_frame_seen = false;
     impl_->last_video_frame = {};
 
     impl_->display = std::make_unique<HostDisplayManager>();
@@ -395,6 +399,7 @@ void VideoCapture::stop()
     impl_->config_revision = 0;
     impl_->video_config_revision = 0;
     impl_->audio_config_revision = 0;
+    impl_->video_frame_seen = false;
     impl_->last_video_frame = {};
     impl_->terminal = false;
 }
