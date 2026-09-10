@@ -38,6 +38,7 @@ private:
     bool running_ = false;
     bool terminal_ = false;
     bool first_frame_ = true;
+    PlatformError pipeline_error_{};
 };
 
 }
