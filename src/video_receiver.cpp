@@ -198,14 +198,14 @@ struct VideoReceiver::Impl{
 
     void control_tick(){
         const auto now=Clock::now();
-        if(last_feedback.time_since_epoch().count()==0||now-last_feedback>=std::chrono::milliseconds(100)){
+        if(last_feedback.time_since_epoch().count()==0||now-last_feedback>=std::chrono::milliseconds(25)){
             VideoFeedbackSample s;s.highest_sequence=highest.load();
             {std::lock_guard<std::mutex>lock(sequence_mu);s.received=interval_received;if(interval_received&&interval_first&&interval_highest>=interval_first){const auto expected=interval_highest-interval_first+1;s.lost=static_cast<std::uint32_t>(std::min<std::uint64_t>(0xffffffffULL,expected>interval_received?expected-interval_received:0));feedback_cursor=interval_highest+1;}interval_first=interval_highest=0;interval_received=0;}
             s.rtt_us=current_rtt_us.load();s.decode_age_us=last_decode_age_us.load();if(control_send)control_send(video_feedback_line(generation,s));const auto total=static_cast<std::uint64_t>(s.received)+s.lost;
             {std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.capture_to_packet_ms=static_cast<double>(host_capture_to_packet_us.load())/1000.0;telemetry.bitrate_kbps=host_active_kbps.load();telemetry.loss_percent=total?100.0*s.lost/static_cast<double>(total):0.0;telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();}
             last_feedback=now;
         }
-        if(last_clock.time_since_epoch().count()==0||now-last_clock>=std::chrono::seconds(1)){if(control_send)control_send(clock_sync_request_line(generation,static_cast<std::int64_t>(monotonic_us())));last_clock=now;}
+        if(last_clock.time_since_epoch().count()==0||now-last_clock>=std::chrono::milliseconds(50)){if(control_send)control_send(clock_sync_request_line(generation,static_cast<std::int64_t>(monotonic_us())));last_clock=now;}
         if(debug_enabled()&&(last_debug.time_since_epoch().count()==0||now-last_debug>=std::chrono::seconds(1))){
             const auto decoded_now=decoded_frames.load(),presented_now=presented_frames.load();const double elapsed=last_debug.time_since_epoch().count()==0?0.0:std::chrono::duration<double>(now-last_debug).count();LatencyTelemetry snapshot;LatencyPercentiles net_tail,reassembly_tail,decode_tail,present_tail,total_tail;
             {std::lock_guard<std::mutex>lock(telemetry_mu);telemetry.stale_frames=stale.load();telemetry.video_queue_depth=video_backlog_debug.load();telemetry.skipped_present_frames=skipped_present_frames.load();if(elapsed>0.0){telemetry.decoded_fps=static_cast<double>(decoded_now-last_debug_decoded)/elapsed;telemetry.presented_fps=static_cast<double>(presented_now-last_debug_presented)/elapsed;}snapshot=telemetry;net_tail=network_latency.snapshot();reassembly_tail=reassembly_latency.snapshot();decode_tail=decode_latency.snapshot();present_tail=present_latency.snapshot();total_tail=total_latency.snapshot();}
