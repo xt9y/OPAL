@@ -41,6 +41,60 @@ id class_alloc(const char* name)
     return reinterpret_cast<Fn>(objc_msgSend)(reinterpret_cast<id>(cls), sel_registerName("alloc"));
 }
 
+bool responds(id object, const char* selector)
+{
+    return object && [object respondsToSelector:sel_registerName(selector)];
+}
+
+bool set_u32(id object, const char* selector, std::uint32_t value)
+{
+    if (!responds(object, selector)) return false;
+    using Fn = void (*)(id, SEL, unsigned int);
+    reinterpret_cast<Fn>(objc_msgSend)(object, sel_registerName(selector), static_cast<unsigned int>(value));
+    return true;
+}
+
+bool set_object(id object, const char* selector, id value)
+{
+    if (!responds(object, selector)) return false;
+    using Fn = void (*)(id, SEL, id);
+    reinterpret_cast<Fn>(objc_msgSend)(object, sel_registerName(selector), value);
+    return true;
+}
+
+bool set_size(id object, const char* selector, CGSize value)
+{
+    if (!responds(object, selector)) return false;
+    using Fn = void (*)(id, SEL, CGSize);
+    reinterpret_cast<Fn>(objc_msgSend)(object, sel_registerName(selector), value);
+    return true;
+}
+
+bool set_queue(id object, dispatch_queue_t queue)
+{
+    if (!responds(object, "setDispatchQueue:")) return false;
+    using Fn = void (*)(id, SEL, dispatch_queue_t);
+    reinterpret_cast<Fn>(objc_msgSend)(object, sel_registerName("setDispatchQueue:"), queue);
+    return true;
+}
+
+bool virtual_runtime_contract(id descriptor, id settings, id mode_alloc, id display_alloc)
+{
+    return descriptor && settings && mode_alloc && display_alloc &&
+           responds(descriptor, "setVendorID:") &&
+           responds(descriptor, "setProductID:") &&
+           responds(descriptor, "setSerialNum:") &&
+           responds(descriptor, "setName:") &&
+           responds(descriptor, "setMaxPixelsWide:") &&
+           responds(descriptor, "setMaxPixelsHigh:") &&
+           responds(descriptor, "setSizeInMillimeters:") &&
+           responds(descriptor, "setDispatchQueue:") &&
+           responds(mode_alloc, "initWithWidth:height:refreshRate:") &&
+           responds(settings, "setModes:") &&
+           responds(settings, "setHiDPI:") &&
+           responds(display_alloc, "initWithDescriptor:");
+}
+
 class MacDisplayBackend final : public DisplayBackend {
 public:
     ~MacDisplayBackend() override { destroy_virtual(); }
@@ -80,30 +134,36 @@ public:
         id descriptor = class_new("CGVirtualDisplayDescriptor");
         id settings = class_new("CGVirtualDisplaySettings");
         id mode_alloc = class_alloc("CGVirtualDisplayMode");
-        if (!descriptor || !settings || !mode_alloc) {
+        id display_alloc = class_alloc("CGVirtualDisplay");
+        if (!virtual_runtime_contract(descriptor, settings, mode_alloc, display_alloc)) {
             [descriptor release];
             [settings release];
             [mode_alloc release];
-            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                      "could not allocate macOS virtual display objects", false};
+            [display_alloc release];
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "macOS CGVirtualDisplay runtime contract is incompatible", false};
             return false;
         }
 
         queue_ = dispatch_queue_create("de.xt9y.opal.virtual-display", DISPATCH_QUEUE_SERIAL);
-        if (queue_) {
-            using SetQueueFn = void (*)(id, SEL, dispatch_queue_t);
-            reinterpret_cast<SetQueueFn>(objc_msgSend)(descriptor, sel_registerName("setDispatchQueue:"), queue_);
+        bool configured = queue_ && set_queue(descriptor, queue_);
+        configured = configured && set_u32(descriptor, "setVendorID:", 0x4f50u);
+        configured = configured && set_u32(descriptor, "setProductID:", 0x414cu);
+        configured = configured && set_u32(descriptor, "setSerialNum:", 1u);
+        configured = configured && set_object(descriptor, "setName:", @"OPAL Virtual Display");
+        configured = configured && set_u32(descriptor, "setMaxPixelsWide:", 7680u);
+        configured = configured && set_u32(descriptor, "setMaxPixelsHigh:", 4320u);
+        configured = configured && set_size(descriptor, "setSizeInMillimeters:", CGSizeMake(597.0, 336.0));
+        if (!configured) {
+            [descriptor release];
+            [settings release];
+            [mode_alloc release];
+            [display_alloc release];
+            destroy_virtual();
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "macOS virtual display descriptor configuration is unsupported", false};
+            return false;
         }
-
-        [descriptor setValue:@(0x4f50u) forKey:@"vendorID"];
-        [descriptor setValue:@(0x414cu) forKey:@"productID"];
-        [descriptor setValue:@(1u) forKey:@"serialNum"];
-        [descriptor setValue:@"OPAL Virtual Display" forKey:@"name"];
-        [descriptor setValue:@(7680u) forKey:@"maxPixelsWide"];
-        [descriptor setValue:@(4320u) forKey:@"maxPixelsHigh"];
-
-        using SetSizeFn = void (*)(id, SEL, CGSize);
-        reinterpret_cast<SetSizeFn>(objc_msgSend)(descriptor, sel_registerName("setSizeInMillimeters:"), CGSizeMake(597.0, 336.0));
 
         using ModeInitFn = id (*)(id, SEL, NSUInteger, NSUInteger, CGFloat);
         id mode = reinterpret_cast<ModeInitFn>(objc_msgSend)(
@@ -112,32 +172,42 @@ public:
         if (!mode) {
             [descriptor release];
             [settings release];
+            [display_alloc release];
             destroy_virtual();
             error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                       "could not create macOS virtual display mode", false};
             return false;
         }
 
-        [settings setValue:@[mode] forKey:@"modes"];
-        [settings setValue:@(0u) forKey:@"hiDPI"];
+        const bool settings_ok = set_object(settings, "setModes:", @[mode]) &&
+                                 set_u32(settings, "setHiDPI:", 0u);
+        if (!settings_ok) {
+            [mode release];
+            [settings release];
+            [descriptor release];
+            [display_alloc release];
+            destroy_virtual();
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unsupported,
+                      "macOS virtual display settings runtime is incompatible", false};
+            return false;
+        }
 
-        id display_alloc = class_alloc("CGVirtualDisplay");
         using DisplayInitFn = id (*)(id, SEL, id);
-        virtual_display_ = display_alloc ? reinterpret_cast<DisplayInitFn>(objc_msgSend)(
-            display_alloc, sel_registerName("initWithDescriptor:"), descriptor) : nil;
+        virtual_display_ = reinterpret_cast<DisplayInitFn>(objc_msgSend)(
+            display_alloc, sel_registerName("initWithDescriptor:"), descriptor);
 
         bool applied = false;
-        if (virtual_display_) {
+        if (virtual_display_ && responds(virtual_display_, "applySettings:")) {
             using ApplyFn = BOOL (*)(id, SEL, id);
             applied = reinterpret_cast<ApplyFn>(objc_msgSend)(
                 virtual_display_, sel_registerName("applySettings:"), settings) != NO;
         }
 
         std::uint64_t display_id = 0;
-        if (applied) {
-            id value = [virtual_display_ valueForKey:@"displayID"];
-            if ([value respondsToSelector:@selector(unsignedIntValue)])
-                display_id = static_cast<std::uint64_t>([value unsignedIntValue]);
+        if (applied && responds(virtual_display_, "displayID")) {
+            using DisplayIdFn = unsigned int (*)(id, SEL);
+            display_id = static_cast<std::uint64_t>(reinterpret_cast<DisplayIdFn>(objc_msgSend)(
+                virtual_display_, sel_registerName("displayID")));
         }
 
         [mode release];
