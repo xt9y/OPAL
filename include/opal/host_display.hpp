@@ -38,5 +38,6 @@ private:
 };
 
 ActiveHostDisplay active_host_display();
+void request_virtual_display_fallback() noexcept;
 
 }
