@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -102,6 +103,21 @@ bool tailscale_cli_available()
 bool tailscale_connected()
 {
     return !active_tailscale_cli_path().empty();
+}
+
+int require_tailscale()
+{
+    if (!tailscale_cli_available()) {
+        std::cerr << "OPAL requires Tailscale.\n"
+                  << "Install: https://tailscale.com/download/windows\n"
+                  << "Run the installer, open Tailscale from the system tray, sign in, then run OPAL again.\n";
+        return 1;
+    }
+    if (!tailscale_connected()) {
+        std::cerr << "Tailscale is installed but not connected. Open Tailscale from the system tray and sign in/connect, then run OPAL again.\n";
+        return 1;
+    }
+    return 0;
 }
 
 std::vector<std::string> tailnet_peer_ipv4s()
