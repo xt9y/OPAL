@@ -58,6 +58,8 @@ struct VideoCapture::Impl {
     std::uint64_t config_revision = 0;
     std::uint64_t video_config_revision = 0;
     std::uint64_t audio_config_revision = 0;
+    StreamOptions stream_options{};
+    int bitrate_kbps = 1000;
     bool running = false;
     bool terminal = false;
     bool audio_requested = false;
@@ -127,17 +129,66 @@ struct VideoCapture::Impl {
         }
     }
 
-    bool start_video(const StreamOptions& stream, int bitrate_kbps)
+    bool start_video(const StreamOptions& stream, int bitrate)
     {
         if (!display) return false;
         const auto& target = display->target();
         video = std::make_unique<NativeVideoPipeline>(
             make_target_capture_backend(target), make_video_encoder_backend());
-        if (video->start(stream, bitrate_kbps, &target)) return true;
+        if (video->start(stream, bitrate, &target)) return true;
         capture_error();
         video.reset();
         return false;
     }
+
+#if defined(_WIN32)
+    bool switch_to_virtual_display()
+    {
+        prefer_virtual = true;
+        error.clear();
+        recycle_storage();
+
+        if (video) video->stop();
+        video.reset();
+        video_config_revision = 0;
+
+        if (display) display->stop();
+        display.reset();
+
+        request_virtual_display_fallback();
+        display = std::make_unique<HostDisplayManager>();
+        if (!display->prepare(stream_options)) {
+            capture_error();
+            if (error.empty()) error = "could not create the Windows virtual host display";
+            return false;
+        }
+        if (!display->target().virtual_display()) {
+            error = "Windows virtual fallback selected a physical display";
+            display->stop();
+            display.reset();
+            return false;
+        }
+        if (!start_video(stream_options, bitrate_kbps)) {
+            capture_error();
+            if (error.empty()) error = "Windows virtual display capture failed to start";
+            if (display) display->stop();
+            display.reset();
+            return false;
+        }
+
+        video_frame_seen = false;
+        last_video_frame = std::chrono::steady_clock::now();
+        terminal = false;
+        running = true;
+        if (debug_enabled()) {
+            const auto& target = display->target();
+            std::cerr << "OPAL switched capture to virtual display name=" << target.name
+                      << " mode=" << target.mode.width << 'x' << target.mode.height << '@'
+                      << target.mode.refresh_hz << " backend=" << video->backend_name() << '\n';
+        }
+        return true;
+    }
+#endif
 
     void mark_terminal(std::string message = {})
     {
@@ -186,21 +237,26 @@ struct VideoCapture::Impl {
         }
 
         if (physical_display_failed_after_capture_gap()) {
+#if defined(_WIN32)
+            if (debug_enabled())
+                std::cerr << "OPAL physical display produced no usable video; switching to virtual display\n";
+            if (switch_to_virtual_display()) return false;
+            mark_terminal(error.empty() ? "Windows virtual display fallback failed" : error);
+#else
             if (debug_enabled())
                 std::cerr << "OPAL physical display produced no usable video; preferring virtual display on restart\n";
-#if defined(_WIN32)
-            prefer_virtual = true;
-#endif
             request_virtual_display_fallback();
             mark_terminal("physical host display became unavailable");
+#endif
             return false;
         }
 
         if (video && video->ended()) {
             if (display && !display->target().virtual_display()) {
 #if defined(_WIN32)
-                prefer_virtual = true;
-                request_virtual_display_fallback();
+                if (switch_to_virtual_display()) return false;
+                mark_terminal(error.empty() ? "Windows virtual display fallback failed" : error);
+                return false;
 #else
                 if (!display->healthy()) request_virtual_display_fallback();
 #endif
@@ -223,6 +279,8 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     impl_->error.clear();
     impl_->terminal = false;
     impl_->audio_requested = audio;
+    impl_->stream_options = stream;
+    impl_->bitrate_kbps = std::max(1000, bitrate_kbps);
     impl_->configs.clear();
     impl_->config_revision = 0;
     impl_->video_config_revision = 0;
@@ -245,7 +303,7 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     if (impl_->display->target().virtual_display()) impl_->prefer_virtual = true;
 #endif
 
-    if (!impl_->start_video(stream, bitrate_kbps)) {
+    if (!impl_->start_video(stream, impl_->bitrate_kbps)) {
 #if defined(_WIN32)
         const bool failed_physical = impl_->display && !impl_->display->target().virtual_display();
         if (failed_physical) {
@@ -255,7 +313,7 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
             impl_->error.clear();
             request_virtual_display_fallback();
             impl_->display = std::make_unique<HostDisplayManager>();
-            if (impl_->display->prepare(stream) && impl_->start_video(stream, bitrate_kbps)) {
+            if (impl_->display->prepare(stream) && impl_->start_video(stream, impl_->bitrate_kbps)) {
                 impl_->error.clear();
             } else {
                 impl_->capture_error();
@@ -347,6 +405,7 @@ bool VideoCapture::set_bitrate(int bitrate_kbps)
 {
     if (!impl_ || !impl_->running || impl_->terminal || !impl_->video) return false;
     const bool ok = impl_->video->set_bitrate(bitrate_kbps);
+    if (ok) impl_->bitrate_kbps = std::max(1000, bitrate_kbps);
     if (!ok && impl_->video->ended()) impl_->mark_terminal();
     return ok;
 }
