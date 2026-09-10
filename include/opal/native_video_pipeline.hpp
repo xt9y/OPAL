@@ -17,7 +17,7 @@ public:
     NativeVideoPipeline& operator=(const NativeVideoPipeline&) = delete;
     ~NativeVideoPipeline();
 
-    bool start(const StreamOptions& stream, int bitrate_kbps);
+    bool start(const StreamOptions& stream, int bitrate_kbps, const DisplayTarget* target = nullptr);
     bool next(EncodedMediaUnit& unit, int timeout_ms);
     void request_idr();
     bool set_bitrate(int bitrate_kbps);
