@@ -54,13 +54,14 @@ PlatformError apple_error(PlatformComponent component, NSError *error, std::stri
     return result;
 }
 
-SCDisplay *retain_main_display(SCShareableContent *shareable)
+SCDisplay *retain_display(SCShareableContent *shareable, CGDirectDisplayID requested_id)
 {
     if (!shareable || shareable.displays.count == 0) return nil;
-    const CGDirectDisplayID main_id = CGMainDisplayID();
+    const CGDirectDisplayID wanted = requested_id != 0 ? requested_id : CGMainDisplayID();
     for (SCDisplay *candidate in shareable.displays) {
-        if (candidate.displayID == main_id) return [candidate retain];
+        if (candidate.displayID == wanted) return [candidate retain];
     }
+    if (requested_id != 0) return nil;
     return [shareable.displays.firstObject retain];
 }
 }
@@ -94,7 +95,12 @@ class MacCaptureBackend final : public CaptureBackend {
 public:
     ~MacCaptureBackend() override { stop(); }
 
-    bool start(const StreamOptions &stream) override
+    bool start(const StreamOptions& stream) override
+    {
+        return start(stream, nullptr);
+    }
+
+    bool start(const StreamOptions& stream, const DisplayTarget* target) override
     {
         stop();
         {
@@ -103,6 +109,10 @@ public:
             timestamp_quality_ = CaptureTimestampQuality::Estimated;
         }
         const int requested_fps = std::clamp(stream.fps, 15, 240);
+        const CGDirectDisplayID requested_display =
+            target && target->capture_kind == DisplayCaptureKind::NativeDisplay && target->native_id != 0
+                ? static_cast<CGDirectDisplayID>(target->native_id)
+                : 0;
 
         __block SCShareableContent *shareable = nil;
         __block NSError *share_error = nil;
@@ -132,15 +142,18 @@ public:
             return false;
         }
 
-        SCDisplay *display = retain_main_display(shareable);
+        SCDisplay *display = retain_display(shareable, requested_display);
         [shareable release];
         [share_error release];
         if (!display) {
             std::lock_guard<std::mutex> lock(mu_);
-            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable, "ScreenCaptureKit display unavailable", false};
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      requested_display != 0 ? "ScreenCaptureKit could not resolve the OPAL virtual display"
+                                             : "ScreenCaptureKit display unavailable", false};
             return false;
         }
 
+        selected_display_id_ = display.displayID;
         int width = static_cast<int>(display.width);
         int height = static_cast<int>(display.height);
         if (stream.max_width > 0 && stream.max_height > 0 && width > 0 && height > 0) {
@@ -255,6 +268,7 @@ public:
         }
         [stream_ release]; stream_ = nil;
         [output_ release]; output_ = nil;
+        selected_display_id_ = 0;
         {
             std::lock_guard<std::mutex> lock(mu_);
             timestamp_quality_ = CaptureTimestampQuality::Estimated;
@@ -267,7 +281,10 @@ public:
         return timestamp_quality_;
     }
 
-    std::string backend_name() const override { return "screencapturekit"; }
+    std::string backend_name() const override
+    {
+        return selected_display_id_ != 0 ? "screencapturekit-explicit-display" : "screencapturekit";
+    }
 
     PlatformError last_platform_error() const override
     {
@@ -349,6 +366,7 @@ private:
     SCStream *stream_ = nil;
     OpalScreenStreamOutput *output_ = nil;
     dispatch_queue_t queue_ = nullptr;
+    CGDirectDisplayID selected_display_id_ = 0;
 };
 
 }
