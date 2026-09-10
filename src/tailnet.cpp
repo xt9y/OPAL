@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -103,6 +104,33 @@ bool tailscale_cli_available()
 bool tailscale_connected()
 {
     return !active_tailscale_cli_path().empty();
+}
+
+int require_tailscale()
+{
+    if (!tailscale_cli_available()) {
+#if defined(OPAL_PLATFORM_MACOS)
+        std::cerr << "OPAL requires Tailscale.\n"
+                  << "Install: https://tailscale.com/download/mac\n"
+                  << "Open Tailscale, complete the VPN setup, sign in, then run OPAL again.\n";
+#else
+        std::cerr << "OPAL requires Tailscale.\n"
+                  << "Install:\n"
+                  << "  curl -fsSL https://tailscale.com/install.sh | sh\n"
+                  << "  sudo tailscale up\n"
+                  << "Then run OPAL again.\n";
+#endif
+        return 1;
+    }
+    if (!tailscale_connected()) {
+#if defined(OPAL_PLATFORM_MACOS)
+        std::cerr << "Tailscale is installed but not connected. Open Tailscale and sign in/connect, then run OPAL again.\n";
+#else
+        std::cerr << "Tailscale is installed but not connected. Run 'sudo tailscale up', then run OPAL again.\n";
+#endif
+        return 1;
+    }
+    return 0;
 }
 
 std::vector<std::string> tailnet_peer_ipv4s()
