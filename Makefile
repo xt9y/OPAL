@@ -397,7 +397,7 @@ $(WINDOWS_IDD_INSTALLER): platform/windows/idd/Install.cpp | $(BUILD) deps-check
 $(WINDOWS_IDD_STAMP): platform/windows/idd/Driver.cpp platform/windows/idd/Driver.hpp platform/windows/idd/Protocol.hpp platform/windows/idd/OpalDisplay.inf platform/windows/idd/OpalDisplay.vcxproj | $(BUILD) headless-deps-check
 	@set -e; \
 	mkdir -p "$(BUILD)/idd"; \
-	"$(WINDOWS_MSBUILD)" "$(WINDOWS_IDD_PROJECT)" /nologo /m /t:Build /p:Configuration=Release /p:Platform=$(WINDOWS_IDD_PLATFORM); \
+	MSYS2_ARG_CONV_EXCL='*' "$(WINDOWS_MSBUILD)" "$(WINDOWS_IDD_PROJECT)" /nologo /m /t:Build /p:Configuration=Release /p:Platform=$(WINDOWS_IDD_PLATFORM); \
 	dll="$$(find "$(BUILD)/idd" -type f -iname 'OPALDisplay.dll' -print -quit)"; \
 	inf="$$(find "$(BUILD)/idd" -type f -iname 'OpalDisplay.inf' -print -quit)"; \
 	[ -n "$$dll" ] && [ -n "$$inf" ] || { echo 'WDK build completed without a usable OPAL display-driver package.' >&2; exit 1; }; \
