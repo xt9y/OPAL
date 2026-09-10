@@ -1,175 +1,105 @@
 OPAL
 
 Performance-first remote desktop for Linux, Apple Silicon macOS, and Windows.
-All platforms use signed rendezvous, end-to-end encrypted direct UDP, blind encrypted relay fallback, and Tailscale when available.
+Uses signed rendezvous, end-to-end encrypted direct UDP, encrypted relay fallback, and Tailscale when available.
 
-LINUX
+BUILD
 =====
 
-Installation
+Linux:
 
-Fedora / Fedora Asahi:
-
-  sudo dnf install -y gcc-c++ make git pkgconf-pkg-config SDL3-devel openssl-devel ffmpeg ffmpeg-devel pipewire pipewire-devel pipewire-pulseaudio libportal libportal-devel xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
-
-Arch / CachyOS:
-
-  sudo pacman -S --needed base-devel git pkgconf sdl3 openssl ffmpeg pipewire pipewire-pulse libportal xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
-
-Debian / Ubuntu:
-
-  sudo apt-get update
-  sudo apt-get install -y build-essential git pkg-config libsdl3-dev libssl-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libpipewire-0.3-dev libportal-dev pipewire pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde wl-clipboard curl
-
-Build and install:
-
-  git clone https://github.com/xt9y/OPAL.git
-  cd OPAL
   make -j"$(nproc)"
   sudo make install
 
-Tailscale
+Apple Silicon macOS 13+:
 
-  curl -fsSL https://tailscale.com/install.sh | sh
-  sudo tailscale up
-  tailscale ip -4
-  tailscale status
-
-Tailscale is optional. OPAL can still use LAN discovery, signed rendezvous, direct UDP, and relay fallback without it.
-
-Run
-
-  opal
-  opal <connection-code>
-  opal doctor
-  OPAL_DEBUG=1 opal <connection-code>
-
-Choose "Host this computer" on the machine being controlled. On Wayland, select the displays in the xdg-desktop-portal chooser. OPAL can persist and reuse that authorization for later capture sessions.
-
-Backend
-
-  capture      PipeWire + libportal + xdg-desktop-portal, persistent multi-monitor capture
-  encode       persistent in-process FFmpeg / hardware H.264 path
-  decode       FFmpeg libavcodec
-  presentation SDL3
-  input        /dev/uinput with multi-monitor absolute pointer mapping
-  clipboard    wl-clipboard on Wayland, SDL3 fallback elsewhere
-  audio        PipeWire/PulseAudio-compatible capture + SDL3 playback
-  service      systemd user service
-  network      native UDP with sendmmsg/recvmmsg batching
-
-Optional rendezvous server deployment:
-
-  make rendezvous-server
-  make deploy-rendezvous
-
-
-MACOS
-=====
-
-Installation
-
-Requirements: Apple Silicon, macOS 13+, Xcode Command Line Tools, and Homebrew.
-
-  xcode-select --install
   brew install pkg-config sdl3 openssl@3 ffmpeg git
-  git clone https://github.com/xt9y/OPAL.git
-  cd OPAL
   make
   make install
 
-Do not run sudo make install on macOS. The Makefile builds and signs as the current user and invokes sudo only for the final copies into /usr/local.
+Do not use sudo make install on macOS.
 
-Tailscale
-
-Install the Tailscale standalone macOS app, sign in to your tailnet, and enable its CLI integration if you want the tailscale command in Terminal. Then verify:
-
-  tailscale ip -4
-  tailscale status
-
-OPAL also detects the CLI bundled inside Tailscale.app. Tailscale is optional; LAN/direct/rendezvous/relay networking remains available without it.
-
-Run
-
-  opal
-  opal <connection-code>
-  opal doctor
-  OPAL_DEBUG=1 opal <connection-code>
-
-For hosting, grant:
-
-  System Settings -> Privacy & Security -> Screen & System Audio Recording -> OPAL / opal
-  System Settings -> Privacy & Security -> Accessibility -> opal-input
-
-The host runs through a per-user launchd LaunchAgent.
-
-Backend
-
-  capture      ScreenCaptureKit with native display timestamps
-  encode       hardware VideoToolbox H.264 low-latency encoder
-  decode       FFmpeg libavcodec
-  presentation SDL3
-  input        CGEvent through the Accessibility-authorized opal-input helper
-  clipboard    NSPasteboard
-  audio        ScreenCaptureKit system audio + persistent AAC + SDL3 playback
-  service      per-user launchd LaunchAgent
-  network      nonblocking bounded UDP + direct/relay/Tailscale paths
-
-
-WINDOWS
-=======
-
-Installation
-
-Requirements: Windows 10+ and an MSYS2 UCRT64 shell for building OPAL.
-
-In the MSYS2 UCRT64 shell:
+Windows 10+ from MSYS2 UCRT64:
 
   pacman -S --needed mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-SDL3 mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-ffmpeg make git
-  git clone https://github.com/xt9y/OPAL.git
-  cd OPAL
   make
   make verify
   make install
 
-make install copies opal.exe and opal-input.exe into the active MSYS2 UCRT64 bin directory, normally C:\msys64\ucrt64\bin. It also puts that directory first in the current user's PATH if needed, so OPAL no longer depends on the repository build directory.
+Windows headless support additionally needs Visual Studio MSBuild and the Windows Driver Kit. When they are present, make install builds and installs the OPAL IddCx display driver automatically. The driver supports Windows 10 1803+ and Windows 11. Driver installation requires the normal Windows elevation prompt and may require a restart. Without MSBuild/WDK, monitor-attached OPAL remains usable.
 
-After installation, use OPAL normally from PowerShell, Command Prompt, or MSYS2:
+  make windows-headless
 
-  opal.exe
-  opal.exe <connection-code>
-  opal.exe doctor
+HEADLESS HOSTING
+================
 
-If UCRT64 was not already in the Windows user PATH, open a new terminal once after installation so Windows picks up the PATH change. No manual PATH command is required.
+OPAL prefers the real desktop while a usable physical display exists. If no usable display exists, or the active physical display becomes unavailable during a session, OPAL rebuilds only the media generation around an OPAL-owned virtual display. The authenticated peer remains connected and HOST_META is refreshed when the display geometry changes.
 
-Tailscale
+Linux:
 
-Install the official Tailscale Windows client and sign in to the same tailnet as the other OPAL computer. The installed Tailscale client includes its CLI; verify with:
+  Existing KDE/Wayland: KWin virtual output + direct PipeWire node capture.
+  TTY/no graphical session: managed KWin + Plasma + Xwayland session, then direct PipeWire capture.
+  Input: KWin fake-input for OPAL virtual desktops; /dev/uinput for the normal physical path.
+  Required for managed headless mode: kwin_wayland, plasmashell, Xwayland, PipeWire, a user D-Bus session, and XDG_RUNTIME_DIR.
+  Enable user lingering for hosting after logout/TTY boot when needed:
 
-  tailscale ip -4
-  tailscale status
+    sudo loginctl enable-linger $USER
 
-Tailscale is optional. OPAL can still use LAN discovery, signed rendezvous, direct UDP, and relay fallback without it.
+macOS:
 
-Run
+  Existing display: ScreenCaptureKit.
+  Headless fallback: OPAL creates a CoreGraphics virtual display and targets it explicitly with ScreenCaptureKit.
+  CGVirtualDisplay is an undocumented macOS runtime API. OPAL validates the classes/selectors before use and fails cleanly when the installed macOS runtime is incompatible, but Apple does not provide a public equivalent for creating a full headless GUI display.
 
-  opal.exe
-  opal.exe <connection-code>
-  opal.exe doctor
+Windows:
 
-The executable is linked as a console application so CLI output remains visible. Hosting starts immediately in the current user session and persists across future logins through the current user's Windows Run registry key. No Administrator rights or Task Scheduler setup is required.
+  Existing display: DXGI Desktop Duplication + D3D11.
+  Headless fallback: OPAL IddCx virtual monitor + D3D11 capture path.
+  OPAL detects physical-output loss using Windows display topology/session power state and read-only DDC/MCCS power information where the monitor supports it. A static desktop alone never triggers failover.
+  When physical capture becomes unavailable, OPAL prefers the IddCx display on the next media generation and falls back to physical capture again if virtual creation fails.
 
-Backend
+RUN
+===
 
-  capture      DXGI Desktop Duplication + D3D11, virtual-desktop multi-monitor composition
-  cursor       DXGI pointer metadata + GPU cursor compositor
-  encode       D3D11 Video Processor BGRA -> NV12 + Media Foundation hardware H.264 MFT
-  decode       FFmpeg D3D11VA with software fallback
-  presentation direct D3D11 swapchain + SDL3 CPU fallback
+  opal
+  opal <connection-code>
+  opal select
+  opal list
+  opal new
+  opal remove
+  opal doctor
+  opal stop
+  opal restart
+  OPAL_DEBUG=1 opal <connection-code>
+
+Windows uses opal.exe for the same commands.
+
+BACKENDS
+========
+
+Linux
+  capture      PipeWire/libportal physical capture; KWin direct PipeWire virtual capture
+  encode       in-process FFmpeg/hardware H.264
+  presentation SDL3
+  input        /dev/uinput or KWin fake-input
+  clipboard    wl-clipboard with SDL3 fallback
+  service      systemd user service
+
+macOS
+  capture      ScreenCaptureKit physical/explicit virtual display
+  encode       VideoToolbox H.264 low latency
+  presentation SDL3
+  input        Accessibility-authorized CGEvent helper
+  clipboard    NSPasteboard
+  service      launchd LaunchAgent
+
+Windows
+  capture      DXGI Desktop Duplication or OPAL IddCx virtual display
+  encode       D3D11 Video Processor BGRA->NV12 + Media Foundation H.264
+  decode       FFmpeg/D3D11VA with software fallback
+  presentation D3D11 swapchain with SDL3 fallback
   input        SendInput
-  clipboard    CF_UNICODETEXT + event-driven clipboard listener/cache
-  audio        WASAPI loopback + persistent AAC + SDL3 playback
-  service      per-user Run registry auto-start + detached host daemon
-  network      Winsock2 + LAN/direct/relay/Tailscale paths
+  clipboard    CF_UNICODETEXT
+  service      per-user Run registry + detached host daemon
 
-Windows multi-monitor capture supports displays on the selected D3D11 adapter. A desktop spanning multiple DXGI adapters is rejected rather than silently dropping displays.
+Tailscale is optional on every platform. LAN discovery, signed rendezvous, direct UDP, and relay fallback remain available without it.
