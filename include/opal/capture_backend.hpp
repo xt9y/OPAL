@@ -17,7 +17,15 @@ public:
     virtual bool start(const StreamOptions& stream) = 0;
     virtual bool start(const StreamOptions& stream, const DisplayTarget* target)
     {
+#if defined(_WIN32)
+        // A generic Windows Desktop Duplication backend cannot select an OPAL
+        // IddCx target yet. Reject that target so WindowsIddCaptureBackend
+        // falls through to the driver's dedicated frame channel instead of
+        // accidentally duplicating a physical/other desktop output.
+        if (target && target->capture_kind == DisplayCaptureKind::WindowsIddSwapchain) return false;
+#else
         (void)target;
+#endif
         return start(stream);
     }
     virtual bool next(NativeVideoFrame& frame, int timeout_ms) = 0;

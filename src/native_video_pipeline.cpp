@@ -1,5 +1,6 @@
 #include <opal/native_video_pipeline.hpp>
 
+#include <chrono>
 #include <utility>
 
 namespace opal {
@@ -10,6 +11,14 @@ bool same_config(const MediaConfig& a, const MediaConfig& b)
     return a.kind == b.kind && a.extradata == b.extradata &&
            a.sample_rate == b.sample_rate && a.channels == b.channels;
 }
+
+#if defined(_WIN32)
+std::uint64_t monotonic_us()
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+#endif
 
 }
 
@@ -40,7 +49,13 @@ bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps, c
     }
     config_ = {};
     config_revision_ = 0;
+    first_frame_ = true;
     running_ = true;
+
+    // The sender starts with an invalid H.264 dependency chain. Force the very
+    // first encoded frame to be an IDR so a static desktop cannot sit forever
+    // waiting for a later desktop update before the decoder can start.
+    encoder_->request_idr();
     return true;
 }
 
@@ -56,6 +71,13 @@ bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
         }
         return false;
     }
+#if defined(_WIN32)
+    // Desktop Duplication's first LastPresentTime can describe when unchanged
+    // pixels were last presented, not when OPAL acquired the current desktop
+    // snapshot. Do not classify that bootstrap snapshot as pipeline backlog.
+    if (first_frame_) frame.capture_time_us = monotonic_us();
+#endif
+    first_frame_ = false;
     if (!encoder_->encode(frame, unit)) {
         if (encoder_->last_platform_error()) {
             terminal_ = true;
@@ -95,6 +117,7 @@ void NativeVideoPipeline::stop()
     config_ = {};
     config_revision_ = 0;
     terminal_ = false;
+    first_frame_ = true;
 }
 
 const MediaConfig& NativeVideoPipeline::config() const

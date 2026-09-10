@@ -37,6 +37,7 @@ private:
     std::uint64_t config_revision_ = 0;
     bool running_ = false;
     bool terminal_ = false;
+    bool first_frame_ = true;
 };
 
 }
