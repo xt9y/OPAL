@@ -1,4 +1,4 @@
-#import <CoreGraphics/CoreGraphics.h>
+#include <CoreGraphics/CoreGraphics.h>
 
 #include <opal/media.hpp>
 
