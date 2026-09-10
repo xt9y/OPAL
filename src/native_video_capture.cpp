@@ -221,16 +221,6 @@ struct VideoCapture::Impl {
             return make_view(view);
         }
 
-        recycle_storage();
-        if (audio) {
-            if (audio->next(storage, 0)) return make_view(view);
-            const auto audio_error = audio->last_platform_error();
-            if (audio_error) {
-                mark_terminal(audio_error.message);
-                return false;
-            }
-        }
-
         if (display && display->target().virtual_display() && !display->healthy()) {
             mark_terminal("virtual host display became unavailable");
             return false;
@@ -262,6 +252,17 @@ struct VideoCapture::Impl {
 #endif
             }
             mark_terminal();
+            return false;
+        }
+
+        recycle_storage();
+        if (audio) {
+            if (audio->next(storage, 0)) return make_view(view);
+            const auto audio_error = audio->last_platform_error();
+            if (audio_error) {
+                mark_terminal(audio_error.message);
+                return false;
+            }
         }
         return false;
     }
