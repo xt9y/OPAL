@@ -243,8 +243,10 @@ MACOS_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INFO_PLIST)
 MACOS_INPUT_INFO_LDFLAGS := -Wl,-sectcreate,__TEXT,__info_plist,$(MACOS_INPUT_INFO_PLIST)
 
 MACOS_VIDEO_SRCS := \
+	src/host_display.cpp \
 	src/native_video_capture.cpp \
 	src/native_video_pipeline.cpp \
+	src/platform/macos/display_backend.mm \
 	src/platform/macos/capture_backend.mm \
 	src/platform/macos/video_encoder_backend.mm \
 	src/platform/macos/audio_capture_backend.mm
@@ -326,10 +328,20 @@ CPPFLAGS += -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DOPAL_PLATFORM_WINDOWS=1 \
 	-DSDL_SetClipboardText=opal_windows_set_clipboard_text
 CXXFLAGS += -pthread
 WINDOWS_BINDIR ?= $(if $(strip $(MINGW_PREFIX)),$(MINGW_PREFIX)/bin,/ucrt64/bin)
+WINDOWS_ARCH := $(shell uname -m 2>/dev/null | tr '[:upper:]' '[:lower:]')
+WINDOWS_IDD_PLATFORM ?= $(if $(filter arm64 aarch64,$(WINDOWS_ARCH)),ARM64,x64)
+WINDOWS_IDD_PROJECT := platform/windows/idd/OpalDisplay.vcxproj
+WINDOWS_IDD_INSTALLER := $(BUILD)/opal-display-install.exe
+WINDOWS_IDD_STAMP := $(BUILD)/idd/.built-$(WINDOWS_IDD_PLATFORM)
+WINDOWS_MSBUILD ?= $(shell powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$cmd=Get-Command MSBuild.exe -ErrorAction SilentlyContinue; if($$cmd){$$cmd.Source; exit}; $$vswhere=Join-Path $${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"; if(Test-Path $$vswhere){& $$vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1}' 2>/dev/null | tr -d '\r')
 
 WINDOWS_VIDEO_SRCS := \
+	src/host_display.cpp \
 	src/native_video_capture.cpp \
 	src/native_video_pipeline.cpp \
+	src/platform/windows/display_backend.cpp \
+	src/platform/windows/idd_capture_backend.cpp \
+	src/platform/windows/idd_status.cpp \
 	src/platform/windows/capture_backend.cpp \
 	src/platform/windows/video_encoder_backend.cpp \
 	src/platform/windows/audio_capture_backend.cpp
@@ -369,11 +381,35 @@ deps-check:
 		exit 1; \
 	fi
 
-$(PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp src/platform/windows/cursor_compositor.hpp | $(BUILD) deps-check
+headless-deps-check:
+	@set -e; \
+	command -v powershell.exe >/dev/null 2>&1 || { echo 'PowerShell is required for Windows headless-display installation.' >&2; exit 1; }; \
+	if [ -z "$(strip $(WINDOWS_MSBUILD))" ]; then \
+		echo 'Windows headless display build requires Visual Studio MSBuild plus the Windows Driver Kit (WDK).' >&2; \
+		exit 1; \
+	fi
+
+$(PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp platform/windows/idd/Protocol.hpp src/platform/windows/cursor_compositor.hpp | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(WINDOWS_APP_SRCS) $(LDFLAGS) $(WINDOWS_LIBS) -o $@
 
 $(INPUT): src/platform/windows/input_helper.cpp include/opal/input_record.hpp include/opal/input_wire.hpp | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/platform/windows/input_helper.cpp -luser32 -o $@
+
+$(WINDOWS_IDD_INSTALLER): platform/windows/idd/Install.cpp | $(BUILD) deps-check
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -municode platform/windows/idd/Install.cpp -lsetupapi -lnewdev -o $@
+
+$(WINDOWS_IDD_STAMP): platform/windows/idd/Driver.cpp platform/windows/idd/Driver.hpp platform/windows/idd/Protocol.hpp platform/windows/idd/OpalDisplay.inf platform/windows/idd/OpalDisplay.vcxproj | $(BUILD) headless-deps-check
+	@set -e; \
+	mkdir -p "$(BUILD)/idd"; \
+	"$(WINDOWS_MSBUILD)" "$(WINDOWS_IDD_PROJECT)" /nologo /m /t:Build /p:Configuration=Release /p:Platform=$(WINDOWS_IDD_PLATFORM); \
+	dll="$$(find "$(BUILD)/idd" -type f -iname 'OPALDisplay.dll' -print -quit)"; \
+	inf="$$(find "$(BUILD)/idd" -type f -iname 'OpalDisplay.inf' -print -quit)"; \
+	[ -n "$$dll" ] && [ -n "$$inf" ] || { echo 'WDK build completed without a usable OPAL display-driver package.' >&2; exit 1; }; \
+	mkdir -p "$(@D)"; \
+	touch "$@"
+
+windows-headless: $(WINDOWS_IDD_INSTALLER) $(WINDOWS_IDD_STAMP)
+	@echo "OPAL Windows virtual display package built for $(WINDOWS_IDD_PLATFORM)."
 
 all: $(PRODUCT) $(INPUT)
 
@@ -384,13 +420,35 @@ install: all
 	$(INSTALL) -d "$(WINDOWS_BINDIR)"; \
 	$(INSTALL) -m 0755 "$(PRODUCT)" "$(WINDOWS_BINDIR)/opal.exe"; \
 	$(INSTALL) -m 0755 "$(INPUT)" "$(WINDOWS_BINDIR)/opal-input.exe"; \
+	if [ -n "$(strip $(WINDOWS_MSBUILD))" ]; then \
+		$(MAKE) --no-print-directory windows-headless; \
+		inf="$$(find "$(BUILD)/idd" -type f -iname 'OpalDisplay.inf' -print -quit)"; \
+		[ -n "$$inf" ] || { echo 'Could not locate built OPAL display-driver INF.' >&2; exit 1; }; \
+		installer_win="$$(cygpath -w "$(WINDOWS_IDD_INSTALLER)")"; \
+		inf_win="$$(cygpath -w "$$inf")"; \
+		if OPAL_IDD_INSTALLER="$$installer_win" OPAL_IDD_INF="$$inf_win" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$p=Start-Process -FilePath $$env:OPAL_IDD_INSTALLER -ArgumentList @("install", $$env:OPAL_IDD_INF) -Verb RunAs -Wait -PassThru; exit $$p.ExitCode'; then \
+			:; \
+		else \
+			rc=$$?; \
+			if [ "$$rc" -eq 10 ]; then echo 'OPAL virtual display driver installed; Windows restart required.'; \
+			else echo "OPAL virtual display driver installation failed (exit $$rc). Check driver signing policy and WDK package output." >&2; exit "$$rc"; fi; \
+		fi; \
+		$(INSTALL) -m 0755 "$(WINDOWS_IDD_INSTALLER)" "$(WINDOWS_BINDIR)/opal-display-install.exe"; \
+	else \
+		echo 'OPAL headless Windows support not installed: Visual Studio MSBuild + WDK were not found. Monitor-attached OPAL remains available.'; \
+	fi; \
 	win_bin="$$(cygpath -w "$(WINDOWS_BINDIR)")"; \
 	OPAL_INSTALL_BIN="$$win_bin" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$bin = $$env:OPAL_INSTALL_BIN; $$path = [Environment]::GetEnvironmentVariable("Path", "User"); $$parts = @($$path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) -and $$_ -ne $$bin -and $$_ -notmatch "(?i)\\opal\\build$$" }); $$newPath = (@($$bin) + $$parts) -join ";"; [Environment]::SetEnvironmentVariable("Path", $$newPath, "User"); Write-Host "Installed OPAL to $$bin"'; \
 	"$(WINDOWS_BINDIR)/opal.exe" version
 
 uninstall:
-	@rm -f "$(WINDOWS_BINDIR)/opal.exe" "$(WINDOWS_BINDIR)/opal-input.exe"
-	@echo "Removed OPAL from $(WINDOWS_BINDIR)."
+	@set -e; \
+	if [ -f "$(WINDOWS_BINDIR)/opal-display-install.exe" ] && command -v cygpath >/dev/null 2>&1 && command -v powershell.exe >/dev/null 2>&1; then \
+		installer_win="$$(cygpath -w "$(WINDOWS_BINDIR)/opal-display-install.exe")"; \
+		OPAL_IDD_INSTALLER="$$installer_win" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$p=Start-Process -FilePath $$env:OPAL_IDD_INSTALLER -ArgumentList @("uninstall") -Verb RunAs -Wait -PassThru; exit $$p.ExitCode' || true; \
+	fi; \
+	rm -f "$(WINDOWS_BINDIR)/opal.exe" "$(WINDOWS_BINDIR)/opal-input.exe" "$(WINDOWS_BINDIR)/opal-display-install.exe"; \
+	echo "Removed OPAL from $(WINDOWS_BINDIR)."
 
 else
 
@@ -443,5 +501,6 @@ help:
 	@echo '  make verify       build verification'
 	@echo '  make clean        remove build output'
 	@if [ "$(OPAL_OS)" != windows ]; then echo '  make rendezvous-server'; fi
+	@if [ "$(OPAL_OS)" = windows ]; then echo '  make windows-headless  build the optional IddCx virtual-display package'; fi
 
-.PHONY: all deps-check install uninstall verify clean help rendezvous-server install-rendezvous deploy-rendezvous firewall-install firewall-remove macos-sign
+.PHONY: all deps-check headless-deps-check install uninstall verify clean help rendezvous-server install-rendezvous deploy-rendezvous firewall-install firewall-remove macos-sign windows-headless
