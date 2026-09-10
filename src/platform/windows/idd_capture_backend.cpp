@@ -16,9 +16,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
+#include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace opal {
@@ -51,24 +52,13 @@ public:
         stop();
         error_ = {};
 
-        mapping_ = OpenFileMappingW(FILE_MAP_READ, FALSE, idd::kFrameMappingName);
-        if (!mapping_) {
-            set_error("OPAL indirect display frame mapping is unavailable (Win32 " +
+        driver_ = CreateFileW(idd::kDevicePath, GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (driver_ == INVALID_HANDLE_VALUE) {
+            driver_ = nullptr;
+            set_error("OPAL indirect display device is unavailable (Win32 " +
                       std::to_string(GetLastError()) + ")");
-            return false;
-        }
-        view_ = static_cast<const std::uint8_t*>(MapViewOfFile(mapping_, FILE_MAP_READ, 0, 0, idd::kFrameMappingBytes));
-        if (!view_) {
-            set_error("could not map OPAL indirect display frame buffer (Win32 " +
-                      std::to_string(GetLastError()) + ")");
-            stop_resources();
-            return false;
-        }
-        frame_event_ = OpenEventW(SYNCHRONIZE, FALSE, idd::kFrameEventName);
-        if (!frame_event_) {
-            set_error("OPAL indirect display frame event is unavailable (Win32 " +
-                      std::to_string(GetLastError()) + ")");
-            stop_resources();
             return false;
         }
 
@@ -93,10 +83,11 @@ public:
         }
         if (FAILED(hr) || !device_ || !context_) {
             set_error("could not create D3D11 upload device for OPAL indirect display");
-            stop_resources();
+            stop();
             return false;
         }
 
+        reply_.resize(idd::kFrameReplyBytes);
         running_ = true;
         return true;
     }
@@ -104,86 +95,89 @@ public:
     bool next(NativeVideoFrame& frame, int timeout_ms) override
     {
         frame = {};
-        if (!running_ || !view_ || !frame_event_) return false;
-        const DWORD wait = WaitForSingleObject(frame_event_, timeout_ms <= 0 ? 0 : static_cast<DWORD>(timeout_ms));
-        if (wait == WAIT_TIMEOUT) return false;
-        if (wait != WAIT_OBJECT_0) {
-            set_error("waiting for OPAL indirect display frame failed (Win32 " +
-                      std::to_string(GetLastError()) + ")");
-            running_ = false;
-            return false;
-        }
+        if (!running_ || !driver_) return false;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(std::max(0, timeout_ms));
 
-        const auto* shared = reinterpret_cast<const idd::SharedFrameHeader*>(view_);
-        if (shared->magic != idd::kFrameMagic || shared->version != idd::kProtocolVersion) return false;
+        for (;;) {
+            idd::FrameRequest request;
+            request.last_sequence = last_sequence_;
+            DWORD returned = 0;
+            const BOOL ok = DeviceIoControl(driver_, idd::kIoctlGetFrame,
+                                            &request, static_cast<DWORD>(sizeof(request)),
+                                            reply_.data(), static_cast<DWORD>(reply_.size()),
+                                            &returned, nullptr);
+            if (ok) {
+                if (returned < sizeof(idd::SharedFrameHeader)) {
+                    set_error("OPAL indirect display driver returned a truncated frame header");
+                    running_ = false;
+                    return false;
+                }
+                const auto* header = reinterpret_cast<const idd::SharedFrameHeader*>(reply_.data());
+                if (header->magic != idd::kFrameMagic || header->version != idd::kProtocolVersion ||
+                    header->sequence <= last_sequence_ || header->width == 0 || header->height == 0 ||
+                    header->width > idd::kMaxWidth || header->height > idd::kMaxHeight ||
+                    header->stride < header->width * idd::kBytesPerPixel ||
+                    header->bytes == 0 || header->bytes > idd::kMaxFrameBytes ||
+                    sizeof(idd::SharedFrameHeader) + static_cast<std::size_t>(header->bytes) > returned) {
+                    set_error("OPAL indirect display driver returned an invalid frame");
+                    running_ = false;
+                    return false;
+                }
 
-        for (int attempt = 0; attempt < 3; ++attempt) {
-            auto* sequence_ptr = reinterpret_cast<volatile LONG64*>(const_cast<std::int64_t*>(&shared->sequence));
-            const LONG64 before = InterlockedCompareExchange64(sequence_ptr, 0, 0);
-            if ((before & 1) != 0) {
-                SwitchToThread();
-                continue;
+                if (!ensure_texture(header->width, header->height)) return false;
+                const auto* pixels = reply_.data() + sizeof(idd::SharedFrameHeader);
+                context_->UpdateSubresource(texture_, 0, nullptr, pixels, header->stride, 0);
+                last_sequence_ = header->sequence;
+
+                texture_->AddRef();
+                frame.kind = NativeVideoFrameKind::Opaque;
+                frame.width = static_cast<int>(header->width);
+                frame.height = static_cast<int>(header->height);
+                frame.pixel_format = static_cast<std::uint32_t>(DXGI_FORMAT_B8G8R8A8_UNORM);
+                frame.capture_time_us = monotonic_us();
+                frame.opaque = texture_;
+                frame.owner = std::shared_ptr<void>(texture_, [](void* value) {
+                    static_cast<ID3D11Texture2D*>(value)->Release();
+                });
+                return true;
             }
-            MemoryBarrier();
 
-            const std::uint32_t width = shared->width;
-            const std::uint32_t height = shared->height;
-            const std::uint32_t stride = shared->stride;
-            const std::uint32_t bytes = shared->bytes;
-            if (width == 0 || height == 0 || width > idd::kMaxWidth || height > idd::kMaxHeight ||
-                stride < width * idd::kBytesPerPixel || bytes == 0 || bytes > idd::kMaxFrameBytes ||
-                static_cast<std::uint64_t>(stride) * height > bytes) {
-                set_error("OPAL indirect display published an invalid frame layout");
+            const DWORD win_error = GetLastError();
+            if (win_error != ERROR_NO_MORE_ITEMS && win_error != ERROR_RETRY && win_error != ERROR_NOT_READY) {
+                set_error("OPAL indirect display frame IOCTL failed (Win32 " +
+                          std::to_string(win_error) + ")");
                 running_ = false;
                 return false;
             }
-
-            pixels_.resize(bytes);
-            std::memcpy(pixels_.data(), view_ + sizeof(idd::SharedFrameHeader), bytes);
-            MemoryBarrier();
-            const LONG64 after = InterlockedCompareExchange64(sequence_ptr, 0, 0);
-            if (before != after || (after & 1) != 0) continue;
-
-            if (!ensure_texture(width, height)) return false;
-            context_->UpdateSubresource(texture_, 0, nullptr, pixels_.data(), stride, 0);
-
-            texture_->AddRef();
-            frame.kind = NativeVideoFrameKind::Opaque;
-            frame.width = static_cast<int>(width);
-            frame.height = static_cast<int>(height);
-            frame.pixel_format = static_cast<std::uint32_t>(DXGI_FORMAT_B8G8R8A8_UNORM);
-            frame.capture_time_us = monotonic_us();
-            frame.opaque = texture_;
-            frame.owner = std::shared_ptr<void>(texture_, [](void* value) {
-                static_cast<ID3D11Texture2D*>(value)->Release();
-            });
-            return true;
+            if (timeout_ms <= 0 || std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return false;
     }
 
     void stop() override
     {
         running_ = false;
-        pixels_.clear();
+        reply_.clear();
         release_com(texture_);
         release_com(context_);
         release_com(device_);
-        stop_resources();
+        if (driver_) {
+            CloseHandle(driver_);
+            driver_ = nullptr;
+        }
         width_ = height_ = 0;
+        last_sequence_ = 0;
     }
 
     CaptureTimestampQuality timestamp_quality() const override
     {
-        // The driver publishes the DWM swapchain promptly, but this first
-        // implementation crosses a CPU shared-memory handoff before OPAL's
-        // monotonic clock is sampled.
         return CaptureTimestampQuality::Estimated;
     }
 
     std::string backend_name() const override
     {
-        return "iddcx-shared-frame+d3d11-upload";
+        return "iddcx-device-frame+d3d11-upload";
     }
 
     PlatformError last_platform_error() const override { return error_; }
@@ -213,37 +207,20 @@ private:
         return true;
     }
 
-    void stop_resources()
-    {
-        if (view_) {
-            UnmapViewOfFile(view_);
-            view_ = nullptr;
-        }
-        if (mapping_) {
-            CloseHandle(mapping_);
-            mapping_ = nullptr;
-        }
-        if (frame_event_) {
-            CloseHandle(frame_event_);
-            frame_event_ = nullptr;
-        }
-    }
-
     void set_error(std::string message)
     {
         error_ = {PlatformComponent::Capture, PlatformFailure::OsError, std::move(message), true};
     }
 
     bool running_ = false;
-    HANDLE mapping_ = nullptr;
-    HANDLE frame_event_ = nullptr;
-    const std::uint8_t* view_ = nullptr;
+    HANDLE driver_ = nullptr;
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
     ID3D11Texture2D* texture_ = nullptr;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
-    std::vector<std::uint8_t> pixels_;
+    std::int64_t last_sequence_ = 0;
+    std::vector<std::uint8_t> reply_;
     PlatformError error_{};
 };
 
