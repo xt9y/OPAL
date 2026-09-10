@@ -12,6 +12,7 @@
 #include <powersetting.h>
 
 #include <opal/display_backend.hpp>
+#include <opal/windows_power_compat.hpp>
 
 #include "../../../platform/windows/idd/Protocol.hpp"
 
@@ -37,11 +38,25 @@ enum class PhysicalSignal : int {
     Available = 1,
 };
 
+struct DdcPowerSample {
+    PhysicalSignal signal = PhysicalSignal::Unknown;
+    unsigned physical_monitors = 0;
+    unsigned known_on = 0;
+    unsigned known_off = 0;
+    unsigned unknown = 0;
+
+    bool confirmed_single_on() const noexcept
+    {
+        return physical_monitors == 1 && known_on == 1 && known_off == 0 && unknown == 0;
+    }
+};
+
 constexpr GUID kSessionDisplayStatus = {
     0x2b84c20e, 0xad23, 0x4ddf, {0x93, 0xdb, 0x05, 0xff, 0xbd, 0x7e, 0xfc, 0xa5}
 };
 constexpr BYTE kVcpPowerMode = 0xd6;
 constexpr auto kHealthRefreshInterval = std::chrono::milliseconds(750);
+constexpr unsigned kDdcDisappearThreshold = 4;
 
 bool guid_equal(const GUID& a, const GUID& b)
 {
@@ -53,8 +68,12 @@ bool contains_case_insensitive(const wchar_t* value, const wchar_t* needle)
     if (!value || !needle || !*needle) return false;
     std::wstring haystack(value);
     std::wstring pattern(needle);
-    std::transform(haystack.begin(), haystack.end(), haystack.begin(), ::towupper);
-    std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::towupper);
+    std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towupper(c));
+    });
+    std::transform(pattern.begin(), pattern.end(), pattern.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towupper(c));
+    });
     return haystack.find(pattern) != std::wstring::npos;
 }
 
@@ -227,28 +246,36 @@ private:
     GetVcpFn get_vcp_ = nullptr;
 };
 
-PhysicalSignal ddc_power_signal()
+DdcPowerSample ddc_power_sample()
 {
+    DdcPowerSample sample;
     MonitorConfigurationApi api;
-    if (!api.valid()) return PhysicalSignal::Unknown;
+    if (!api.valid()) {
+        sample.unknown = 1;
+        return sample;
+    }
 
     std::vector<HMONITOR> monitors;
     if (!EnumDisplayMonitors(nullptr, nullptr, collect_monitor,
-                             reinterpret_cast<LPARAM>(&monitors)))
-        return PhysicalSignal::Unknown;
+                             reinterpret_cast<LPARAM>(&monitors))) {
+        sample.unknown = 1;
+        return sample;
+    }
+    if (monitors.empty()) {
+        sample.unknown = 1;
+        return sample;
+    }
 
-    bool any_on = false;
-    unsigned known_off = 0;
-    unsigned unknown = 0;
     for (HMONITOR monitor : monitors) {
         DWORD count = 0;
         if (!api.get_count(monitor, &count) || count == 0) {
-            ++unknown;
+            ++sample.unknown;
             continue;
         }
+        sample.physical_monitors += count;
         std::vector<PHYSICAL_MONITOR> physical(count);
         if (!api.get_monitors(monitor, count, physical.data())) {
-            ++unknown;
+            sample.unknown += count;
             continue;
         }
 
@@ -257,19 +284,19 @@ PhysicalSignal ddc_power_signal()
             DWORD maximum = 0;
             MC_VCP_CODE_TYPE type{};
             if (!api.get_vcp(item.hPhysicalMonitor, kVcpPowerMode, &type, &current, &maximum)) {
-                ++unknown;
+                ++sample.unknown;
                 continue;
             }
-            if (current == 0x01) any_on = true;
-            else if (current >= 0x02 && current <= 0x05) ++known_off;
-            else ++unknown;
+            if (current == 0x01) ++sample.known_on;
+            else if (current >= 0x02 && current <= 0x05) ++sample.known_off;
+            else ++sample.unknown;
         }
         (void)api.destroy(count, physical.data());
     }
 
-    if (any_on) return PhysicalSignal::Available;
-    if (known_off > 0 && unknown == 0) return PhysicalSignal::Unavailable;
-    return PhysicalSignal::Unknown;
+    if (sample.known_on > 0) sample.signal = PhysicalSignal::Available;
+    else if (sample.known_off > 0 && sample.unknown == 0) sample.signal = PhysicalSignal::Unavailable;
+    return sample;
 }
 
 class SessionDisplayPower {
@@ -349,11 +376,12 @@ public:
     bool prepare()
     {
         stop();
-        topology_.store(static_cast<int>(topology_physical_signal()), std::memory_order_release);
-        const auto topology = signal(topology_);
-        const auto ddc = topology == PhysicalSignal::Unavailable ? PhysicalSignal::Unknown : ddc_power_signal();
-        ddc_.store(static_cast<int>(ddc), std::memory_order_release);
+        const auto topology = topology_physical_signal();
+        topology_.store(static_cast<int>(topology), std::memory_order_release);
+        const auto sample = topology == PhysicalSignal::Unavailable ? DdcPowerSample{} : ddc_power_sample();
+        apply_ddc_sample(topology, sample);
         if (!usable_cached()) return false;
+
         running_.store(true, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(mu_);
@@ -387,6 +415,8 @@ public:
         }
         topology_.store(static_cast<int>(PhysicalSignal::Unknown), std::memory_order_release);
         ddc_.store(static_cast<int>(PhysicalSignal::Unknown), std::memory_order_release);
+        ddc_single_on_confirmed_.store(false, std::memory_order_release);
+        ddc_unknown_streak_.store(0, std::memory_order_release);
     }
 
 private:
@@ -400,13 +430,42 @@ private:
         return physical_usable(signal(topology_), session_.signal(), signal(ddc_));
     }
 
+    void apply_ddc_sample(PhysicalSignal topology, const DdcPowerSample& sample)
+    {
+        if (topology == PhysicalSignal::Unavailable) {
+            ddc_.store(static_cast<int>(PhysicalSignal::Unknown), std::memory_order_release);
+            ddc_unknown_streak_.store(0, std::memory_order_release);
+            return;
+        }
+
+        PhysicalSignal effective = sample.signal;
+        if (sample.confirmed_single_on()) {
+            ddc_single_on_confirmed_.store(true, std::memory_order_release);
+            ddc_unknown_streak_.store(0, std::memory_order_release);
+        } else if (sample.signal == PhysicalSignal::Available) {
+            // The current topology is no longer the one trusted single-monitor
+            // baseline. Do not carry hard-off inference across monitor changes.
+            ddc_single_on_confirmed_.store(false, std::memory_order_release);
+            ddc_unknown_streak_.store(0, std::memory_order_release);
+        } else if (sample.signal == PhysicalSignal::Unavailable) {
+            ddc_unknown_streak_.store(0, std::memory_order_release);
+        } else if (ddc_single_on_confirmed_.load(std::memory_order_acquire)) {
+            const unsigned misses = ddc_unknown_streak_.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (misses >= kDdcDisappearThreshold)
+                effective = PhysicalSignal::Unavailable;
+        }
+
+        ddc_.store(static_cast<int>(effective), std::memory_order_release);
+    }
+
     void request_refresh()
     {
         if (!running_.load(std::memory_order_acquire)) return;
         const auto now = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(mu_);
-            if (refresh_requested_ || (next_refresh_.time_since_epoch().count() != 0 && now < next_refresh_))
+            if (refresh_requested_ ||
+                (next_refresh_.time_since_epoch().count() != 0 && now < next_refresh_))
                 return;
             refresh_requested_ = true;
             next_refresh_ = now + kHealthRefreshInterval;
@@ -427,8 +486,8 @@ private:
 
             const auto topology = topology_physical_signal();
             topology_.store(static_cast<int>(topology), std::memory_order_release);
-            const auto ddc = topology == PhysicalSignal::Unavailable ? PhysicalSignal::Unknown : ddc_power_signal();
-            ddc_.store(static_cast<int>(ddc), std::memory_order_release);
+            const auto sample = topology == PhysicalSignal::Unavailable ? DdcPowerSample{} : ddc_power_sample();
+            apply_ddc_sample(topology, sample);
 
             lock.lock();
         }
@@ -437,6 +496,8 @@ private:
     SessionDisplayPower session_;
     std::atomic<int> topology_{static_cast<int>(PhysicalSignal::Unknown)};
     std::atomic<int> ddc_{static_cast<int>(PhysicalSignal::Unknown)};
+    std::atomic<bool> ddc_single_on_confirmed_{false};
+    std::atomic<unsigned> ddc_unknown_streak_{0};
     std::atomic<bool> running_{false};
     std::thread worker_;
     std::mutex mu_;
@@ -557,8 +618,10 @@ public:
         }
 
         idd::DisplayModeRequest request;
-        request.width = static_cast<std::uint32_t>(std::clamp(requested.width, 640, static_cast<int>(idd::kMaxWidth)) & ~1);
-        request.height = static_cast<std::uint32_t>(std::clamp(requested.height, 480, static_cast<int>(idd::kMaxHeight)) & ~1);
+        request.width = static_cast<std::uint32_t>(
+            std::clamp(requested.width, 640, static_cast<int>(idd::kMaxWidth)) & ~1);
+        request.height = static_cast<std::uint32_t>(
+            std::clamp(requested.height, 480, static_cast<int>(idd::kMaxHeight)) & ~1);
         request.refresh_hz = static_cast<std::uint32_t>(std::clamp(requested.refresh_hz, 30, 240));
 
         const DWORD command = status.monitor_active ? idd::kIoctlSetMode : idd::kIoctlCreateMonitor;
