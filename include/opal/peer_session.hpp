@@ -1,38 +1,25 @@
 #pragma once
 
 #include <opal/peer_handshake.hpp>
-#include <opal/relay_protocol.hpp>
-#include <opal/rendezvous_server.hpp>
 #include <opal/udp_transport.hpp>
 #include <opal/video_crypto.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 
 namespace opal {
 
-struct PeerRelayFallback {
-    RendezvousEndpoint endpoint;
-    std::string allocation_id;
-    RelayRole role=RelayRole::Client;
-};
-
 struct PeerSessionOptions {
     bool client_side=false;
     UdpSocket socket;
-    RendezvousEndpoint peer;
-    std::optional<RendezvousEndpoint> lan_peer;
-    std::optional<PeerRelayFallback> relay;
+    UdpCandidate peer;
     PeerHandshakeContext handshake;
     std::filesystem::path identity_private_key;
     std::string pairing_password;
-    int lan_handshake_timeout_ms=350;
-    int direct_handshake_timeout_ms=2500;
-    int relay_handshake_timeout_ms=5000;
+    int handshake_timeout_ms=6000;
     std::function<void(const std::string&)> reliable_input;
     std::function<void(const std::string&)> pointer_input;
     std::function<void(std::span<const std::uint8_t>)> media_datagram;
