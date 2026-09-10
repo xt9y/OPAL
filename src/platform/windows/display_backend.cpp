@@ -361,12 +361,10 @@ private:
 
 bool physical_usable(PhysicalSignal topology, PhysicalSignal session, PhysicalSignal ddc)
 {
-    // A powered-off monitor can still back a perfectly valid Windows desktop.
-    // Keep using that framebuffer while Windows reports an active display path;
-    // only fall back to a virtual display when the physical topology is gone.
-    if (topology == PhysicalSignal::Available) return true;
     if (topology == PhysicalSignal::Unavailable) return false;
-    return session != PhysicalSignal::Unavailable && ddc != PhysicalSignal::Unavailable;
+    if (session == PhysicalSignal::Unavailable || ddc == PhysicalSignal::Unavailable) return false;
+    return topology == PhysicalSignal::Available || session == PhysicalSignal::Available ||
+           ddc == PhysicalSignal::Available;
 }
 
 class PhysicalHealthMonitor {
