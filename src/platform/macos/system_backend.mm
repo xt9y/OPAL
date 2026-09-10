@@ -42,6 +42,20 @@ bool sdl_video_available(std::string &driver)
     return !driver.empty();
 }
 
+bool macos_active_display_available()
+{
+    std::uint32_t count = 0;
+    return CGGetActiveDisplayList(0, nullptr, &count) == kCGErrorSuccess && count > 0;
+}
+
+bool macos_virtual_display_runtime_available()
+{
+    return NSClassFromString(@"CGVirtualDisplayDescriptor") != Nil &&
+           NSClassFromString(@"CGVirtualDisplay") != Nil &&
+           NSClassFromString(@"CGVirtualDisplaySettings") != Nil &&
+           NSClassFromString(@"CGVirtualDisplayMode") != Nil;
+}
+
 bool videotoolbox_h264_hardware_encoder_available()
 {
     CFArrayRef encoders = nullptr;
@@ -289,6 +303,16 @@ int doctor()
     if (CGPreflightScreenCaptureAccess()) show_doctor_item("Screen Recording permission", true);
     else show_doctor_failure("Screen Recording permission", PlatformComponent::Capture, PlatformFailure::PermissionDenied);
 
+    const bool physical_display = macos_active_display_available();
+    const bool virtual_runtime = macos_virtual_display_runtime_available();
+    show_doctor_item("Active CoreGraphics display", physical_display);
+    if (virtual_runtime) show_doctor_item("CGVirtualDisplay runtime", true);
+    else show_doctor_failure("CGVirtualDisplay runtime", PlatformComponent::Capture, PlatformFailure::Unsupported);
+    if (physical_display || virtual_runtime)
+        show_doctor_item("Headless display fallback ready", true);
+    else
+        show_doctor_failure("Headless display fallback", PlatformComponent::Capture, PlatformFailure::Unavailable);
+
     const auto input_status = input_helper_status();
     if (!input_status.present) show_doctor_failure("Accessibility input helper missing", PlatformComponent::Input, PlatformFailure::DependencyMissing);
     else if (!input_status.authorized) show_doctor_failure("Accessibility input helper", PlatformComponent::Input, PlatformFailure::PermissionDenied);
@@ -301,7 +325,7 @@ int doctor()
     show_doctor_item("Host LaunchAgent installed", std::filesystem::exists(launch_agent_path()));
     show_doctor_item("~/.opal initialized", std::filesystem::exists(paths.root));
     std::cout << "[info] client presenter=sdl3 decoder=libavcodec clipboard=nspasteboard\n";
-    std::cout << "[info] host capture=screencapturekit encoder=videotoolbox-hardware-lowlatency input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
+    std::cout << "[info] host capture=screencapturekit display=coregraphics-physical+virtual encoder=videotoolbox-hardware-lowlatency input=cgevent clipboard=nspasteboard audio=screencapturekit+aac\n";
     return 0;
 }
 
