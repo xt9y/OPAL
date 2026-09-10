@@ -28,6 +28,7 @@ namespace opal { namespace {
 using Clock=std::chrono::steady_clock;
 constexpr std::uint64_t kMediaStallRecoveryUs=500000;
 constexpr std::uint64_t kMediaStallFailureUs=3000000;
+constexpr std::int64_t kMaxCompletedVideoAgeUs=35000;
 constexpr std::size_t kVideoDecodeBurstFrames=2;
 std::uint64_t monotonic_us(){return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());}
 bool debug_enabled(){const char *v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
@@ -167,6 +168,21 @@ struct VideoReceiver::Impl{
         media_cv.notify_one();
     }
 
+    bool drop_expired_video(const ReassembledFrame&frame,std::uint64_t now_us){
+        if(frame.media_type!=VideoMediaType::VideoH264||frame.config||!frame.capture_timestamp_us||!clock_valid.load(std::memory_order_acquire))return false;
+        const auto age=static_cast<std::int64_t>(now_us)-static_cast<std::int64_t>(frame.capture_timestamp_us)+clock_offset_us.load(std::memory_order_acquire);
+        if(age<=kMaxCompletedVideoAgeUs)return false;
+        {
+            std::lock_guard<std::mutex>lock(media_mu);
+            clear_video_backlog();
+        }
+        encoded_drops.fetch_add(1,std::memory_order_relaxed);
+        stale.fetch_add(1,std::memory_order_relaxed);
+        skipped_present_frames.fetch_add(1,std::memory_order_relaxed);
+        request_idr_rx("decode-backlog");
+        return true;
+    }
+
     void media_loop(){
         prioritize_low_latency_thread();
         while(run.load()){
@@ -194,7 +210,7 @@ struct VideoReceiver::Impl{
         note_arrival(header.frame_id,arrival);
         const std::span<const std::uint8_t>plaintext(plaintext_buffer.data(),plaintext_size);const auto status=reassembler.accept(header,plaintext,assembled);
         if(status==ReassemblyStatus::NeedIdr)request_idr_rx("reassembly-loss");
-        else if(status==ReassemblyStatus::Complete){if(assembled.media_type==VideoMediaType::VideoH264){stall_recoveries.store(0);last_stall_recovery_us.store(0);}const auto first=take_arrival(assembled.frame_id,arrival);MediaItem item{std::move(assembled),static_cast<double>(arrival-first)/1000.0,first};assembled={};enqueue_media(std::move(item));}
+        else if(status==ReassemblyStatus::Complete){if(assembled.media_type==VideoMediaType::VideoH264){stall_recoveries.store(0);last_stall_recovery_us.store(0);}const auto first=take_arrival(assembled.frame_id,arrival);if(drop_expired_video(assembled,arrival)){assembled={};return true;}MediaItem item{std::move(assembled),static_cast<double>(arrival-first)/1000.0,first};assembled={};enqueue_media(std::move(item));}
         return true;
     }
 
