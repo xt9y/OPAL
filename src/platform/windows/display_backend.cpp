@@ -6,20 +6,47 @@
 #endif
 
 #include <windows.h>
+#include <lowlevelmonitorconfigurationapi.h>
+#include <physicalmonitorenumerationapi.h>
+#include <powrprof.h>
+#include <powersetting.h>
 
 #include <opal/display_backend.hpp>
 
 #include "../../../platform/windows/idd/Protocol.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstring>
+#include <cwchar>
 #include <cwctype>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace opal {
 namespace {
+
+enum class PhysicalSignal : int {
+    Unknown = -1,
+    Unavailable = 0,
+    Available = 1,
+};
+
+constexpr GUID kSessionDisplayStatus = {
+    0x2b84c20e, 0xad23, 0x4ddf, {0x93, 0xdb, 0x05, 0xff, 0xbd, 0x7e, 0xfc, 0xa5}
+};
+constexpr BYTE kVcpPowerMode = 0xd6;
+constexpr auto kHealthRefreshInterval = std::chrono::milliseconds(750);
+
+bool guid_equal(const GUID& a, const GUID& b)
+{
+    return std::memcmp(&a, &b, sizeof(GUID)) == 0;
+}
 
 bool contains_case_insensitive(const wchar_t* value, const wchar_t* needle)
 {
@@ -31,7 +58,33 @@ bool contains_case_insensitive(const wchar_t* value, const wchar_t* needle)
     return haystack.find(pattern) != std::wstring::npos;
 }
 
-bool physical_display_present()
+bool opal_display_text(const wchar_t* value)
+{
+    return contains_case_insensitive(value, L"OPALDISPLAY") ||
+           contains_case_insensitive(value, L"OPAL VIRTUAL DISPLAY");
+}
+
+bool gdi_device_is_opal(const wchar_t* gdi_name)
+{
+    if (!gdi_name || !*gdi_name) return false;
+    for (DWORD index = 0;; ++index) {
+        DISPLAY_DEVICEW adapter{};
+        adapter.cb = sizeof(adapter);
+        if (!EnumDisplayDevicesW(nullptr, index, &adapter, 0)) break;
+        if (_wcsicmp(adapter.DeviceName, gdi_name) != 0) continue;
+        if (opal_display_text(adapter.DeviceID) || opal_display_text(adapter.DeviceString)) return true;
+
+        DISPLAY_DEVICEW monitor{};
+        monitor.cb = sizeof(monitor);
+        if (EnumDisplayDevicesW(adapter.DeviceName, 0, &monitor, EDD_GET_DEVICE_INTERFACE_NAME) &&
+            (opal_display_text(monitor.DeviceID) || opal_display_text(monitor.DeviceString)))
+            return true;
+        return false;
+    }
+    return false;
+}
+
+bool legacy_physical_display_present()
 {
     for (DWORD index = 0;; ++index) {
         DISPLAY_DEVICEW device{};
@@ -40,13 +93,286 @@ bool physical_display_present()
         if ((device.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0 ||
             (device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0)
             continue;
-        if (contains_case_insensitive(device.DeviceID, L"OPALDISPLAY") ||
-            contains_case_insensitive(device.DeviceString, L"OPAL Virtual Display"))
+        if (opal_display_text(device.DeviceID) || opal_display_text(device.DeviceString))
             continue;
         return true;
     }
     return false;
 }
+
+bool display_path_is_opal(const DISPLAYCONFIG_PATH_INFO& path)
+{
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+    source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+    source.header.size = sizeof(source);
+    source.header.adapterId = path.sourceInfo.adapterId;
+    source.header.id = path.sourceInfo.id;
+    if (DisplayConfigGetDeviceInfo(&source.header) == ERROR_SUCCESS) {
+        if (gdi_device_is_opal(source.viewGdiDeviceName) || opal_display_text(source.viewGdiDeviceName))
+            return true;
+    }
+
+    DISPLAYCONFIG_TARGET_DEVICE_NAME target{};
+    target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+    target.header.size = sizeof(target);
+    target.header.adapterId = path.targetInfo.adapterId;
+    target.header.id = path.targetInfo.id;
+    if (DisplayConfigGetDeviceInfo(&target.header) == ERROR_SUCCESS) {
+        if (opal_display_text(target.monitorFriendlyDeviceName) || opal_display_text(target.monitorDevicePath))
+            return true;
+    }
+    return false;
+}
+
+PhysicalSignal ccd_physical_signal()
+{
+    constexpr UINT32 flags = QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        UINT32 path_count = 0;
+        UINT32 mode_count = 0;
+        LONG result = GetDisplayConfigBufferSizes(flags, &path_count, &mode_count);
+        if (result != ERROR_SUCCESS) return PhysicalSignal::Unknown;
+
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(path_count);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(mode_count);
+        result = QueryDisplayConfig(flags, &path_count, paths.data(), &mode_count, modes.data(), nullptr);
+        if (result == ERROR_INSUFFICIENT_BUFFER) continue;
+        if (result != ERROR_SUCCESS) return PhysicalSignal::Unknown;
+
+        bool saw_physical = false;
+        bool available = false;
+        for (UINT32 index = 0; index < path_count; ++index) {
+            const auto& path = paths[index];
+            if (display_path_is_opal(path)) continue;
+            saw_physical = true;
+            if (path.targetInfo.targetAvailable) available = true;
+        }
+        if (!saw_physical) return PhysicalSignal::Unavailable;
+        return available ? PhysicalSignal::Available : PhysicalSignal::Unavailable;
+    }
+    return PhysicalSignal::Unknown;
+}
+
+PhysicalSignal topology_physical_signal()
+{
+    const auto ccd = ccd_physical_signal();
+    if (ccd != PhysicalSignal::Unknown) return ccd;
+    return legacy_physical_display_present() ? PhysicalSignal::Available : PhysicalSignal::Unavailable;
+}
+
+BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM data)
+{
+    auto* monitors = reinterpret_cast<std::vector<HMONITOR>*>(data);
+    if (!monitors) return FALSE;
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (GetMonitorInfoW(monitor, &info) && !gdi_device_is_opal(info.szDevice))
+        monitors->push_back(monitor);
+    return TRUE;
+}
+
+PhysicalSignal ddc_power_signal()
+{
+    std::vector<HMONITOR> monitors;
+    if (!EnumDisplayMonitors(nullptr, nullptr, collect_monitor,
+                             reinterpret_cast<LPARAM>(&monitors)))
+        return PhysicalSignal::Unknown;
+
+    bool any_on = false;
+    unsigned known_off = 0;
+    unsigned unknown = 0;
+    for (HMONITOR monitor : monitors) {
+        DWORD count = 0;
+        if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, &count) || count == 0) {
+            ++unknown;
+            continue;
+        }
+        std::vector<PHYSICAL_MONITOR> physical(count);
+        if (!GetPhysicalMonitorsFromHMONITOR(monitor, count, physical.data())) {
+            ++unknown;
+            continue;
+        }
+
+        for (const auto& item : physical) {
+            DWORD current = 0;
+            DWORD maximum = 0;
+            MC_VCP_CODE_TYPE type{};
+            if (!GetVCPFeatureAndVCPFeatureReply(item.hPhysicalMonitor, kVcpPowerMode,
+                                                  &type, &current, &maximum)) {
+                ++unknown;
+                continue;
+            }
+            if (current == 0x01) any_on = true;
+            else if (current >= 0x02 && current <= 0x05) ++known_off;
+            else ++unknown;
+        }
+        DestroyPhysicalMonitors(count, physical.data());
+    }
+
+    if (any_on) return PhysicalSignal::Available;
+    if (known_off > 0 && unknown == 0) return PhysicalSignal::Unavailable;
+    return PhysicalSignal::Unknown;
+}
+
+class SessionDisplayPower {
+public:
+    SessionDisplayPower()
+    {
+        parameters_.Callback = &SessionDisplayPower::callback;
+        parameters_.Context = this;
+        if (PowerSettingRegisterNotification(&kSessionDisplayStatus, DEVICE_NOTIFY_CALLBACK,
+                                             &parameters_, &registration_) != ERROR_SUCCESS)
+            registration_ = nullptr;
+    }
+
+    ~SessionDisplayPower()
+    {
+        if (registration_) PowerSettingUnregisterNotification(registration_);
+    }
+
+    PhysicalSignal signal() const noexcept
+    {
+        return static_cast<PhysicalSignal>(state_.load(std::memory_order_acquire));
+    }
+
+private:
+    static ULONG CALLBACK callback(PVOID context, ULONG type, PVOID setting)
+    {
+        if (!context || type != PBT_POWERSETTINGCHANGE || !setting) return ERROR_SUCCESS;
+        const auto* broadcast = static_cast<const POWERBROADCAST_SETTING*>(setting);
+        if (!guid_equal(broadcast->PowerSetting, kSessionDisplayStatus) ||
+            broadcast->DataLength < sizeof(DWORD))
+            return ERROR_SUCCESS;
+
+        DWORD value = 0;
+        std::memcpy(&value, broadcast->Data, sizeof(value));
+        auto* self = static_cast<SessionDisplayPower*>(context);
+        if (value == 0)
+            self->state_.store(static_cast<int>(PhysicalSignal::Unavailable), std::memory_order_release);
+        else if (value == 1 || value == 2)
+            self->state_.store(static_cast<int>(PhysicalSignal::Available), std::memory_order_release);
+        else
+            self->state_.store(static_cast<int>(PhysicalSignal::Unknown), std::memory_order_release);
+        return ERROR_SUCCESS;
+    }
+
+    DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS parameters_{};
+    HPOWERNOTIFY registration_ = nullptr;
+    std::atomic<int> state_{static_cast<int>(PhysicalSignal::Unknown)};
+};
+
+bool physical_usable(PhysicalSignal topology, PhysicalSignal session, PhysicalSignal ddc)
+{
+    if (topology == PhysicalSignal::Unavailable ||
+        session == PhysicalSignal::Unavailable ||
+        ddc == PhysicalSignal::Unavailable)
+        return false;
+    return true;
+}
+
+class PhysicalHealthMonitor {
+public:
+    PhysicalHealthMonitor() = default;
+    ~PhysicalHealthMonitor() { stop(); }
+
+    bool prepare()
+    {
+        stop();
+        topology_.store(static_cast<int>(topology_physical_signal()), std::memory_order_release);
+        const auto topology = signal(topology_);
+        const auto ddc = topology == PhysicalSignal::Unavailable ? PhysicalSignal::Unknown : ddc_power_signal();
+        ddc_.store(static_cast<int>(ddc), std::memory_order_release);
+        if (!usable_cached()) return false;
+        running_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            next_refresh_ = std::chrono::steady_clock::now() + kHealthRefreshInterval;
+        }
+        worker_ = std::thread([this] { worker_loop(); });
+        return true;
+    }
+
+    bool usable()
+    {
+        request_refresh();
+        return usable_cached();
+    }
+
+    void stop()
+    {
+        const bool was_running = running_.exchange(false, std::memory_order_acq_rel);
+        if (was_running) {
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                refresh_requested_ = true;
+            }
+            cv_.notify_all();
+        }
+        if (worker_.joinable()) worker_.join();
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            refresh_requested_ = false;
+            next_refresh_ = {};
+        }
+        topology_.store(static_cast<int>(PhysicalSignal::Unknown), std::memory_order_release);
+        ddc_.store(static_cast<int>(PhysicalSignal::Unknown), std::memory_order_release);
+    }
+
+private:
+    static PhysicalSignal signal(const std::atomic<int>& value)
+    {
+        return static_cast<PhysicalSignal>(value.load(std::memory_order_acquire));
+    }
+
+    bool usable_cached() const
+    {
+        return physical_usable(signal(topology_), session_.signal(), signal(ddc_));
+    }
+
+    void request_refresh()
+    {
+        if (!running_.load(std::memory_order_acquire)) return;
+        const auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (refresh_requested_ || (next_refresh_.time_since_epoch().count() != 0 && now < next_refresh_))
+                return;
+            refresh_requested_ = true;
+            next_refresh_ = now + kHealthRefreshInterval;
+        }
+        cv_.notify_one();
+    }
+
+    void worker_loop()
+    {
+        std::unique_lock<std::mutex> lock(mu_);
+        while (running_.load(std::memory_order_acquire)) {
+            cv_.wait(lock, [this] {
+                return !running_.load(std::memory_order_acquire) || refresh_requested_;
+            });
+            if (!running_.load(std::memory_order_acquire)) break;
+            refresh_requested_ = false;
+            lock.unlock();
+
+            const auto topology = topology_physical_signal();
+            topology_.store(static_cast<int>(topology), std::memory_order_release);
+            const auto ddc = topology == PhysicalSignal::Unavailable ? PhysicalSignal::Unknown : ddc_power_signal();
+            ddc_.store(static_cast<int>(ddc), std::memory_order_release);
+
+            lock.lock();
+        }
+    }
+
+    SessionDisplayPower session_;
+    std::atomic<int> topology_{static_cast<int>(PhysicalSignal::Unknown)};
+    std::atomic<int> ddc_{static_cast<int>(PhysicalSignal::Unknown)};
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool refresh_requested_ = false;
+    std::chrono::steady_clock::time_point next_refresh_{};
+};
 
 DisplayMode physical_mode()
 {
@@ -106,9 +432,8 @@ public:
     bool probe(DisplayTarget& target) override
     {
         error_ = {};
-        if (physical_display_present()) {
-            // Clean up a virtual monitor left by a crashed previous host once a
-            // real desktop is available again.
+        physical_health_.stop();
+        if (physical_health_.prepare()) {
             HANDLE driver = open_driver();
             if (driver != INVALID_HANDLE_VALUE) {
                 idd::DriverStatus status{};
@@ -146,6 +471,7 @@ public:
     bool ensure(const DisplayMode& requested, DisplayTarget& target) override
     {
         error_ = {};
+        physical_health_.stop();
         HANDLE driver = open_driver();
         if (driver == INVALID_HANDLE_VALUE) {
             return fail(PlatformFailure::DependencyMissing,
@@ -202,7 +528,7 @@ public:
 
     bool healthy(const DisplayTarget& target) override
     {
-        if (!target.virtual_display()) return physical_display_present();
+        if (!target.virtual_display()) return physical_health_.usable();
         HANDLE driver = open_driver();
         if (driver == INVALID_HANDLE_VALUE) return false;
         idd::DriverStatus status{};
@@ -213,6 +539,7 @@ public:
 
     void release(DisplayTarget& target) override
     {
+        physical_health_.stop();
         if (target.owned_by_opal) {
             HANDLE driver = open_driver();
             if (driver != INVALID_HANDLE_VALUE) {
@@ -234,6 +561,7 @@ private:
         return false;
     }
 
+    PhysicalHealthMonitor physical_health_;
     std::string backend_ = "win32-display";
     PlatformError error_{};
 };
