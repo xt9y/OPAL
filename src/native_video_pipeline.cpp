@@ -24,12 +24,12 @@ NativeVideoPipeline::~NativeVideoPipeline()
     stop();
 }
 
-bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps)
+bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps, const DisplayTarget* target)
 {
     stop();
     terminal_ = false;
     if (!capture_ || !encoder_) return false;
-    if (!capture_->start(stream)) {
+    if (!capture_->start(stream, target)) {
         terminal_ = static_cast<bool>(capture_->last_platform_error());
         return false;
     }
