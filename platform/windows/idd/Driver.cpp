@@ -137,8 +137,8 @@ void SwapChainProcessor::run()
     DWORD task_index = 0;
     HANDLE av_task = AvSetMmThreadCharacteristicsW(L"Distribution", &task_index);
 
-    ComPtr<IDXGIFactory2> factory;
-    ComPtr<IDXGIAdapter> adapter;
+    ComPtr<IDXGIFactory5> factory;
+    ComPtr<IDXGIAdapter1> adapter;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     ComPtr<IDXGIDevice> dxgi_device;
@@ -382,10 +382,6 @@ NTSTATUS OpalDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     power.EvtDeviceD0Entry = OpalDeviceD0Entry;
     WdfDeviceInitSetPnpPowerEventCallbacks(init, &power);
 
-    DECLARE_CONST_UNICODE_STRING(sddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)");
-    NTSTATUS status = WdfDeviceInitAssignSDDLString(init, &sddl);
-    if (!NT_SUCCESS(status)) return status;
-
     IDD_CX_CLIENT_CONFIG idd_config;
     IDD_CX_CLIENT_CONFIG_INIT(&idd_config);
     idd_config.EvtIddCxDeviceIoControl = OpalDeviceIoControl;
@@ -396,7 +392,7 @@ NTSTATUS OpalDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     idd_config.EvtIddCxAdapterCommitModes = OpalAdapterCommitModes;
     idd_config.EvtIddCxMonitorAssignSwapChain = OpalMonitorAssignSwapChain;
     idd_config.EvtIddCxMonitorUnassignSwapChain = OpalMonitorUnassignSwapChain;
-    status = IddCxDeviceInitConfig(init, &idd_config);
+    NTSTATUS status = IddCxDeviceInitConfig(init, &idd_config);
     if (!NT_SUCCESS(status)) return status;
 
     WDF_OBJECT_ATTRIBUTES attributes;

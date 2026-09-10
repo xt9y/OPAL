@@ -36,6 +36,7 @@ AddReg=OPALDisplay_HardwareSettings
 [OPALDisplay_HardwareSettings]
 HKR,,"UpperFilters",%REG_MULTI_SZ%,"IndirectKmd"
 HKR,"WUDF","DeviceGroupId",%REG_SZ%,"OPALDisplayGroup"
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
 
 [OPALDisplay_Install.NT.Services]
 Include=WUDFRD.inf

@@ -61,6 +61,7 @@
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <DisableSpecificWarnings>4471;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;UMDF_DRIVER;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=6;IDDCX_MINIMUM_VERSION_REQUIRED=3;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link><AdditionalDependencies>%(AdditionalDependencies);OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib</AdditionalDependencies></Link>
@@ -70,6 +71,7 @@
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <DisableSpecificWarnings>4471;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>_WIN64;_ARM64_;ARM64;UMDF_DRIVER;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=6;IDDCX_MINIMUM_VERSION_REQUIRED=3;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link><AdditionalDependencies>%(AdditionalDependencies);OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib</AdditionalDependencies></Link>

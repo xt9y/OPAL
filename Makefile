@@ -334,7 +334,7 @@ WINDOWS_IDD_PLATFORM ?= $(if $(filter arm64 aarch64,$(WINDOWS_ARCH)),ARM64,x64)
 WINDOWS_IDD_PROJECT := platform/windows/idd/OpalDisplay.vcxproj
 WINDOWS_IDD_INSTALLER := $(BUILD)/opal-display-install.exe
 WINDOWS_IDD_STAMP := $(BUILD)/idd/.built-$(WINDOWS_IDD_PLATFORM)
-WINDOWS_MSBUILD ?= $(shell powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$cmd=Get-Command MSBuild.exe -ErrorAction SilentlyContinue; if($$cmd){$$cmd.Source; exit}; $$vswhere=Join-Path $${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"; if(Test-Path $$vswhere){& $$vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1}' 2>/dev/null | tr -d '\r')
+WINDOWS_MSBUILD ?= $(shell powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$vswhere=Join-Path $${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"; if(Test-Path $$vswhere){$$msbuild=& $$vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\amd64\MSBuild.exe" | Select-Object -First 1; if($$msbuild){$$msbuild; exit}; $$msbuild=& $$vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1; if($$msbuild){$$msbuild; exit}}; $$cmd=Get-Command MSBuild.exe -ErrorAction SilentlyContinue; if($$cmd){$$cmd.Source}' 2>/dev/null | tr -d '\r')
 
 WINDOWS_VIDEO_SRCS := \
 	src/host_display.cpp \
@@ -392,7 +392,7 @@ headless-deps-check:
 		echo 'Windows headless display build requires Visual Studio MSBuild plus the Windows Driver Kit (WDK).' >&2; \
 		exit 1; \
 	fi; \
-	OPAL_MSBUILD="$(WINDOWS_MSBUILD)" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$msbuild=$$env:OPAL_MSBUILD; $$msbuildRoot=Split-Path (Split-Path (Split-Path $$msbuild)); $$vc=Join-Path $$msbuildRoot "Microsoft\VC"; $$toolset=Get-ChildItem -Path $$vc -Directory -Filter "WindowsUserModeDriver10.0" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if(-not $$toolset){exit 1}' || { echo 'WindowsUserModeDriver10.0/WDK toolset is not installed.' >&2; exit 1; }
+	OPAL_MSBUILD="$(WINDOWS_MSBUILD)" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$msbuild=$$env:OPAL_MSBUILD; $$msbuildDir=Split-Path $$msbuild; if((Split-Path $$msbuildDir -Leaf) -eq "amd64"){$$msbuildDir=Split-Path $$msbuildDir}; $$msbuildRoot=Split-Path (Split-Path $$msbuildDir); $$vc=Join-Path $$msbuildRoot "Microsoft\VC"; $$toolset=Get-ChildItem -Path $$vc -Directory -Filter "WindowsUserModeDriver10.0" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if(-not $$toolset){exit 1}' || { echo 'WindowsUserModeDriver10.0/WDK toolset is not installed.' >&2; exit 1; }
 
 $(PRODUCT): $(WINDOWS_APP_SRCS) include/opal/*.hpp platform/windows/idd/Protocol.hpp src/platform/windows/cursor_compositor.hpp | $(BUILD) deps-check
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(WINDOWS_APP_SRCS) $(LDFLAGS) $(WINDOWS_LIBS) -o $@
