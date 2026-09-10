@@ -56,6 +56,29 @@ void release_com(T*& value)
     value = nullptr;
 }
 
+bool activate_idd_topology()
+{
+    constexpr UINT32 flags = SDC_APPLY | SDC_TOPOLOGY_EXTEND |
+                             SDC_ALLOW_CHANGES | SDC_PATH_PERSIST_IF_REQUIRED;
+    return SetDisplayConfig(0, nullptr, 0, nullptr, flags) == ERROR_SUCCESS;
+}
+
+bool transient_frame_wait_error(DWORD error)
+{
+    switch (error) {
+        case ERROR_NO_MORE_ITEMS:
+        case ERROR_NO_MORE_FILES:
+        case ERROR_NOT_READY:
+        case ERROR_RETRY:
+        case ERROR_BUSY:
+        case ERROR_IO_PENDING:
+        case ERROR_TIMEOUT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 class WindowsIddCaptureBackend final : public CaptureBackend {
 public:
     ~WindowsIddCaptureBackend() override { stop(); }
@@ -71,10 +94,13 @@ public:
         error_ = {};
         timestamp_quality_ = CaptureTimestampQuality::Estimated;
 
-        // Prefer Desktop Duplication for an active IddCx monitor. When Windows
-        // exposes the virtual output through DXGI this keeps the frame on the
-        // GPU all the way into the encoder. The legacy driver IOCTL path stays
-        // available for systems where virtual-output duplication is rejected.
+        const bool idd_target = target && target->capture_kind == DisplayCaptureKind::WindowsIddSwapchain;
+        if (idd_target && activate_idd_topology())
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        // Keep the direct path available for a future target-aware DXGI backend.
+        // The generic Windows backend currently rejects WindowsIddSwapchain so
+        // this falls through to the dedicated driver frame channel.
         auto direct = make_capture_backend();
         if (direct && direct->start(stream, target)) {
             timestamp_quality_ = direct->timestamp_quality();
@@ -167,6 +193,11 @@ public:
                                             reply_.data(), static_cast<DWORD>(reply_.size()),
                                             &returned, nullptr);
             if (ok) {
+                if (returned == 0) {
+                    if (timeout_ms <= 0 || std::chrono::steady_clock::now() >= deadline) return false;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
                 if (returned < sizeof(idd::SharedFrameHeader)) {
                     set_error("OPAL indirect display driver returned a truncated frame header");
                     running_ = false;
@@ -213,7 +244,7 @@ public:
                 running_ = false;
                 return false;
             }
-            if (win_error != ERROR_NO_MORE_ITEMS && win_error != ERROR_RETRY && win_error != ERROR_NOT_READY) {
+            if (!transient_frame_wait_error(win_error)) {
                 set_error("OPAL indirect display frame IOCTL failed (Win32 " +
                           std::to_string(win_error) + ")");
                 running_ = false;
