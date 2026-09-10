@@ -145,8 +145,12 @@ struct VideoCapture::Impl {
 
         recycle_storage();
         if (video && video->next(storage, video_wait_ms)) return make_view(view);
+        if (display && !display->healthy()) {
+            request_virtual_display_fallback();
+            mark_terminal("host display became unavailable");
+            return false;
+        }
         if (video && video->ended()) mark_terminal();
-        if (display && !display->healthy()) mark_terminal("host display became unavailable");
         return false;
     }
 };
