@@ -3,6 +3,7 @@
 #include <opal/audio_capture_backend.hpp>
 #include <opal/capture_backend.hpp>
 #include <opal/encoded_buffer_pool.hpp>
+#include <opal/host_display.hpp>
 #include <opal/native_video_pipeline.hpp>
 #include <opal/video_encoder_backend.hpp>
 
@@ -33,6 +34,7 @@ bool same_config(const MediaConfig& a, const MediaConfig& b)
 }
 
 struct VideoCapture::Impl {
+    std::unique_ptr<HostDisplayManager> display;
     std::unique_ptr<NativeVideoPipeline> video;
     std::unique_ptr<AudioCaptureBackend> audio;
     EncodedMediaUnit storage;
@@ -100,6 +102,10 @@ struct VideoCapture::Impl {
             const auto e = audio->last_platform_error();
             if (e) error = e.message;
         }
+        if (error.empty() && display) {
+            const auto e = display->last_platform_error();
+            if (e) error = e.message;
+        }
     }
 
     void mark_terminal(std::string message = {})
@@ -114,9 +120,6 @@ struct VideoCapture::Impl {
     {
         recycle_storage();
 
-        // Give audio a nonblocking service opportunity before waiting for the
-        // latest video frame. This prevents high-refresh capture from starving
-        // AAC without creating a video queue.
         if (audio) {
             if (audio->next(storage, 0)) return make_view(view);
             const auto audio_error = audio->last_platform_error();
@@ -129,6 +132,7 @@ struct VideoCapture::Impl {
         recycle_storage();
         if (video && video->next(storage, video_wait_ms)) return make_view(view);
         if (video && video->ended()) mark_terminal();
+        if (display && !display->healthy()) mark_terminal("host display became unavailable");
         return false;
     }
 };
@@ -150,11 +154,21 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
     impl_->video_config_revision = 0;
     impl_->audio_config_revision = 0;
 
+    impl_->display = std::make_unique<HostDisplayManager>();
+    if (!impl_->display->prepare(stream)) {
+        impl_->capture_error();
+        if (impl_->error.empty()) impl_->error = "could not prepare a usable host display";
+        impl_->display.reset();
+        return false;
+    }
+
     impl_->video = std::make_unique<NativeVideoPipeline>(make_capture_backend(), make_video_encoder_backend());
-    if (!impl_->video->start(stream, bitrate_kbps)) {
+    if (!impl_->video->start(stream, bitrate_kbps, &impl_->display->target())) {
         impl_->capture_error();
         if (impl_->error.empty()) impl_->error = "native video capture failed to start";
         impl_->video.reset();
+        impl_->display->stop();
+        impl_->display.reset();
         return false;
     }
 
@@ -167,12 +181,19 @@ bool VideoCapture::start(const StreamOptions& stream, int bitrate_kbps, bool aud
             impl_->audio.reset();
             impl_->video->stop();
             impl_->video.reset();
+            impl_->display->stop();
+            impl_->display.reset();
             return false;
         }
     }
 
     impl_->running = true;
     if (debug_enabled()) {
+        const auto& target = impl_->display->target();
+        std::cerr << "OPAL display=" << display_kind_name(target.kind)
+                  << " name=" << target.name
+                  << " mode=" << target.mode.width << 'x' << target.mode.height << '@' << target.mode.refresh_hz
+                  << " provider=" << impl_->display->backend_name() << '\n';
         std::cerr << "OPAL capture backend=" << backend_name()
                   << " acquisition_timestamp=" << capture_timestamp_quality_name(capture_timestamp_quality())
                   << " video_encode=in-process audio=" << (audio ? "native" : "off") << "\n";
@@ -279,6 +300,8 @@ void VideoCapture::stop()
     if (impl_->video) impl_->video->stop();
     impl_->audio.reset();
     impl_->video.reset();
+    if (impl_->display) impl_->display->stop();
+    impl_->display.reset();
     impl_->recycle_storage();
     impl_->configs.clear();
     impl_->config_revision = 0;
