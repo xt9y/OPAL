@@ -22,7 +22,7 @@ namespace opal {
 namespace {
 using Clock=std::chrono::steady_clock;
 constexpr std::uint64_t kClipboardReliableWatermark=4;
-constexpr int kClientEventBurst=64;
+constexpr int kClientEventBurst=16;
 bool debug_enabled(){const char*v=std::getenv("OPAL_DEBUG");return v&&*v&&std::string(v)!="0";}
 bool env_enabled(const char*name){const char*v=std::getenv(name);return v&&*v&&std::string(v)!="0";}
 bool read_sdl_clipboard(std::string&text){SDL_ClearError();char*raw=SDL_GetClipboardText();if(!raw)return false;const bool ok=SDL_GetError()[0]=='\0';if(ok)text.assign(raw);SDL_free(raw);return ok;}
