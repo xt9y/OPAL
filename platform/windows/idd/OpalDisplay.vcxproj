@@ -52,6 +52,11 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
 
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\..\build\idd\$(Platform)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\..\..\build\idd-obj\$(Platform)\</IntDir>
+  </PropertyGroup>
+
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
