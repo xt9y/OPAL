@@ -2,6 +2,9 @@
 
 #include <opal/media_profile.hpp>
 #include <opal/platform_error.hpp>
+#if defined(_WIN32)
+#include <opal/windows_power_compat.hpp>
+#endif
 
 #include <cstdint>
 #include <memory>
