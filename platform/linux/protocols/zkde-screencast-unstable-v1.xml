@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="zkde_screencast_unstable_v1">
+  <copyright>
+    SPDX-License-Identifier: LGPL-2.1-or-later
+    This protocol description contains the KDE screencast interfaces and
+    request/event ordering required by OPAL's client implementation.
+  </copyright>
+
+  <interface name="zkde_screencast_unstable_v1" version="5">
+    <enum name="pointer">
+      <entry name="hidden" value="1"/>
+      <entry name="embedded" value="2"/>
+      <entry name="metadata" value="4"/>
+    </enum>
+
+    <request name="stream_output">
+      <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="pointer" type="uint" enum="pointer"/>
+    </request>
+
+    <request name="stream_window">
+      <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
+      <arg name="uuid" type="string"/>
+      <arg name="pointer" type="uint" enum="pointer"/>
+    </request>
+
+    <request name="destroy" type="destructor"/>
+
+    <request name="stream_virtual_output" since="2">
+      <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
+      <arg name="name" type="string"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="scale" type="fixed"/>
+      <arg name="pointer" type="uint" enum="pointer"/>
+    </request>
+
+    <request name="stream_region" since="3">
+      <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="scale" type="fixed"/>
+      <arg name="pointer" type="uint" enum="pointer"/>
+    </request>
+
+    <request name="stream_virtual_output_with_description" since="4">
+      <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
+      <arg name="name" type="string"/>
+      <arg name="description" type="string"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="scale" type="fixed"/>
+      <arg name="pointer" type="uint" enum="pointer"/>
+    </request>
+  </interface>
+
+  <interface name="zkde_screencast_stream_unstable_v1" version="5">
+    <request name="close" type="destructor"/>
+    <event name="created">
+      <arg name="node" type="uint"/>
+    </event>
+    <event name="failed">
+      <arg name="error" type="string"/>
+    </event>
+    <event name="closed"/>
+  </interface>
+</protocol>
