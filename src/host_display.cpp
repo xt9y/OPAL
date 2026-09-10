@@ -10,6 +10,8 @@ DisplayMode display_mode_for_stream(const StreamOptions& stream)
     DisplayMode mode;
     mode.width = stream.max_width > 0 ? std::clamp(stream.max_width, 640, 7680) : 1920;
     mode.height = stream.max_height > 0 ? std::clamp(stream.max_height, 480, 4320) : 1080;
+    mode.width &= ~1;
+    mode.height &= ~1;
     mode.refresh_hz = std::clamp(stream.fps, 15, 240);
     mode.scale = 1.0f;
     return mode;
