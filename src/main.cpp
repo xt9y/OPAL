@@ -160,8 +160,8 @@ Commands:
   opal version                              Show the OPAL version
   opal help                                 Show this help
 
-Networking is built into OPAL: signed rendezvous, direct end-to-end encrypted UDP,
-and blind encrypted relay fallback when direct NAT traversal is unavailable.
+Tailscale is required on both computers. OPAL establishes its own authenticated,
+end-to-end encrypted direct session over the tailnet with no public fallback service.
 Default FPS follows the client display refresh up to 240 Hz; --fps always overrides it.
 Stream overrides apply only to the current connection. Resolution modes never upscale the host.
 Config lives in the platform OPAL data directory (or OPAL_HOME for testing).

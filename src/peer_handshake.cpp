@@ -55,8 +55,8 @@ void clear_peer_ephemeral(PeerEphemeralKey&key){OPENSSL_cleanse(key.private_key.
 std::string peer_ephemeral_public_hex(const PeerEphemeralKey&key){return key.valid?hex(key.public_key.data(),key.public_key.size()):std::string{};}
 
 std::string peer_handshake_context(const PeerHandshakeContext&c){
-    if(c.rendezvous_id.empty()||c.session_id.empty()||c.generation==0||c.client_identity.empty()||c.host_identity.empty()||c.client_nonce.empty()||c.host_nonce.empty()||c.auth_binding.empty())return {};
-    return "OPAL-PEER-CONTEXT-v1\n"+c.rendezvous_id+"\n"+c.session_id+"\n"+std::to_string(c.generation)+"\n"+c.client_identity+"\n"+c.host_identity+"\n"+c.client_nonce+"\n"+c.host_nonce+"\n"+c.auth_binding;
+    if(c.connection_id.empty()||c.session_id.empty()||c.generation==0||c.client_identity.empty()||c.host_identity.empty()||c.client_nonce.empty()||c.host_nonce.empty()||c.auth_binding.empty())return {};
+    return "OPAL-PEER-CONTEXT-v1\n"+c.connection_id+"\n"+c.session_id+"\n"+std::to_string(c.generation)+"\n"+c.client_identity+"\n"+c.host_identity+"\n"+c.client_nonce+"\n"+c.host_nonce+"\n"+c.auth_binding;
 }
 std::string peer_client_hello_transcript(const PeerHandshakeContext&c,std::string_view client_ephemeral_public){const auto context=peer_handshake_context(c);if(context.empty()||client_ephemeral_public.size()!=64)return {};return "OPAL-PEER-CLIENT-HELLO-v1\n"+context+"\n"+std::string(client_ephemeral_public);}
 std::string peer_host_welcome_transcript(const PeerHandshakeContext&c,std::string_view client_ephemeral_public,std::string_view host_ephemeral_public){const auto hello=peer_client_hello_transcript(c,client_ephemeral_public);if(hello.empty()||host_ephemeral_public.size()!=64)return {};return "OPAL-PEER-HOST-WELCOME-v1\n"+hello+"\n"+std::string(host_ephemeral_public);}
@@ -65,7 +65,7 @@ std::string peer_pairing_proof(std::string_view password,const PeerHandshakeCont
 bool derive_peer_session_keys(const PeerHandshakeContext&c,const PeerEphemeralKey&local,std::string_view client_ephemeral_public,std::string_view host_ephemeral_public,bool client_side,PeerSessionKeys&out){
     clear_peer_session_keys(out);const auto context=peer_handshake_context(c);if(context.empty()||client_ephemeral_public.size()!=64||host_ephemeral_public.size()!=64)return false;const auto local_public=peer_ephemeral_public_hex(local);if(local_public.empty()||(client_side?local_public!=client_ephemeral_public:local_public!=host_ephemeral_public))return false;
     std::array<std::uint8_t,32>shared{},salt{},prk{};const auto peer_public=client_side?host_ephemeral_public:client_ephemeral_public;bool ok=derive_shared(local,peer_public,shared)&&sha256("OPAL-PEER-HKDF-SALT-v1\n"+context,salt)&&hmac(salt,shared,prk);
-    if(ok)ok=derive_channel(prk,context,"CONTROL",client_side,out.control)&&derive_channel(prk,context,"MEDIA",client_side,out.media)&&derive_channel(prk,context,"PROBE",client_side,out.probe)&&derive_channel(prk,context,"RELAY",client_side,out.relay)&&hkdf_expand(prk,"OPAL-PEER-CONFIRM-v1\n"+context,out.confirmation_key);
+    if(ok)ok=derive_channel(prk,context,"CONTROL",client_side,out.control)&&derive_channel(prk,context,"MEDIA",client_side,out.media)&&derive_channel(prk,context,"PROBE",client_side,out.probe)&&hkdf_expand(prk,"OPAL-PEER-CONFIRM-v1\n"+context,out.confirmation_key);
     OPENSSL_cleanse(shared.data(),shared.size());OPENSSL_cleanse(salt.data(),salt.size());OPENSSL_cleanse(prk.data(),prk.size());if(!ok)clear_peer_session_keys(out);return ok;
 }
 

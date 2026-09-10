@@ -17,8 +17,6 @@ LIBEXECDIR ?= $(PREFIX)/libexec/opal
 SYSTEMDUSERDIR ?= $(PREFIX)/lib/systemd/user
 UDEVDIR ?= /usr/lib/udev/rules.d
 APPLICATIONSDIR ?= $(PREFIX)/share/applications
-PUBLIC_HOST ?= rendezvous.opal.xt9y.de
-RENDEZVOUS_PORT ?= 47992
 BUILD := build
 
 ifeq ($(OPAL_OS),windows)
@@ -28,8 +26,6 @@ else
 PRODUCT := $(BUILD)/opal
 INPUT := $(BUILD)/opal-input
 endif
-
-RENDEZVOUS_SERVER := $(BUILD)/opal-rendezvous
 
 ifeq ($(OPAL_OS),macos)
 HOMEBREW_OPENSSL_PREFIX ?= $(shell brew --prefix openssl@3 2>/dev/null)
@@ -57,20 +53,15 @@ VIDEO_FEEDBACK_SRCS := src/video_feedback.cpp
 AUDIO_OUTPUT_SRCS := src/audio_output.cpp
 VIDEO_SENDER_SRCS := src/video_sender.cpp
 VIDEO_RECEIVER_SRCS := src/video_receiver.cpp
-RENDEZVOUS_PROTOCOL_SRCS := src/rendezvous_protocol.cpp
-RENDEZVOUS_STATE_SRCS := src/rendezvous_server.cpp
-RENDEZVOUS_CLIENT_SRCS := src/rendezvous_client.cpp
-RELAY_SRCS := src/relay_protocol.cpp
 PEER_HANDSHAKE_SRCS := src/peer_handshake.cpp
 SESSION_PACKET_SRCS := src/session_packet.cpp
 RELIABLE_CONTROL_SRCS := src/reliable_control.cpp
 PEER_SESSION_SRCS := src/peer_session.cpp
+CONNECTION_SRCS := src/connection_code.cpp src/tailnet_discovery.cpp
 INPUT_SRCS := src/input.cpp
 
 CONTROL_COMMON_SRCS := \
-	$(RENDEZVOUS_PROTOCOL_SRCS) \
-	$(RENDEZVOUS_CLIENT_SRCS) \
-	$(RELAY_SRCS) \
+	$(CONNECTION_SRCS) \
 	$(PEER_HANDSHAKE_SRCS) \
 	$(SESSION_PACKET_SRCS) \
 	$(RELIABLE_CONTROL_SRCS) \
@@ -114,7 +105,7 @@ LINUX_APP_SRCS := \
 	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
 	$(VIDEO_SENDER_SRCS) $(LINUX_CAPTURE_SRCS) src/video_present.cpp \
-	$(CONTROL_COMMON_SRCS) src/local_discovery.cpp src/udp_socket_ops.cpp \
+	$(CONTROL_COMMON_SRCS) src/udp_socket_ops.cpp \
 	$(INPUT_SRCS) src/clipboard.cpp src/tailnet.cpp
 
 LINUX_LIBS := -lcrypto -lpthread $(AVLIBS) $(NATIVE_CAPTURE_LIBS) $(SWRLIBS) $(SDL3_LIBS)
@@ -188,46 +179,38 @@ install: all
 uninstall:
 	@set -e; \
 	if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory firewall-remove; fi; \
-	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(BINDIR)/opal-rendezvous" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
+	rm -f "$(DESTDIR)$(BINDIR)/opal" "$(DESTDIR)$(LIBEXECDIR)/opal-input"; \
 	rm -f "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-host.service" "$(DESTDIR)$(SYSTEMDUSERDIR)/opal-bridge.service"; \
 	rm -f "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.desktop" "$(DESTDIR)$(APPLICATIONSDIR)/de.xt9y.opal.input.desktop"; \
 	rmdir "$(DESTDIR)$(LIBEXECDIR)" 2>/dev/null || true
 
 firewall-install:
 	@if [ "$${OPAL_SKIP_FIREWALL:-0}" = 1 ]; then exit 0; fi; \
-	discovery_rule='47993/udp'; reply_rule='47994/udp'; \
+	discovery_rule='47993/udp'; \
 	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then \
 		firewall-cmd --quiet --permanent --add-port="$$discovery_rule"; \
 		firewall-cmd --quiet --add-port="$$discovery_rule"; \
-		firewall-cmd --quiet --permanent --add-port="$$reply_rule"; \
-		firewall-cmd --quiet --add-port="$$reply_rule"; \
 	fi; \
 	if command -v ufw >/dev/null 2>&1; then \
 		ufw_active=0; \
 		if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then ufw_active=1; fi; \
-		ufw allow "$$discovery_rule" comment 'OPAL LAN discovery'; \
-		ufw allow "$$reply_rule" comment 'OPAL LAN discovery replies'; \
+		ufw allow "$$discovery_rule" comment 'OPAL Tailscale discovery'; \
 		if [ "$$ufw_active" -eq 1 ]; then ufw reload >/dev/null; fi; \
 	fi
 
 firewall-remove:
 	@if [ "$${OPAL_SKIP_FIREWALL:-0}" = 1 ]; then exit 0; fi; \
-	discovery_rule='47993/udp'; reply_rule='47994/udp'; \
+	discovery_rule='47993/udp'; \
 	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then \
-		firewall-cmd --quiet --permanent --remove-port="$$reply_rule" >/dev/null 2>&1 || true; \
-		firewall-cmd --quiet --remove-port="$$reply_rule" >/dev/null 2>&1 || true; \
 		firewall-cmd --quiet --permanent --remove-port="$$discovery_rule" >/dev/null 2>&1 || true; \
 		firewall-cmd --quiet --remove-port="$$discovery_rule" >/dev/null 2>&1 || true; \
 	fi; \
 	if command -v ufw >/dev/null 2>&1; then \
 		ufw_active=0; \
 		if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then ufw_active=1; fi; \
-		ufw --force delete allow "$$reply_rule" >/dev/null 2>&1 || true; \
 		ufw --force delete allow "$$discovery_rule" >/dev/null 2>&1 || true; \
 		if [ "$$ufw_active" -eq 1 ]; then ufw reload >/dev/null 2>&1 || true; fi; \
 	fi
-
-RENDEZVOUS_LIBS := -lcrypto -lpthread
 
 else ifeq ($(OPAL_OS),macos)
 
@@ -274,7 +257,7 @@ MACOS_APP_SRCS := \
 	src/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
 	$(VIDEO_SENDER_SRCS) $(MACOS_VIDEO_SRCS) src/video_present.cpp \
-	$(CONTROL_COMMON_SRCS) src/local_discovery.cpp src/udp_socket_ops.cpp \
+	$(CONTROL_COMMON_SRCS) src/udp_socket_ops.cpp \
 	$(INPUT_SRCS) src/clipboard.cpp src/platform/macos/clipboard_shim.mm src/tailnet.cpp
 
 MACOS_FFMPEG_LIBS := $(AVLIBS) $(SWRLIBS)
@@ -334,8 +317,6 @@ uninstall:
 		sudo rmdir "$(LIBEXECDIR)" 2>/dev/null || true; \
 	fi
 
-RENDEZVOUS_LIBS := $(OPENSSL_LIBS) -pthread
-
 else ifeq ($(OPAL_OS),windows)
 
 CPPFLAGS += -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DOPAL_PLATFORM_WINDOWS=1 \
@@ -369,7 +350,7 @@ WINDOWS_APP_SRCS := \
 	src/platform/windows/udp_transport.cpp $(VIDEO_CRYPTO_SRCS) $(VIDEO_PACKET_SRCS) $(VIDEO_FEEDBACK_SRCS) \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/platform/windows/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
 	$(VIDEO_SENDER_SRCS) $(WINDOWS_VIDEO_SRCS) src/platform/windows/video_present.cpp \
-	$(CONTROL_COMMON_SRCS) src/local_discovery.cpp src/platform/windows/udp_socket_ops.cpp \
+	$(CONTROL_COMMON_SRCS) src/platform/windows/udp_socket_ops.cpp \
 	$(INPUT_SRCS) src/clipboard.cpp src/platform/windows/clipboard_shim.cpp src/platform/windows/tailnet.cpp
 
 WINDOWS_NATIVE_LIBS := \
@@ -471,37 +452,6 @@ $(error Unsupported platform '$(UNAME_S)'; OPAL supports Linux, Apple Silicon ma
 
 endif
 
-ifneq ($(OPAL_OS),windows)
-
-$(RENDEZVOUS_SERVER): src/rendezvous_main.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp include/opal/*.hpp | $(BUILD) deps-check
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) src/rendezvous_main.cpp $(RENDEZVOUS_STATE_SRCS) $(RENDEZVOUS_PROTOCOL_SRCS) $(RELAY_SRCS) src/crypto.cpp $(RENDEZVOUS_LIBS) -o $@
-
-rendezvous-server: $(RENDEZVOUS_SERVER)
-
-install-rendezvous: $(RENDEZVOUS_SERVER)
-	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
-	$(INSTALL) -m 0755 "$(RENDEZVOUS_SERVER)" "$(DESTDIR)$(BINDIR)/opal-rendezvous"
-
-endif
-
-ifeq ($(OPAL_OS),linux)
-
-deploy-rendezvous: rendezvous-server
-	@if [ "$$(id -u)" -eq 0 ]; then echo 'Run as a normal user with sudo access, not as root.' >&2; exit 2; fi
-	@set -e; \
-	command -v sudo >/dev/null 2>&1 || { echo 'sudo is required' >&2; exit 1; }; \
-	sudo install -m 0755 "$(RENDEZVOUS_SERVER)" /usr/local/bin/opal-rendezvous; \
-	sudo install -m 0644 system/opal-rendezvous.service /etc/systemd/system/opal-rendezvous.service; \
-	sudo mkdir -p /etc/systemd/system/opal-rendezvous.service.d; \
-	printf '%s\n' '[Service]' 'Environment=OPAL_RENDEZVOUS_BIND=::' 'Environment=OPAL_RENDEZVOUS_PUBLIC_HOST=$(PUBLIC_HOST)' 'Environment=OPAL_RENDEZVOUS_PORT=$(RENDEZVOUS_PORT)' | sudo tee /etc/systemd/system/opal-rendezvous.service.d/endpoint.conf >/dev/null; \
-	if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q '^Status: active'; then sudo ufw allow '$(RENDEZVOUS_PORT)/udp'; fi; \
-	if command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port='$(RENDEZVOUS_PORT)/udp'; sudo firewall-cmd --reload; fi; \
-	sudo systemctl daemon-reload; \
-	sudo systemctl enable --now opal-rendezvous.service; \
-	sudo systemctl --no-pager --full status opal-rendezvous.service
-
-endif
-
 verify: all
 	@echo "OPAL $(OPAL_OS) build complete."
 
@@ -515,7 +465,6 @@ help:
 	@echo '  make uninstall    remove installed OPAL files'
 	@echo '  make verify       build verification'
 	@echo '  make clean        remove build output'
-	@if [ "$(OPAL_OS)" != windows ]; then echo '  make rendezvous-server'; fi
 	@if [ "$(OPAL_OS)" = windows ]; then echo '  make windows-headless  build the optional IddCx virtual-display package'; fi
 
-.PHONY: all deps-check headless-deps-check install uninstall verify clean help rendezvous-server install-rendezvous deploy-rendezvous firewall-install firewall-remove macos-sign windows-headless
+.PHONY: all deps-check headless-deps-check install uninstall verify clean help firewall-install firewall-remove macos-sign windows-headless

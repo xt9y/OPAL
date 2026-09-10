@@ -9,7 +9,7 @@
 namespace opal {
 
 struct PeerHandshakeContext {
-    std::string rendezvous_id;
+    std::string connection_id;
     std::string session_id;
     std::uint32_t generation=0;
     std::string client_identity;
@@ -34,7 +34,6 @@ struct PeerSessionKeys {
     PeerChannelKeys control;
     PeerChannelKeys media;
     PeerChannelKeys probe;
-    PeerChannelKeys relay;
     std::array<std::uint8_t,32> confirmation_key{};
 };
 
