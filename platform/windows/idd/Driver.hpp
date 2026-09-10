@@ -31,6 +31,7 @@ private:
     std::mutex mu_;
     SharedFrameHeader header_{};
     std::vector<std::uint8_t> pixels_;
+    std::vector<std::uint8_t> scratch_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_;
     std::uint32_t staging_width_ = 0;
     std::uint32_t staging_height_ = 0;
