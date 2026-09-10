@@ -7,6 +7,14 @@
 
 namespace opal {
 
+struct ActiveHostDisplay {
+    DisplayMode mode{};
+    DisplayKind kind = DisplayKind::Physical;
+    bool valid = false;
+    std::string backend;
+    std::string name;
+};
+
 class HostDisplayManager {
 public:
     HostDisplayManager();
@@ -28,5 +36,7 @@ private:
     PlatformError error_{};
     bool active_ = false;
 };
+
+ActiveHostDisplay active_host_display();
 
 }
