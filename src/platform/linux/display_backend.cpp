@@ -2,10 +2,12 @@
 #include <opal/headless_session.hpp>
 #include <opal/kwin_virtual_display.hpp>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <unistd.h>
 
@@ -44,6 +46,8 @@ public:
         if (wayland_socket_available()) {
             kwin_ = std::make_unique<KwinVirtualDisplay>();
             if (kwin_->connect() && kwin_->has_output()) {
+                kwin_->close();
+                kwin_.reset();
                 target = {};
                 target.kind = DisplayKind::Physical;
                 target.capture_kind = DisplayCaptureKind::Desktop;
@@ -102,14 +106,12 @@ public:
         session_ = std::make_unique<HeadlessSession>();
         if (!session_->start(mode)) return fail(session_->last_error());
 
-        kwin_ = std::make_unique<KwinVirtualDisplay>();
-        if (!kwin_->connect()) return fail(kwin_->last_error());
+        if (!connect_managed_kwin()) return fail("managed KWin started but its screencast interface did not become ready");
 
         std::uint32_t node = 0;
         bool streamed = kwin_->stream_existing_output(node);
-        if (!streamed) {
+        if (!streamed)
             streamed = kwin_->create_virtual_output("OPAL-1", mode.width, mode.height, mode.scale, node);
-        }
         if (!streamed) return fail(kwin_->last_error());
 
         target = {};
@@ -133,8 +135,7 @@ public:
         if (previous == DisplayKind::VirtualManagedSession) {
             session_ = std::make_unique<HeadlessSession>();
             if (!session_->start(mode)) return fail(session_->last_error());
-            kwin_ = std::make_unique<KwinVirtualDisplay>();
-            if (!kwin_->connect()) return fail(kwin_->last_error());
+            if (!connect_managed_kwin()) return fail("managed KWin screencast interface did not become ready");
             std::uint32_t node = 0;
             if (!kwin_->stream_existing_output(node)) return fail(kwin_->last_error());
             target.kind = DisplayKind::VirtualManagedSession;
@@ -181,10 +182,26 @@ public:
     PlatformError last_platform_error() const override { return error_; }
 
 private:
+    bool connect_managed_kwin()
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        std::string last_error;
+        do {
+            kwin_ = std::make_unique<KwinVirtualDisplay>();
+            if (kwin_->connect()) return true;
+            last_error = kwin_->last_error();
+            kwin_.reset();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        } while (std::chrono::steady_clock::now() < deadline);
+        if (!last_error.empty()) error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable, last_error, false};
+        return false;
+    }
+
     bool fail(std::string message)
     {
-        error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                  message.empty() ? "Linux headless display creation failed" : std::move(message), false};
+        if (!error_)
+            error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                      message.empty() ? "Linux headless display creation failed" : std::move(message), false};
         reset_resources();
         return false;
     }
