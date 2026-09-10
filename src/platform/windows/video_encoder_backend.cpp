@@ -16,6 +16,7 @@
 #include <icodecapi.h>
 #include <oleauto.h>
 
+#include <opal/media_profile.hpp>
 #include <opal/video_encoder_backend.hpp>
 
 #include <algorithm>
@@ -473,6 +474,9 @@ private:
             (void)set_codec_bool(codec_api_, CODECAPI_AVLowLatencyMode, true);
             (void)set_codec_u32(codec_api_, CODECAPI_AVEncCommonRateControlMode,
                                 static_cast<std::uint32_t>(eAVEncCommonRateControlMode_CBR));
+            (void)set_codec_u32(codec_api_, CODECAPI_AVEncMPVDefaultBPictureCount, 0);
+            (void)set_codec_u32(codec_api_, CODECAPI_AVEncMPVGOPSize,
+                                static_cast<std::uint32_t>(normal_gop_frames(fps_)));
             const std::uint64_t requested = static_cast<std::uint64_t>(bitrate_kbps_) * 1000ULL;
             const auto bits = static_cast<std::uint32_t>(std::min<std::uint64_t>(requested, std::numeric_limits<std::uint32_t>::max()));
             (void)set_codec_u32(codec_api_, CODECAPI_AVEncCommonMeanBitRate, bits);
