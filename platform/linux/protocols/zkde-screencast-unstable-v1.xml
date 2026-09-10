@@ -21,7 +21,7 @@
 
     <request name="stream_window">
       <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
-      <arg name="uuid" type="string"/>
+      <arg name="window_uuid" type="string"/>
       <arg name="pointer" type="uint" enum="pointer"/>
     </request>
 
@@ -30,8 +30,8 @@
     <request name="stream_virtual_output" since="2">
       <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
       <arg name="name" type="string"/>
-      <arg name="width" type="uint"/>
-      <arg name="height" type="uint"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
       <arg name="scale" type="fixed"/>
       <arg name="pointer" type="uint" enum="pointer"/>
     </request>
@@ -50,8 +50,8 @@
       <arg name="stream" type="new_id" interface="zkde_screencast_stream_unstable_v1"/>
       <arg name="name" type="string"/>
       <arg name="description" type="string"/>
-      <arg name="width" type="uint"/>
-      <arg name="height" type="uint"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
       <arg name="scale" type="fixed"/>
       <arg name="pointer" type="uint" enum="pointer"/>
     </request>
@@ -59,12 +59,12 @@
 
   <interface name="zkde_screencast_stream_unstable_v1" version="5">
     <request name="close" type="destructor"/>
+    <event name="closed"/>
     <event name="created">
       <arg name="node" type="uint"/>
     </event>
     <event name="failed">
       <arg name="error" type="string"/>
     </event>
-    <event name="closed"/>
   </interface>
 </protocol>
