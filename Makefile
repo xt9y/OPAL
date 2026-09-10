@@ -347,6 +347,8 @@ WINDOWS_VIDEO_SRCS := \
 	src/platform/windows/video_encoder_backend.cpp \
 	src/platform/windows/audio_capture_backend.cpp
 
+WINDOWS_INPUT_SRCS := src/platform/windows/input_inject.cpp
+
 WINDOWS_APP_SRCS := \
 	src/main.cpp src/setup.cpp src/platform/windows/host.cpp src/client.cpp src/session.cpp \
 	src/platform/windows/system_backend.cpp \
@@ -357,7 +359,7 @@ WINDOWS_APP_SRCS := \
 	$(VIDEO_RECEIVER_SRCS) $(VIDEO_REASSEMBLY_SRCS) src/platform/windows/video_decoder.cpp $(AUDIO_OUTPUT_SRCS) \
 	$(VIDEO_SENDER_SRCS) $(WINDOWS_VIDEO_SRCS) src/platform/windows/video_present.cpp \
 	$(CONTROL_COMMON_SRCS) src/platform/windows/udp_socket_ops.cpp \
-	$(INPUT_SRCS) src/clipboard.cpp src/platform/windows/clipboard_shim.cpp src/platform/windows/tailnet.cpp
+	$(INPUT_SRCS) $(WINDOWS_INPUT_SRCS) src/clipboard.cpp src/platform/windows/clipboard_shim.cpp src/platform/windows/tailnet.cpp
 
 WINDOWS_NATIVE_LIBS := \
 	-lws2_32 -liphlpapi -ld3d11 -ld3dcompiler -ldxgi -ldxguid \
