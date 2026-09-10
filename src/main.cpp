@@ -232,14 +232,7 @@ int main(int argc, char** argv)
         if (result == 0) std::cout << "OPAL host stopped.\n";
         return result;
     }
-    if (action == "restart" && argc == 2) {
-#if defined(_WIN32)
-        if (!windows_prepare_host_lifecycle()) return 1;
-#endif
-        const int stopped = opal::host_service(false);
-        if (stopped != 0) return stopped;
-        return opal::interactive_run();
-    }
+    if (action == "restart" && argc == 2) return opal::interactive_restart();
     if (action == "clean" && argc == 2) {
 #if defined(_WIN32)
         if (!windows_prepare_host_lifecycle()) return 1;
