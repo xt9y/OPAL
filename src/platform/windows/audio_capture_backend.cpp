@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <audioclient.h>
+#include <endpointvolume.h>
 #include <mmdeviceapi.h>
 #include <ksmedia.h>
 
@@ -258,6 +259,49 @@ public:
     PlatformError last_platform_error() const override { return error_; }
 
 private:
+    bool mute_host_playback()
+    {
+        if (!device_) return false;
+        restore_host_playback();
+
+        HRESULT hr = device_->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                                       reinterpret_cast<void**>(&endpoint_volume_));
+        if (FAILED(hr) || !endpoint_volume_) {
+            error_ = audio_error(hr, "could not open Windows host playback volume control", true);
+            restore_host_playback();
+            return false;
+        }
+
+        hr = endpoint_volume_->GetMasterVolumeLevelScalar(&saved_master_volume_);
+        if (SUCCEEDED(hr)) hr = endpoint_volume_->GetMute(&saved_mute_);
+        if (FAILED(hr)) {
+            error_ = audio_error(hr, "could not save Windows host playback state", true);
+            restore_host_playback();
+            return false;
+        }
+        playback_state_saved_ = true;
+
+        hr = endpoint_volume_->SetMute(TRUE, nullptr);
+        if (FAILED(hr)) {
+            error_ = audio_error(hr, "could not mute Windows host playback", true);
+            restore_host_playback();
+            return false;
+        }
+        return true;
+    }
+
+    void restore_host_playback()
+    {
+        if (endpoint_volume_ && playback_state_saved_) {
+            (void)endpoint_volume_->SetMasterVolumeLevelScalar(saved_master_volume_, nullptr);
+            (void)endpoint_volume_->SetMute(saved_mute_, nullptr);
+        }
+        playback_state_saved_ = false;
+        saved_master_volume_ = 1.0f;
+        saved_mute_ = FALSE;
+        release_com(endpoint_volume_);
+    }
+
     bool open_default_endpoint()
     {
         if (!enumerator_) return false;
@@ -325,6 +369,10 @@ private:
             return false;
         }
         started_client_ = true;
+        if (!mute_host_playback()) {
+            close_endpoint();
+            return false;
+        }
         error_ = {};
         return true;
     }
@@ -344,6 +392,7 @@ private:
     {
         if (audio_client_ && started_client_) (void)audio_client_->Stop();
         started_client_ = false;
+        restore_host_playback();
         reset_encoder();
         release_com(capture_client_);
         if (event_) {
@@ -658,6 +707,7 @@ private:
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;
     IAudioCaptureClient* capture_client_ = nullptr;
+    IAudioEndpointVolume* endpoint_volume_ = nullptr;
     WAVEFORMATEX* mix_format_ = nullptr;
     HANDLE event_ = nullptr;
     UINT32 buffer_frame_count_ = 0;
@@ -665,6 +715,9 @@ private:
     bool notification_registered_ = false;
     bool started_client_ = false;
     bool running_ = false;
+    bool playback_state_saved_ = false;
+    float saved_master_volume_ = 1.0f;
+    BOOL saved_mute_ = FALSE;
     std::atomic<bool> endpoint_change_pending_{false};
 
     AVCodecContext* codec_ = nullptr;
