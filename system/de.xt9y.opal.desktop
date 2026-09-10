@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=OPAL
+Exec=/usr/local/bin/opal
+NoDisplay=true
+X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1
