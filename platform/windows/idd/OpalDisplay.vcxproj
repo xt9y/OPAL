@@ -36,6 +36,7 @@
     <IndirectDisplayDriver>true</IndirectDisplayDriver>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
     <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="Configuration">
     <TargetVersion>Windows10</TargetVersion>
@@ -45,6 +46,7 @@
     <IndirectDisplayDriver>true</IndirectDisplayDriver>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
     <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -66,7 +68,6 @@
     </ClCompile>
     <Link><AdditionalDependencies>%(AdditionalDependencies);OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib</AdditionalDependencies></Link>
     <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
-    <Inf2Cat><UseLocalTime>true</UseLocalTime></Inf2Cat>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
@@ -77,7 +78,6 @@
     </ClCompile>
     <Link><AdditionalDependencies>%(AdditionalDependencies);OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib</AdditionalDependencies></Link>
     <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
-    <Inf2Cat><UseLocalTime>true</UseLocalTime></Inf2Cat>
   </ItemDefinitionGroup>
 
   <ItemGroup>
