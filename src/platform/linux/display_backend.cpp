@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -32,6 +33,23 @@ bool wayland_socket_available()
     }
     std::error_code error;
     return std::filesystem::exists(socket, error) && !error;
+}
+
+bool physical_connector_available()
+{
+    const std::filesystem::path drm("/sys/class/drm");
+    std::error_code error;
+    if (!std::filesystem::exists(drm, error) || error) return false;
+
+    std::filesystem::directory_iterator it(drm, error), end;
+    for (; !error && it != end; it.increment(error)) {
+        const auto name = it->path().filename().string();
+        if (name.find('-') == std::string::npos) continue;
+        std::ifstream status(it->path() / "status");
+        std::string value;
+        if (status >> value && value == "connected") return true;
+    }
+    return false;
 }
 
 void enable_virtual_input(const DisplayMode& mode)
@@ -191,6 +209,12 @@ public:
         if (!kwin_ || target.pipewire_node == 0) return false;
         if (target.kind == DisplayKind::VirtualManagedSession && (!session_ || !session_->running())) return false;
         return true;
+    }
+
+    bool physical_display_available(const DisplayTarget& target) const override
+    {
+        if (!target.virtual_display()) return true;
+        return physical_connector_available();
     }
 
     void release(DisplayTarget& target) override
