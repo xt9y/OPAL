@@ -25,6 +25,8 @@ bool same_config(const MediaConfig& a, const MediaConfig& b)
 }
 
 #if defined(_WIN32)
+constexpr std::uint64_t kIddIdleFrameIntervalUs = 100000;
+
 std::uint64_t monotonic_us()
 {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -45,6 +47,7 @@ struct WindowsIddCopyCache {
     UINT width = 0;
     UINT height = 0;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    std::uint64_t last_emit_us = 0;
 
     ~WindowsIddCopyCache() { reset(); }
 
@@ -56,6 +59,7 @@ struct WindowsIddCopyCache {
         width = 0;
         height = 0;
         format = DXGI_FORMAT_UNKNOWN;
+        last_emit_us = 0;
     }
 
     bool copy_and_release(NativeVideoFrame& frame, PlatformError& error)
@@ -118,16 +122,53 @@ struct WindowsIddCopyCache {
 
         frame.opaque = texture;
         frame.owner = std::move(copy_owner);
+        last_emit_us = monotonic_us();
+        return true;
+    }
+
+    bool repeat_if_due(NativeVideoFrame& frame)
+    {
+        if (!texture || width == 0 || height == 0 || format == DXGI_FORMAT_UNKNOWN) return false;
+        const auto now = monotonic_us();
+        if (last_emit_us && now < last_emit_us + kIddIdleFrameIntervalUs) return false;
+
+        texture->AddRef();
+        frame.kind = NativeVideoFrameKind::Opaque;
+        frame.width = static_cast<int>(width);
+        frame.height = static_cast<int>(height);
+        frame.pixel_format = static_cast<std::uint32_t>(format);
+        frame.capture_time_us = now;
+        frame.opaque = texture;
+        frame.owner = std::shared_ptr<void>(texture, [](void* value) {
+            static_cast<ID3D11Texture2D*>(value)->Release();
+        });
+        last_emit_us = now;
         return true;
     }
 };
+
+WindowsIddCopyCache& idd_copy_cache()
+{
+    static thread_local WindowsIddCopyCache cache;
+    return cache;
+}
 
 bool detach_idd_duplication_frame(CaptureBackend* capture, NativeVideoFrame& frame,
                                   PlatformError& error)
 {
     if (!capture || capture->backend_name() != "iddcx-targeted-dxgi+d3d11") return true;
-    static thread_local WindowsIddCopyCache cache;
-    return cache.copy_and_release(frame, error);
+    return idd_copy_cache().copy_and_release(frame, error);
+}
+
+bool repeat_idd_idle_frame(CaptureBackend* capture, NativeVideoFrame& frame)
+{
+    return capture && capture->backend_name() == "iddcx-targeted-dxgi+d3d11" &&
+           idd_copy_cache().repeat_if_due(frame);
+}
+
+void reset_idd_copy_cache()
+{
+    idd_copy_cache().reset();
 }
 
 bool idd_dxgi_access_lost(CaptureBackend* capture, const PlatformError& error)
@@ -158,6 +199,9 @@ bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps, c
     pipeline_error_ = {};
     if (!capture_ || !encoder_) return false;
 
+#if defined(_WIN32)
+    reset_idd_copy_cache();
+#endif
     stream_options_ = stream;
     bitrate_kbps_ = std::max(1000, bitrate_kbps);
     has_display_target_ = target != nullptr;
@@ -185,12 +229,14 @@ bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
     unit = {};
     if (!running_ || terminal_ || !capture_ || !encoder_) return false;
     NativeVideoFrame frame;
+    bool repeated_idd_frame = false;
     if (!capture_->next(frame, timeout_ms)) {
         const auto capture_error = capture_->last_platform_error();
 #if defined(_WIN32)
         if (idd_dxgi_access_lost(capture_.get(), capture_error)) {
             capture_->stop();
             encoder_->stop();
+            reset_idd_copy_cache();
             pipeline_error_ = {};
 
             if (!capture_->start(stream_options_, has_display_target_ ? &display_target_ : nullptr)) {
@@ -214,15 +260,20 @@ bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
             encoder_->request_idr();
             return false;
         }
+        if (!capture_error && repeat_idd_idle_frame(capture_.get(), frame)) {
+            repeated_idd_frame = true;
+        } else
 #endif
-        if (capture_error) {
-            terminal_ = true;
-            running_ = false;
+        {
+            if (capture_error) {
+                terminal_ = true;
+                running_ = false;
+            }
+            return false;
         }
-        return false;
     }
 #if defined(_WIN32)
-    if (!detach_idd_duplication_frame(capture_.get(), frame, pipeline_error_)) {
+    if (!repeated_idd_frame && !detach_idd_duplication_frame(capture_.get(), frame, pipeline_error_)) {
         terminal_ = true;
         running_ = false;
         return false;
@@ -269,6 +320,9 @@ void NativeVideoPipeline::stop()
     running_ = false;
     if (encoder_) encoder_->stop();
     if (capture_) capture_->stop();
+#if defined(_WIN32)
+    reset_idd_copy_cache();
+#endif
     config_ = {};
     config_revision_ = 0;
     terminal_ = false;
