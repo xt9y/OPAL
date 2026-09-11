@@ -1,4 +1,7 @@
 #include <opal/host_display.hpp>
+#if defined(_WIN32)
+#include <opal/windows_idd.hpp>
+#endif
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -12,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -85,6 +89,9 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
 {
     const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
     stop();
+    requested_mode_ = stream.host_display_mode;
+    duplicate_layout_active_ = false;
+    next_layout_check_ = {};
     if (!backend_) {
         error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                   "display backend unavailable", false};
@@ -130,6 +137,7 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
 
         const LONG topology_result = windows_apply_duplicate_layout();
         if (topology_result == ERROR_SUCCESS) {
+            duplicate_layout_active_ = true;
             adopt_display(std::move(target), backend_, target_, active_);
             return true;
         }
@@ -184,9 +192,35 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
 #endif
 }
 
-bool HostDisplayManager::healthy() const
+bool HostDisplayManager::healthy()
 {
-    return active_ && backend_ && backend_->healthy(target_);
+    if (!active_ || !backend_ || !backend_->healthy(target_)) return false;
+
+#if defined(_WIN32)
+    if (target_.virtual_display() && requested_mode_ == HostDisplayMode::Duplicate) {
+        const auto now = std::chrono::steady_clock::now();
+        if (next_layout_check_.time_since_epoch().count() == 0 || now >= next_layout_check_) {
+            next_layout_check_ = now + std::chrono::milliseconds(750);
+            const bool physical_usable = windows_physical_display_usable();
+            if (!physical_usable) {
+                duplicate_layout_active_ = false;
+            } else if (!duplicate_layout_active_) {
+                const LONG result = windows_apply_duplicate_layout();
+                if (result == ERROR_SUCCESS) {
+                    duplicate_layout_active_ = true;
+                    error_ = {};
+                } else {
+                    error_ = {PlatformComponent::Capture, PlatformFailure::OsError,
+                              "could not switch hot-plugged Windows display to duplicate topology (Win32 " +
+                                  std::to_string(result) + ")",
+                              false};
+                }
+            }
+        }
+    }
+#endif
+
+    return true;
 }
 
 void HostDisplayManager::stop()
@@ -202,6 +236,9 @@ void HostDisplayManager::stop()
 #endif
     target_ = {};
     error_ = {};
+    requested_mode_ = HostDisplayMode::Duplicate;
+    duplicate_layout_active_ = false;
+    next_layout_check_ = {};
     active_ = false;
 #if defined(_WIN32)
     force_virtual_once.store(false, std::memory_order_release);
