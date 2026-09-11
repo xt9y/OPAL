@@ -45,9 +45,23 @@ bool physical_connector_available()
     for (; !error && it != end; it.increment(error)) {
         const auto name = it->path().filename().string();
         if (name.find('-') == std::string::npos) continue;
+
         std::ifstream status(it->path() / "status");
-        std::string value;
-        if (status >> value && value == "connected") return true;
+        std::string status_value;
+        if (!(status >> status_value) || status_value != "connected") continue;
+
+        // DRM can keep a connector detectable while the output itself is not
+        // enabled. Treat that as headless so OPAL uses its virtual output.
+        std::ifstream enabled(it->path() / "enabled");
+        std::string enabled_value;
+        if (enabled >> enabled_value) {
+            if (enabled_value == "enabled") return true;
+            continue;
+        }
+
+        // Older DRM drivers may not expose `enabled`; connected is the best
+        // available signal in that case.
+        return true;
     }
     return false;
 }
