@@ -1,24 +1,10 @@
+#include <opal/display_policy.hpp>
 #include <opal/host_display.hpp>
-#if defined(_WIN32)
-#include <opal/windows_idd.hpp>
-#endif
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <utility>
 
 namespace opal {
@@ -50,15 +36,6 @@ void adopt_display(DisplayTarget&& target, std::unique_ptr<DisplayBackend>& back
     active = true;
     publish_display(active_target, backend->backend_name());
 }
-
-#if defined(_WIN32)
-LONG windows_apply_duplicate_layout()
-{
-    constexpr UINT32 flags = SDC_APPLY | SDC_TOPOLOGY_CLONE |
-                             SDC_ALLOW_CHANGES | SDC_PATH_PERSIST_IF_REQUIRED;
-    return SetDisplayConfig(0, nullptr, 0, nullptr, flags);
-}
-#endif
 }
 
 DisplayMode display_mode_for_stream(const StreamOptions& stream)
@@ -86,40 +63,11 @@ const char* display_kind_name(DisplayKind kind) noexcept
 HostDisplayManager::HostDisplayManager() : backend_(make_display_backend()) {}
 HostDisplayManager::~HostDisplayManager() { stop(); }
 
-void HostDisplayManager::start_duplicate_hotplug_watch()
-{
-#if defined(_WIN32)
-    stop_duplicate_hotplug_watch();
-    physical_display_usable_.store(false, std::memory_order_release);
-    if (!active_ || !target_.virtual_display() || requested_mode_ != HostDisplayMode::Duplicate) return;
-
-    duplicate_watch_running_.store(true, std::memory_order_release);
-    duplicate_watch_thread_ = std::thread([this] {
-        while (duplicate_watch_running_.load(std::memory_order_acquire)) {
-            physical_display_usable_.store(windows_physical_display_usable(), std::memory_order_release);
-            for (int i = 0; i < 15 && duplicate_watch_running_.load(std::memory_order_acquire); ++i)
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    });
-#endif
-}
-
-void HostDisplayManager::stop_duplicate_hotplug_watch()
-{
-#if defined(_WIN32)
-    duplicate_watch_running_.store(false, std::memory_order_release);
-    if (duplicate_watch_thread_.joinable()) duplicate_watch_thread_.join();
-    physical_display_usable_.store(false, std::memory_order_release);
-#endif
-}
-
 bool HostDisplayManager::prepare(const StreamOptions& stream)
 {
-    const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
+    const bool force_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
     stop();
-    requested_mode_ = stream.host_display_mode;
-    duplicate_layout_active_ = false;
-    next_layout_check_ = {};
+
     if (!backend_) {
         error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                   "display backend unavailable", false};
@@ -127,85 +75,35 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
     }
 
     DisplayTarget target;
+    DisplayMode physical_mode{};
+    bool physical_available = false;
 
-#if defined(_WIN32)
-    auto mode = display_mode_for_stream(stream);
-    bool physical_usable = false;
-
-    // Duplicate is meaningful only when the physical desktop is genuinely
-    // usable. Reuse the Windows backend's power/DDC/topology health probe that
-    // drove the previously working headless fallback instead of trusting the
-    // DISPLAY_DEVICE_ACTIVE bit, which can remain set while a monitor is off.
-    // Extend deliberately skips this probe: it always requests an OPAL IDD.
-    if (stream.host_display_mode == HostDisplayMode::Duplicate && !prefer_virtual) {
-        DisplayTarget probed;
-        if (backend_->probe(probed)) {
-            if (!probed.virtual_display()) {
-                physical_usable = true;
-                mode = probed.mode;
-                backend_->release(probed);
+    // Duplicate is a capture policy, not a request to renegotiate the host's
+    // display mode. When a real desktop is available, capture it exactly as it
+    // is. Extend deliberately skips the physical probe and creates/reuses an
+    // OPAL virtual output instead.
+    if (!force_virtual && stream.host_display_mode == HostDisplayMode::Duplicate &&
+        backend_->probe(target)) {
+        if (!target.virtual_display()) {
+            physical_available = true;
+            physical_mode = target.mode;
+            if (capture_physical_for_topology(stream.host_display_mode,
+                                              physical_available, force_virtual)) {
+                adopt_display(std::move(target), backend_, target_, active_);
+                return true;
             }
-            // A virtual probe found the persistent OPAL IDD from the previous
-            // media session. Do not release it here: WindowsDisplayBackend::release
-            // sends DestroyMonitor, and rapid departure/arrival cycles can leave
-            // the UMDF/IddCx device unavailable on the next connection.
-        }
-    }
-
-    PlatformError virtual_error{};
-    if (backend_->ensure(mode, target)) {
-        // The proven duplicate path is the only topology change that belongs
-        // here. For extend and headless duplicate, creating/reusing the IDD
-        // monitor is enough; the Windows IDD capture backend performs attachment
-        // after the monitor has actually arrived.
-        if (!(stream.host_display_mode == HostDisplayMode::Duplicate && physical_usable)) {
+        } else {
+            // A headless host may already have a persistent OPAL virtual output.
+            // Reuse it unchanged rather than forcing a new mode onto it here.
             adopt_display(std::move(target), backend_, target_, active_);
-            start_duplicate_hotplug_watch();
             return true;
         }
-
-        const LONG topology_result = windows_apply_duplicate_layout();
-        if (topology_result == ERROR_SUCCESS) {
-            duplicate_layout_active_ = true;
-            adopt_display(std::move(target), backend_, target_, active_);
-            start_duplicate_hotplug_watch();
-            return true;
-        }
-        backend_->release(target);
-        target = {};
-        virtual_error = {PlatformComponent::Capture, PlatformFailure::OsError,
-                         "could not apply Windows duplicate display topology (Win32 " +
-                             std::to_string(topology_result) + ")",
-                         false};
-    } else {
-        virtual_error = backend_->last_platform_error();
     }
 
-    // If cloning a confirmed-live physical display cannot be established,
-    // retain the old availability fallback and capture that physical display.
-    // Never take this path for a forced/headless virtual fallback.
-    if (stream.host_display_mode == HostDisplayMode::Duplicate &&
-        physical_usable && !prefer_virtual && backend_->probe(target) && !target.virtual_display()) {
-        error_ = {};
-        adopt_display(std::move(target), backend_, target_, active_);
-        return true;
-    }
-
-    if (target.virtual_display()) backend_->release(target);
-    error_ = virtual_error;
-    if (!error_) error_ = backend_->last_platform_error();
-    if (!error_) {
-        error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                  "could not create the requested Windows virtual host display", false};
-    }
-    return false;
-#else
-    if (!prefer_virtual && backend_->probe(target)) {
-        adopt_display(std::move(target), backend_, target_, active_);
-        return true;
-    }
-
-    const auto mode = display_mode_for_stream(stream);
+    const auto mode = virtual_mode_for_topology(stream.host_display_mode,
+                                                physical_mode,
+                                                display_mode_for_stream(stream),
+                                                physical_available);
     if (backend_->ensure(mode, target)) {
         adopt_display(std::move(target), backend_, target_, active_);
         return true;
@@ -214,67 +112,32 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
     error_ = backend_->last_platform_error();
     if (!error_) {
         error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
-                  prefer_virtual ? "could not create the requested virtual host display"
-                                 : "could not create a usable host display",
+                  stream.host_display_mode == HostDisplayMode::Extend
+                      ? "could not create the requested extended virtual host display"
+                      : "could not create a usable host display",
                   false};
     }
     return false;
-#endif
 }
 
 bool HostDisplayManager::healthy()
 {
-    if (!active_ || !backend_ || !backend_->healthy(target_)) return false;
-
-#if defined(_WIN32)
-    if (target_.virtual_display() && requested_mode_ == HostDisplayMode::Duplicate) {
-        const bool physical_usable = physical_display_usable_.load(std::memory_order_acquire);
-        if (!physical_usable) {
-            duplicate_layout_active_ = false;
-            next_layout_check_ = {};
-        } else if (!duplicate_layout_active_) {
-            const auto now = std::chrono::steady_clock::now();
-            if (next_layout_check_.time_since_epoch().count() == 0 || now >= next_layout_check_) {
-                next_layout_check_ = now + std::chrono::milliseconds(750);
-                const LONG result = windows_apply_duplicate_layout();
-                if (result == ERROR_SUCCESS) {
-                    duplicate_layout_active_ = true;
-                    error_ = {};
-                } else {
-                    error_ = {PlatformComponent::Capture, PlatformFailure::OsError,
-                              "could not switch hot-plugged Windows display to duplicate topology (Win32 " +
-                                  std::to_string(result) + ")",
-                              false};
-                }
-            }
-        }
-    }
-#endif
-
-    return true;
+    return active_ && backend_ && backend_->healthy(target_);
 }
 
 void HostDisplayManager::stop()
 {
-    stop_duplicate_hotplug_watch();
 #if defined(_WIN32)
-    // The host daemon owns the IDD monitor, not an individual media session.
-    // Keep virtual targets alive across disconnect/restart so repeated client
-    // sessions do not churn IddCx monitor departure/arrival. A later explicit
-    // host-lifecycle cleanup can remove the persistent monitor once.
+    // The Windows host daemon owns the IDD monitor, not an individual media
+    // session. Keep OPAL's virtual output alive across reconnects, but never
+    // modify or retain ownership of a physical display configuration.
     if (backend_ && active_ && !target_.virtual_display()) backend_->release(target_);
 #else
     if (backend_ && active_) backend_->release(target_);
 #endif
     target_ = {};
     error_ = {};
-    requested_mode_ = HostDisplayMode::Duplicate;
-    duplicate_layout_active_ = false;
-    next_layout_check_ = {};
     active_ = false;
-#if defined(_WIN32)
-    force_virtual_once.store(false, std::memory_order_release);
-#endif
     clear_display();
 }
 
