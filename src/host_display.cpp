@@ -83,9 +83,6 @@ HostDisplayManager::~HostDisplayManager() { stop(); }
 
 bool HostDisplayManager::prepare(const StreamOptions& stream)
 {
-    // Consume the one-shot request before stop(). Windows stop() intentionally
-    // clears stale requests so a previous headless session cannot pin a later
-    // session to IDD after a real monitor returns.
     const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
     stop();
     if (!backend_) {
@@ -111,19 +108,21 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
             if (!probed.virtual_display()) {
                 physical_usable = true;
                 mode = probed.mode;
+                backend_->release(probed);
             }
-            backend_->release(probed);
+            // A virtual probe found the persistent OPAL IDD from the previous
+            // media session. Do not release it here: WindowsDisplayBackend::release
+            // sends DestroyMonitor, and rapid departure/arrival cycles can leave
+            // the UMDF/IddCx device unavailable on the next connection.
         }
     }
 
     PlatformError virtual_error{};
     if (backend_->ensure(mode, target)) {
         // The proven duplicate path is the only topology change that belongs
-        // here. For extend and headless duplicate, creating the IDD monitor is
-        // enough; the Windows IDD capture backend performs attachment after the
-        // monitor has actually arrived. Calling SDC_TOPOLOGY_EXTEND here races
-        // that arrival and can return ERROR_INVALID_PARAMETER for a new or
-        // standalone virtual target.
+        // here. For extend and headless duplicate, creating/reusing the IDD
+        // monitor is enough; the Windows IDD capture backend performs attachment
+        // after the monitor has actually arrived.
         if (!(stream.host_display_mode == HostDisplayMode::Duplicate && physical_usable)) {
             adopt_display(std::move(target), backend_, target_, active_);
             return true;
@@ -192,14 +191,19 @@ bool HostDisplayManager::healthy() const
 
 void HostDisplayManager::stop()
 {
+#if defined(_WIN32)
+    // The host daemon owns the IDD monitor, not an individual media session.
+    // Keep virtual targets alive across disconnect/restart so repeated client
+    // sessions do not churn IddCx monitor departure/arrival. A later explicit
+    // host-lifecycle cleanup can remove the persistent monitor once.
+    if (backend_ && active_ && !target_.virtual_display()) backend_->release(target_);
+#else
     if (backend_ && active_) backend_->release(target_);
+#endif
     target_ = {};
     error_ = {};
     active_ = false;
 #if defined(_WIN32)
-    // A virtual fallback belongs to one capture lifetime only. Do not let a
-    // headless session force the next session back onto a stale IDD target
-    // after a physical monitor has returned.
     force_virtual_once.store(false, std::memory_order_release);
 #endif
     clear_display();
