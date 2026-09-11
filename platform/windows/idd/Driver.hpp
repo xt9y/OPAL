@@ -12,6 +12,7 @@
 
 #include "Protocol.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -26,6 +27,7 @@ public:
     bool publish(ID3D11Texture2D* surface, ID3D11Device* device, ID3D11DeviceContext* context);
     NTSTATUS copy_if_new(std::int64_t last_sequence, void* output, std::size_t output_bytes,
                          std::size_t& written);
+    bool cpu_capture_requested() const noexcept;
 
 private:
     std::mutex mu_;
@@ -36,6 +38,7 @@ private:
     std::uint32_t staging_width_ = 0;
     std::uint32_t staging_height_ = 0;
     DXGI_FORMAT staging_format_ = DXGI_FORMAT_UNKNOWN;
+    std::atomic<std::uint64_t> last_cpu_request_ms_{0};
 };
 
 class SwapChainProcessor {
