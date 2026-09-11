@@ -147,8 +147,8 @@ static void help()
 
 Commands:
   opal                                      Wake and connect at up to 1080p / 60 fps
-  opal [--mode max|1080p|1440p|4k] [--fps 15-240]
-                                            Connect with temporary stream overrides
+  opal [--mode duplicate|extend] [--resolution max|1080p|1440p|4k] [--fps 15-240]
+                                            Connect with temporary stream/display overrides
   opal select                               Select a saved host and show connection details
   opal list                                 Alias for opal select
   opal new                                  Run OPAL setup / add another host
@@ -162,7 +162,9 @@ Commands:
 
 Tailscale is required on both computers. OPAL establishes its own authenticated,
 end-to-end encrypted direct session over the tailnet with no public fallback service.
-Default stream target is 1920x1080 at 60 fps; --mode and --fps override it.
+Default stream target is 1920x1080 at 60 fps with Windows display mode duplicate.
+--mode selects duplicate or extend; --resolution and --fps override stream limits.
+For compatibility, the old --mode max|1080p|1440p|4k spelling is still accepted.
 Stream overrides apply only to the current connection. Resolution modes never upscale the host.
 Config lives in the platform OPAL data directory (or OPAL_HOME for testing).
 Release remote control with Ctrl+Alt+Shift+W; quit with Ctrl+Alt+Shift+Q.
@@ -182,14 +184,38 @@ static bool parse_fps(const std::string& value, int& fps)
     }
 }
 
+static bool parse_host_display_mode(const std::string& value, opal::HostDisplayMode& mode)
+{
+    if (value == "duplicate") {
+        mode = opal::HostDisplayMode::Duplicate;
+        return true;
+    }
+    if (value == "extend") {
+        mode = opal::HostDisplayMode::Extend;
+        return true;
+    }
+    return false;
+}
+
 static int run_stream_flags(int argc, char** argv)
 {
     opal::StreamOptions stream;
     for (int i = 1; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--mode") {
+            if (i + 1 >= argc) {
+                std::cerr << "invalid --mode; expected duplicate or extend\n";
+                return 2;
+            }
+            const std::string value = argv[++i];
+            if (!parse_host_display_mode(value, stream.host_display_mode) &&
+                !opal::stream_mode_limit(value, stream.max_width, stream.max_height)) {
+                std::cerr << "invalid --mode; expected duplicate or extend\n";
+                return 2;
+            }
+        } else if (flag == "--resolution") {
             if (i + 1 >= argc || !opal::stream_mode_limit(argv[++i], stream.max_width, stream.max_height)) {
-                std::cerr << "invalid --mode; expected max, 1080p, 1440p, or 4k\n";
+                std::cerr << "invalid --resolution; expected max, 1080p, 1440p, or 4k\n";
                 return 2;
             }
         } else if (flag == "--fps") {
@@ -221,7 +247,7 @@ int main(int argc, char** argv)
     if (action == "--internal-host-run" && argc == 2) return opal::host_run();
     if (action == "--internal-connect" && argc >= 3 && argc <= 4)
         return opal::client_connect(argv[2], argc == 4 ? argv[3] : "");
-    if (action == "--mode" || action == "--fps") return run_stream_flags(argc, argv);
+    if (action == "--mode" || action == "--resolution" || action == "--fps") return run_stream_flags(argc, argv);
     if (action == "help" || action == "--help" || action == "-h") { help(); return 0; }
     if (action == "version" || action == "--version") { std::cout << "OPAL 0.2.0\n"; return 0; }
     if (action == "stop" && argc == 2) {
