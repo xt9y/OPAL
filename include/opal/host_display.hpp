@@ -2,8 +2,10 @@
 
 #include <opal/display_backend.hpp>
 
+#include <atomic>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace opal {
 
@@ -27,13 +29,24 @@ public:
     void stop();
 
     const DisplayTarget& target() const noexcept { return target_; }
+    bool physical_reselect_ready() const noexcept
+    {
+        return physical_reselect_ready_.load(std::memory_order_acquire);
+    }
     std::string backend_name() const;
     PlatformError last_platform_error() const;
 
 private:
+    void start_physical_handoff_watch();
+    void stop_physical_handoff_watch();
+
     std::unique_ptr<DisplayBackend> backend_;
     DisplayTarget target_{};
     PlatformError error_{};
+    HostDisplayMode requested_mode_ = HostDisplayMode::Duplicate;
+    std::atomic<bool> handoff_watch_running_{false};
+    std::atomic<bool> physical_reselect_ready_{false};
+    std::thread handoff_watch_thread_;
     bool active_ = false;
 };
 
