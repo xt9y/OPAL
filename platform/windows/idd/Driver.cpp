@@ -8,6 +8,8 @@ using Microsoft::WRL::ComPtr;
 namespace opal::idd::driver {
 namespace {
 
+constexpr std::uint64_t kCpuCaptureLeaseMs = 250;
+
 bool valid_mode(const DisplayModeRequest& mode)
 {
     return mode.version == kProtocolVersion &&
@@ -104,6 +106,7 @@ bool FrameStore::publish(ID3D11Texture2D* surface, ID3D11Device* device, ID3D11D
 NTSTATUS FrameStore::copy_if_new(std::int64_t last_sequence, void* output,
                                  std::size_t output_bytes, std::size_t& written)
 {
+    last_cpu_request_ms_.store(GetTickCount64(), std::memory_order_release);
     written = 0;
     if (!output) return STATUS_INVALID_PARAMETER;
     std::lock_guard<std::mutex> lock(mu_);
@@ -114,6 +117,14 @@ NTSTATUS FrameStore::copy_if_new(std::int64_t last_sequence, void* output,
     std::memcpy(static_cast<std::uint8_t*>(output) + sizeof(header_), pixels_.data(), pixels_.size());
     written = required;
     return STATUS_SUCCESS;
+}
+
+bool FrameStore::cpu_capture_requested() const noexcept
+{
+    const std::uint64_t last = last_cpu_request_ms_.load(std::memory_order_acquire);
+    if (last == 0) return false;
+    const std::uint64_t now = GetTickCount64();
+    return now >= last && now - last <= kCpuCaptureLeaseMs;
 }
 
 SwapChainProcessor::SwapChainProcessor(IDDCX_SWAPCHAIN swapchain, LUID render_adapter,
@@ -170,10 +181,11 @@ void SwapChainProcessor::run()
 
         ComPtr<IDXGIResource> resource;
         resource.Attach(buffer.MetaData.pSurface);
-        ComPtr<ID3D11Texture2D> texture;
-        if (resource) (void)resource.As(&texture);
-        if (texture && frames_) (void)frames_->publish(texture.Get(), device.Get(), context.Get());
-        texture.Reset();
+        if (frames_ && frames_->cpu_capture_requested()) {
+            ComPtr<ID3D11Texture2D> texture;
+            if (resource) (void)resource.As(&texture);
+            if (texture) (void)frames_->publish(texture.Get(), device.Get(), context.Get());
+        }
         resource.Reset();
         hr = IddCxSwapChainFinishedProcessingFrame(swapchain_);
     }
