@@ -410,6 +410,13 @@ bool VideoCapture::next_view(EncodedMediaView& unit, int timeout_ms)
     if (!impl_) return false;
     unit = {};
 
+    if (impl_->display && impl_->display->physical_reselect_ready()) {
+        if (debug_enabled())
+            std::cerr << "OPAL physical display returned; restarting duplicate capture on physical desktop\n";
+        impl_->terminal = true;
+        return false;
+    }
+
     if (impl_->direct_active) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
         for (;;) {
