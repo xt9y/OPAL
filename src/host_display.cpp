@@ -47,12 +47,11 @@ void adopt_display(DisplayTarget&& target, std::unique_ptr<DisplayBackend>& back
 }
 
 #if defined(_WIN32)
-LONG windows_apply_display_layout(HostDisplayMode requested, bool physical_usable)
+LONG windows_apply_duplicate_layout()
 {
-    const UINT32 topology = requested == HostDisplayMode::Duplicate && physical_usable
-        ? SDC_TOPOLOGY_CLONE : SDC_TOPOLOGY_EXTEND;
-    constexpr UINT32 common = SDC_APPLY | SDC_ALLOW_CHANGES | SDC_PATH_PERSIST_IF_REQUIRED;
-    return SetDisplayConfig(0, nullptr, 0, nullptr, common | topology);
+    constexpr UINT32 flags = SDC_APPLY | SDC_TOPOLOGY_CLONE |
+                             SDC_ALLOW_CHANGES | SDC_PATH_PERSIST_IF_REQUIRED;
+    return SetDisplayConfig(0, nullptr, 0, nullptr, flags);
 }
 #endif
 }
@@ -119,7 +118,18 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
 
     PlatformError virtual_error{};
     if (backend_->ensure(mode, target)) {
-        const LONG topology_result = windows_apply_display_layout(stream.host_display_mode, physical_usable);
+        // The proven duplicate path is the only topology change that belongs
+        // here. For extend and headless duplicate, creating the IDD monitor is
+        // enough; the Windows IDD capture backend performs attachment after the
+        // monitor has actually arrived. Calling SDC_TOPOLOGY_EXTEND here races
+        // that arrival and can return ERROR_INVALID_PARAMETER for a new or
+        // standalone virtual target.
+        if (!(stream.host_display_mode == HostDisplayMode::Duplicate && physical_usable)) {
+            adopt_display(std::move(target), backend_, target_, active_);
+            return true;
+        }
+
+        const LONG topology_result = windows_apply_duplicate_layout();
         if (topology_result == ERROR_SUCCESS) {
             adopt_display(std::move(target), backend_, target_, active_);
             return true;
@@ -127,10 +137,8 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
         backend_->release(target);
         target = {};
         virtual_error = {PlatformComponent::Capture, PlatformFailure::OsError,
-                         std::string("could not apply Windows ") +
-                             (stream.host_display_mode == HostDisplayMode::Duplicate && physical_usable
-                                  ? "duplicate" : "virtual") +
-                             " display topology (Win32 " + std::to_string(topology_result) + ")",
+                         "could not apply Windows duplicate display topology (Win32 " +
+                             std::to_string(topology_result) + ")",
                          false};
     } else {
         virtual_error = backend_->last_platform_error();
