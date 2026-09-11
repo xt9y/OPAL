@@ -215,6 +215,14 @@ struct VideoCapture::Impl {
     {
         recycle_storage();
 
+        if (display && display->physical_reselect_ready()) {
+            prefer_virtual = false;
+            if (debug_enabled())
+                std::cerr << "OPAL physical display returned; restarting duplicate capture on physical desktop\n";
+            mark_terminal();
+            return false;
+        }
+
         if (video && video->next(storage, video_wait_ms)) {
             video_frame_seen = true;
             last_video_frame = std::chrono::steady_clock::now();
