@@ -17,9 +17,9 @@ struct StreamOptions {
 
     StreamOptions() = default;
 
-    // MEDIA_RECEIVER_READY predates host-display modes. Keep the wire format
-    // backwards compatible by carrying Extend in the otherwise-unused low bit
-    // of the (always even) width. 17x16 is the Extend+native-resolution sentinel.
+    // MEDIA_RECEIVER_READY predates host-display modes. Keep its field count
+    // unchanged by carrying Extend in the otherwise-unused low bit of the
+    // (always even) width. 17x16 is the Extend+native-resolution sentinel.
     StreamOptions(int wire_width,int wire_height,int frame_rate)
         : fps(frame_rate)
     {
@@ -34,6 +34,15 @@ struct StreamOptions {
         max_width = wire_width > 0 ? (wire_width & ~1) : wire_width;
         max_height = wire_height;
     }
+
+    // Preserve the old four-field aggregate-style construction used by
+    // callers that specify automatic_fps explicitly.
+    StreamOptions(int width,int height,int frame_rate,bool automatic)
+        : max_width(width),max_height(height),fps(frame_rate),automatic_fps(automatic) {}
+
+    StreamOptions(int width,int height,int frame_rate,bool automatic,HostDisplayMode display_mode)
+        : max_width(width),max_height(height),fps(frame_rate),automatic_fps(automatic),
+          host_display_mode(display_mode) {}
 };
 
 inline int stream_wire_width(const StreamOptions& stream)
