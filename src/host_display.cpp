@@ -143,6 +143,7 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
     (void)prefer_virtual;
     auto mode = display_mode_for_stream(stream);
     const bool physical_active = windows_physical_display_mode(mode);
+    PlatformError virtual_error{};
 
     if (backend_->ensure(mode, target)) {
         const LONG topology_result = windows_apply_display_layout(stream.host_display_mode, physical_active);
@@ -152,15 +153,23 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
         }
         backend_->release(target);
         target = {};
-        error_ = {PlatformComponent::Capture, PlatformFailure::OsError,
-                  std::string("could not apply Windows ") +
-                      (stream.host_display_mode == HostDisplayMode::Duplicate ? "duplicate" : "extend") +
-                      " display topology (Win32 " + std::to_string(topology_result) + ")",
-                  false};
-        return false;
+        virtual_error = {PlatformComponent::Capture, PlatformFailure::OsError,
+                         std::string("could not apply Windows ") +
+                             (stream.host_display_mode == HostDisplayMode::Duplicate ? "duplicate" : "extend") +
+                             " display topology (Win32 " + std::to_string(topology_result) + ")",
+                         false};
+    } else {
+        virtual_error = backend_->last_platform_error();
     }
 
-    error_ = backend_->last_platform_error();
+    if (stream.host_display_mode == HostDisplayMode::Duplicate && backend_->probe(target)) {
+        error_ = {};
+        adopt_display(std::move(target), backend_, target_, active_);
+        return true;
+    }
+
+    error_ = virtual_error;
+    if (!error_) error_ = backend_->last_platform_error();
     if (!error_) {
         error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
                   "could not create the requested Windows virtual host display", false};
