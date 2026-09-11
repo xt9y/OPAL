@@ -15,5 +15,6 @@ struct WindowsIddStatus {
 
 WindowsIddStatus windows_idd_status();
 bool windows_physical_display_present();
+bool windows_physical_display_usable();
 
 }
