@@ -25,6 +25,17 @@ bool active_display(CGDirectDisplayID display_id = 0)
     return std::find(displays.begin(), displays.begin() + count, display_id) != displays.begin() + count;
 }
 
+bool physical_display_beside(CGDirectDisplayID virtual_display_id)
+{
+    std::uint32_t count = 0;
+    if (CGGetActiveDisplayList(0, nullptr, &count) != kCGErrorSuccess || count == 0) return false;
+    std::vector<CGDirectDisplayID> displays(count);
+    if (CGGetActiveDisplayList(count, displays.data(), &count) != kCGErrorSuccess) return false;
+    for (std::uint32_t i = 0; i < count; ++i)
+        if (displays[i] != virtual_display_id) return true;
+    return false;
+}
+
 id class_new(const char* name)
 {
     Class cls = NSClassFromString([NSString stringWithUTF8String:name]);
@@ -257,6 +268,13 @@ public:
     {
         if (!target.virtual_display()) return active_display();
         return target.native_id != 0 && active_display(static_cast<CGDirectDisplayID>(target.native_id));
+    }
+
+    bool physical_display_available(const DisplayTarget& target) const override
+    {
+        if (!target.virtual_display()) return active_display();
+        if (target.native_id == 0) return false;
+        return physical_display_beside(static_cast<CGDirectDisplayID>(target.native_id));
     }
 
     void release(DisplayTarget& target) override
