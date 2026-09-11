@@ -18,6 +18,7 @@
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace opal {
@@ -85,6 +86,33 @@ const char* display_kind_name(DisplayKind kind) noexcept
 HostDisplayManager::HostDisplayManager() : backend_(make_display_backend()) {}
 HostDisplayManager::~HostDisplayManager() { stop(); }
 
+void HostDisplayManager::start_duplicate_hotplug_watch()
+{
+#if defined(_WIN32)
+    stop_duplicate_hotplug_watch();
+    physical_display_usable_.store(false, std::memory_order_release);
+    if (!active_ || !target_.virtual_display() || requested_mode_ != HostDisplayMode::Duplicate) return;
+
+    duplicate_watch_running_.store(true, std::memory_order_release);
+    duplicate_watch_thread_ = std::thread([this] {
+        while (duplicate_watch_running_.load(std::memory_order_acquire)) {
+            physical_display_usable_.store(windows_physical_display_usable(), std::memory_order_release);
+            for (int i = 0; i < 15 && duplicate_watch_running_.load(std::memory_order_acquire); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    });
+#endif
+}
+
+void HostDisplayManager::stop_duplicate_hotplug_watch()
+{
+#if defined(_WIN32)
+    duplicate_watch_running_.store(false, std::memory_order_release);
+    if (duplicate_watch_thread_.joinable()) duplicate_watch_thread_.join();
+    physical_display_usable_.store(false, std::memory_order_release);
+#endif
+}
+
 bool HostDisplayManager::prepare(const StreamOptions& stream)
 {
     const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
@@ -132,6 +160,7 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
         // after the monitor has actually arrived.
         if (!(stream.host_display_mode == HostDisplayMode::Duplicate && physical_usable)) {
             adopt_display(std::move(target), backend_, target_, active_);
+            start_duplicate_hotplug_watch();
             return true;
         }
 
@@ -139,6 +168,7 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
         if (topology_result == ERROR_SUCCESS) {
             duplicate_layout_active_ = true;
             adopt_display(std::move(target), backend_, target_, active_);
+            start_duplicate_hotplug_watch();
             return true;
         }
         backend_->release(target);
@@ -198,13 +228,14 @@ bool HostDisplayManager::healthy()
 
 #if defined(_WIN32)
     if (target_.virtual_display() && requested_mode_ == HostDisplayMode::Duplicate) {
-        const auto now = std::chrono::steady_clock::now();
-        if (next_layout_check_.time_since_epoch().count() == 0 || now >= next_layout_check_) {
-            next_layout_check_ = now + std::chrono::milliseconds(750);
-            const bool physical_usable = windows_physical_display_usable();
-            if (!physical_usable) {
-                duplicate_layout_active_ = false;
-            } else if (!duplicate_layout_active_) {
+        const bool physical_usable = physical_display_usable_.load(std::memory_order_acquire);
+        if (!physical_usable) {
+            duplicate_layout_active_ = false;
+            next_layout_check_ = {};
+        } else if (!duplicate_layout_active_) {
+            const auto now = std::chrono::steady_clock::now();
+            if (next_layout_check_.time_since_epoch().count() == 0 || now >= next_layout_check_) {
+                next_layout_check_ = now + std::chrono::milliseconds(750);
                 const LONG result = windows_apply_duplicate_layout();
                 if (result == ERROR_SUCCESS) {
                     duplicate_layout_active_ = true;
@@ -225,6 +256,7 @@ bool HostDisplayManager::healthy()
 
 void HostDisplayManager::stop()
 {
+    stop_duplicate_hotplug_watch();
 #if defined(_WIN32)
     // The host daemon owns the IDD monitor, not an individual media session.
     // Keep virtual targets alive across disconnect/restart so repeated client
