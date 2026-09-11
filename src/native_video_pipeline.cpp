@@ -11,6 +11,7 @@
 #include <d3d11.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
