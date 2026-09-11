@@ -55,6 +55,15 @@ public:
     virtual bool healthy(const DisplayTarget& target) = 0;
     virtual void release(DisplayTarget& target) = 0;
 
+    // Read-only availability probe used while OPAL owns a virtual fallback.
+    // Implementations must not create/destroy outputs or change any display
+    // setting. The default keeps unsupported platforms on the current target.
+    virtual bool physical_display_available(const DisplayTarget& target) const
+    {
+        (void)target;
+        return false;
+    }
+
     virtual std::string backend_name() const = 0;
     virtual PlatformError last_platform_error() const = 0;
 };
