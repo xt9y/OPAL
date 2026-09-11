@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cwctype>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -48,53 +47,9 @@ void adopt_display(DisplayTarget&& target, std::unique_ptr<DisplayBackend>& back
 }
 
 #if defined(_WIN32)
-bool contains_case_insensitive(const wchar_t* value, const wchar_t* needle)
+LONG windows_apply_display_layout(HostDisplayMode requested, bool physical_usable)
 {
-    if (!value || !needle || !*needle) return false;
-    std::wstring haystack(value);
-    std::wstring pattern(needle);
-    std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](wchar_t c) {
-        return static_cast<wchar_t>(std::towupper(c));
-    });
-    std::transform(pattern.begin(), pattern.end(), pattern.begin(), [](wchar_t c) {
-        return static_cast<wchar_t>(std::towupper(c));
-    });
-    return haystack.find(pattern) != std::wstring::npos;
-}
-
-bool windows_opal_display(const DISPLAY_DEVICEW& device)
-{
-    return contains_case_insensitive(device.DeviceID, L"OPALDISPLAY") ||
-           contains_case_insensitive(device.DeviceString, L"OPAL VIRTUAL DISPLAY");
-}
-
-bool windows_physical_display_mode(DisplayMode& mode)
-{
-    for (DWORD index = 0;; ++index) {
-        DISPLAY_DEVICEW device{};
-        device.cb = sizeof(device);
-        if (!EnumDisplayDevicesW(nullptr, index, &device, 0)) break;
-        if ((device.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0 ||
-            (device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0 ||
-            windows_opal_display(device))
-            continue;
-
-        DEVMODEW current{};
-        current.dmSize = sizeof(current);
-        if (EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &current)) {
-            if (current.dmPelsWidth > 0) mode.width = static_cast<int>(current.dmPelsWidth) & ~1;
-            if (current.dmPelsHeight > 0) mode.height = static_cast<int>(current.dmPelsHeight) & ~1;
-            if (current.dmDisplayFrequency > 1)
-                mode.refresh_hz = std::clamp(static_cast<int>(current.dmDisplayFrequency), 30, 240);
-        }
-        return true;
-    }
-    return false;
-}
-
-LONG windows_apply_display_layout(HostDisplayMode requested, bool physical_active)
-{
-    const UINT32 topology = requested == HostDisplayMode::Duplicate && physical_active
+    const UINT32 topology = requested == HostDisplayMode::Duplicate && physical_usable
         ? SDC_TOPOLOGY_CLONE : SDC_TOPOLOGY_EXTEND;
     constexpr UINT32 common = SDC_APPLY | SDC_ALLOW_CHANGES | SDC_PATH_PERSIST_IF_REQUIRED;
     return SetDisplayConfig(0, nullptr, 0, nullptr, common | topology);
@@ -129,6 +84,10 @@ HostDisplayManager::~HostDisplayManager() { stop(); }
 
 bool HostDisplayManager::prepare(const StreamOptions& stream)
 {
+    // Consume the one-shot request before stop(). Windows stop() intentionally
+    // clears stale requests so a previous headless session cannot pin a later
+    // session to IDD after a real monitor returns.
+    const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
     stop();
     if (!backend_) {
         error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
@@ -137,16 +96,30 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
     }
 
     DisplayTarget target;
-    const bool prefer_virtual = force_virtual_once.exchange(false, std::memory_order_acq_rel);
 
 #if defined(_WIN32)
-    (void)prefer_virtual;
     auto mode = display_mode_for_stream(stream);
-    const bool physical_active = windows_physical_display_mode(mode);
-    PlatformError virtual_error{};
+    bool physical_usable = false;
 
+    // Duplicate is meaningful only when the physical desktop is genuinely
+    // usable. Reuse the Windows backend's power/DDC/topology health probe that
+    // drove the previously working headless fallback instead of trusting the
+    // DISPLAY_DEVICE_ACTIVE bit, which can remain set while a monitor is off.
+    // Extend deliberately skips this probe: it always requests an OPAL IDD.
+    if (stream.host_display_mode == HostDisplayMode::Duplicate && !prefer_virtual) {
+        DisplayTarget probed;
+        if (backend_->probe(probed)) {
+            if (!probed.virtual_display()) {
+                physical_usable = true;
+                mode = probed.mode;
+            }
+            backend_->release(probed);
+        }
+    }
+
+    PlatformError virtual_error{};
     if (backend_->ensure(mode, target)) {
-        const LONG topology_result = windows_apply_display_layout(stream.host_display_mode, physical_active);
+        const LONG topology_result = windows_apply_display_layout(stream.host_display_mode, physical_usable);
         if (topology_result == ERROR_SUCCESS) {
             adopt_display(std::move(target), backend_, target_, active_);
             return true;
@@ -155,19 +128,25 @@ bool HostDisplayManager::prepare(const StreamOptions& stream)
         target = {};
         virtual_error = {PlatformComponent::Capture, PlatformFailure::OsError,
                          std::string("could not apply Windows ") +
-                             (stream.host_display_mode == HostDisplayMode::Duplicate ? "duplicate" : "extend") +
+                             (stream.host_display_mode == HostDisplayMode::Duplicate && physical_usable
+                                  ? "duplicate" : "virtual") +
                              " display topology (Win32 " + std::to_string(topology_result) + ")",
                          false};
     } else {
         virtual_error = backend_->last_platform_error();
     }
 
-    if (stream.host_display_mode == HostDisplayMode::Duplicate && backend_->probe(target)) {
+    // If cloning a confirmed-live physical display cannot be established,
+    // retain the old availability fallback and capture that physical display.
+    // Never take this path for a forced/headless virtual fallback.
+    if (stream.host_display_mode == HostDisplayMode::Duplicate &&
+        physical_usable && !prefer_virtual && backend_->probe(target) && !target.virtual_display()) {
         error_ = {};
         adopt_display(std::move(target), backend_, target_, active_);
         return true;
     }
 
+    if (target.virtual_display()) backend_->release(target);
     error_ = virtual_error;
     if (!error_) error_ = backend_->last_platform_error();
     if (!error_) {
