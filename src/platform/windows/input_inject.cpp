@@ -13,7 +13,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cwchar>
+#include <cwctype>
 #include <optional>
+#include <string>
 
 namespace opal {
 namespace {
@@ -53,6 +56,93 @@ std::optional<ScanCode> scan_code_for(int wire)
     }
 }
 
+bool contains_case_insensitive(const wchar_t* value, const wchar_t* needle)
+{
+    if (!value || !needle || !*needle) return false;
+    std::wstring haystack(value);
+    std::wstring pattern(needle);
+    std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towupper(c));
+    });
+    std::transform(pattern.begin(), pattern.end(), pattern.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towupper(c));
+    });
+    return haystack.find(pattern) != std::wstring::npos;
+}
+
+bool opal_display_text(const wchar_t* value)
+{
+    return contains_case_insensitive(value, L"OPALDISPLAY") ||
+           contains_case_insensitive(value, L"OPAL VIRTUAL DISPLAY");
+}
+
+bool display_device_is_opal(const DISPLAY_DEVICEW& adapter)
+{
+    if (opal_display_text(adapter.DeviceID) || opal_display_text(adapter.DeviceString)) return true;
+
+    DISPLAY_DEVICEW monitor{};
+    monitor.cb = sizeof(monitor);
+    return EnumDisplayDevicesW(adapter.DeviceName, 0, &monitor, EDD_GET_DEVICE_INTERFACE_NAME) &&
+           (opal_display_text(monitor.DeviceID) || opal_display_text(monitor.DeviceString));
+}
+
+bool opal_display_rect(RECT& rect)
+{
+    for (DWORD index = 0;; ++index) {
+        DISPLAY_DEVICEW adapter{};
+        adapter.cb = sizeof(adapter);
+        if (!EnumDisplayDevicesW(nullptr, index, &adapter, 0)) break;
+        if ((adapter.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0 || !display_device_is_opal(adapter)) continue;
+
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsExW(adapter.DeviceName, ENUM_CURRENT_SETTINGS, &mode, 0)) continue;
+        if (mode.dmPelsWidth == 0 || mode.dmPelsHeight == 0) continue;
+
+        rect.left = mode.dmPosition.x;
+        rect.top = mode.dmPosition.y;
+        rect.right = rect.left + static_cast<LONG>(mode.dmPelsWidth);
+        rect.bottom = rect.top + static_cast<LONG>(mode.dmPelsHeight);
+        return rect.right > rect.left && rect.bottom > rect.top;
+    }
+    return false;
+}
+
+LONG normalized_virtual_coordinate(LONG pixel, LONG origin, int extent)
+{
+    if (extent <= 1) return 0;
+    const auto max_pixel = static_cast<long long>(extent - 1);
+    const auto local = std::clamp<long long>(static_cast<long long>(pixel) - origin, 0, max_pixel);
+    return static_cast<LONG>((local * 65535LL + max_pixel / 2) / max_pixel);
+}
+
+void pointer_coordinates(const InputRecord& record, LONG& x, LONG& y)
+{
+    x = std::clamp<LONG>(record.a, 0, 65535);
+    y = std::clamp<LONG>(record.b, 0, 65535);
+
+    RECT target{};
+    if (!opal_display_rect(target)) return;
+
+    const int target_width = static_cast<int>(target.right - target.left);
+    const int target_height = static_cast<int>(target.bottom - target.top);
+    if (target_width <= 0 || target_height <= 0) return;
+
+    const auto target_x = target.left + static_cast<LONG>(
+        (static_cast<long long>(x) * (target_width - 1) + 32767LL) / 65535LL);
+    const auto target_y = target.top + static_cast<LONG>(
+        (static_cast<long long>(y) * (target_height - 1) + 32767LL) / 65535LL);
+
+    const LONG virtual_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const LONG virtual_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int virtual_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int virtual_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (virtual_width <= 0 || virtual_height <= 0) return;
+
+    x = normalized_virtual_coordinate(target_x, virtual_left, virtual_width);
+    y = normalized_virtual_coordinate(target_y, virtual_top, virtual_height);
+}
+
 bool send_one(INPUT input)
 {
     return SendInput(1, &input, sizeof(INPUT)) == 1;
@@ -74,8 +164,7 @@ bool apply_record(const InputRecord& record)
         }
         case InputRecordType::Pointer:
             input.type = INPUT_MOUSE;
-            input.mi.dx = std::clamp<LONG>(record.a, 0, 65535);
-            input.mi.dy = std::clamp<LONG>(record.b, 0, 65535);
+            pointer_coordinates(record, input.mi.dx, input.mi.dy);
             input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
             return send_one(input);
         case InputRecordType::Button:
