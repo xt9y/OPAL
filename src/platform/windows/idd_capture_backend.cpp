@@ -113,6 +113,16 @@ PlatformError dxgi_error(HRESULT value, std::string message, bool fallback = tru
 
 bool activate_idd_topology()
 {
+    for (DWORD index = 0;; ++index) {
+        DISPLAY_DEVICEW display{};
+        display.cb = sizeof(display);
+        if (!EnumDisplayDevicesW(nullptr, index, &display, 0)) break;
+        if ((display.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0) continue;
+        if (opal_display_text(display.DeviceID) || opal_display_text(display.DeviceString) ||
+            gdi_device_is_opal(display.DeviceName))
+            return true;
+    }
+
     constexpr UINT32 flags = SDC_APPLY | SDC_TOPOLOGY_EXTEND |
                              SDC_ALLOW_CHANGES | SDC_PATH_PERSIST_IF_REQUIRED;
     return SetDisplayConfig(0, nullptr, 0, nullptr, flags) == ERROR_SUCCESS;
