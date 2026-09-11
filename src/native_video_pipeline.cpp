@@ -128,6 +128,13 @@ bool detach_idd_duplication_frame(CaptureBackend* capture, NativeVideoFrame& fra
     static thread_local WindowsIddCopyCache cache;
     return cache.copy_and_release(frame, error);
 }
+
+bool idd_dxgi_access_lost(CaptureBackend* capture, const PlatformError& error)
+{
+    return capture && error &&
+           capture->backend_name() == "iddcx-targeted-dxgi+d3d11" &&
+           error.message.find("HRESULT 0x887a0026") != std::string::npos;
+}
 #endif
 
 }
@@ -149,11 +156,17 @@ bool NativeVideoPipeline::start(const StreamOptions& stream, int bitrate_kbps, c
     terminal_ = false;
     pipeline_error_ = {};
     if (!capture_ || !encoder_) return false;
-    if (!capture_->start(stream, target)) {
+
+    stream_options_ = stream;
+    bitrate_kbps_ = std::max(1000, bitrate_kbps);
+    has_display_target_ = target != nullptr;
+    display_target_ = target ? *target : DisplayTarget{};
+
+    if (!capture_->start(stream_options_, has_display_target_ ? &display_target_ : nullptr)) {
         terminal_ = static_cast<bool>(capture_->last_platform_error());
         return false;
     }
-    if (!encoder_->start(stream, bitrate_kbps)) {
+    if (!encoder_->start(stream_options_, bitrate_kbps_)) {
         terminal_ = static_cast<bool>(encoder_->last_platform_error());
         capture_->stop();
         return false;
@@ -172,7 +185,36 @@ bool NativeVideoPipeline::next(EncodedMediaUnit& unit, int timeout_ms)
     if (!running_ || terminal_ || !capture_ || !encoder_) return false;
     NativeVideoFrame frame;
     if (!capture_->next(frame, timeout_ms)) {
-        if (capture_->last_platform_error()) {
+        const auto capture_error = capture_->last_platform_error();
+#if defined(_WIN32)
+        if (idd_dxgi_access_lost(capture_.get(), capture_error)) {
+            capture_->stop();
+            encoder_->stop();
+            pipeline_error_ = {};
+
+            if (!capture_->start(stream_options_, has_display_target_ ? &display_target_ : nullptr)) {
+                pipeline_error_ = capture_->last_platform_error();
+                terminal_ = true;
+                running_ = false;
+                return false;
+            }
+            if (!encoder_->start(stream_options_, bitrate_kbps_)) {
+                pipeline_error_ = encoder_->last_platform_error();
+                capture_->stop();
+                terminal_ = true;
+                running_ = false;
+                return false;
+            }
+
+            config_ = {};
+            first_frame_ = true;
+            terminal_ = false;
+            running_ = true;
+            encoder_->request_idr();
+            return false;
+        }
+#endif
+        if (capture_error) {
             terminal_ = true;
             running_ = false;
         }
@@ -210,7 +252,10 @@ void NativeVideoPipeline::request_idr()
 bool NativeVideoPipeline::set_bitrate(int bitrate_kbps)
 {
     if (!encoder_ || !running_ || terminal_) return false;
-    if (encoder_->set_bitrate(bitrate_kbps)) return true;
+    if (encoder_->set_bitrate(bitrate_kbps)) {
+        bitrate_kbps_ = std::max(1000, bitrate_kbps);
+        return true;
+    }
     if (encoder_->last_platform_error()) {
         terminal_ = true;
         running_ = false;
