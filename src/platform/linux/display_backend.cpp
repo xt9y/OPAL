@@ -77,6 +77,12 @@ public:
         reset();
         error_ = {};
 
+        // A compositor/session can stay alive after the real monitor disappears.
+        // Do not treat a stale wl_output or DISPLAY as a usable physical desktop.
+        // Duplicate will fall through to ensure(), which creates OPAL's virtual
+        // output without changing any existing physical display settings.
+        if (!physical_connector_available()) return false;
+
         if (wayland_socket_available()) {
             kwin_ = std::make_unique<KwinVirtualDisplay>();
             if (kwin_->connect() && kwin_->has_output()) {
@@ -205,7 +211,8 @@ public:
     bool healthy(const DisplayTarget& target) override
     {
         if (target.kind == DisplayKind::Physical)
-            return wayland_socket_available() || environment_value("DISPLAY");
+            return physical_connector_available() &&
+                   (wayland_socket_available() || environment_value("DISPLAY"));
         if (!kwin_ || target.pipewire_node == 0) return false;
         if (target.kind == DisplayKind::VirtualManagedSession && (!session_ || !session_->running())) return false;
         return true;
