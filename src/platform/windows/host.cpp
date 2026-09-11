@@ -186,8 +186,9 @@ int host_daemon()
     }
 
     std::thread([stop_event] {
-        if (WaitForSingleObject(stop_event, INFINITE) == WAIT_OBJECT_0)
-            ExitProcess(0);
+        if (WaitForSingleObject(stop_event, INFINITE) == WAIT_OBJECT_0) {
+            if (!TerminateProcess(GetCurrentProcess(), 0)) ExitProcess(0);
+        }
     }).detach();
 
     WindowsHostPowerGuard power_guard;
