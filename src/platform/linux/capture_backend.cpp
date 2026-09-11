@@ -41,6 +41,16 @@ AVPixelFormat av_format(std::uint32_t format)
         case SPA_VIDEO_FORMAT_BGRx: return AV_PIX_FMT_BGR0;
         case SPA_VIDEO_FORMAT_RGBA: return AV_PIX_FMT_RGBA;
         case SPA_VIDEO_FORMAT_RGBx: return AV_PIX_FMT_RGB0;
+        case SPA_VIDEO_FORMAT_xRGB: return AV_PIX_FMT_0RGB;
+        case SPA_VIDEO_FORMAT_xBGR: return AV_PIX_FMT_0BGR;
+        case SPA_VIDEO_FORMAT_ARGB: return AV_PIX_FMT_ARGB;
+        case SPA_VIDEO_FORMAT_ABGR: return AV_PIX_FMT_ABGR;
+        case SPA_VIDEO_FORMAT_xRGB_210LE:
+        case SPA_VIDEO_FORMAT_ARGB_210LE:
+            return AV_PIX_FMT_X2RGB10LE;
+        case SPA_VIDEO_FORMAT_xBGR_210LE:
+        case SPA_VIDEO_FORMAT_ABGR_210LE:
+            return AV_PIX_FMT_X2BGR10LE;
         default: return AV_PIX_FMT_NONE;
     }
 }
@@ -105,7 +115,7 @@ public:
         static const pw_stream_events events = make_events();
         pw_stream_add_listener(stream_, &listener_, &events, this);
 
-        std::array<std::uint8_t, 1024> storage{};
+        std::array<std::uint8_t, 1536> storage{};
         spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
         const spa_pod* params[1];
         spa_rectangle preferred_size{static_cast<std::uint32_t>(preferred_width_), static_cast<std::uint32_t>(preferred_height_)};
@@ -119,8 +129,13 @@ public:
             SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
             SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
             SPA_FORMAT_VIDEO_format,
-            SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRA,
-                                   SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBx),
+            SPA_POD_CHOICE_ENUM_Id(13, SPA_VIDEO_FORMAT_BGRA,
+                                   SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRx,
+                                   SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBx,
+                                   SPA_VIDEO_FORMAT_xRGB, SPA_VIDEO_FORMAT_xBGR,
+                                   SPA_VIDEO_FORMAT_ARGB, SPA_VIDEO_FORMAT_ABGR,
+                                   SPA_VIDEO_FORMAT_xRGB_210LE, SPA_VIDEO_FORMAT_xBGR_210LE,
+                                   SPA_VIDEO_FORMAT_ARGB_210LE, SPA_VIDEO_FORMAT_ABGR_210LE),
             SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&preferred_size, &min_size, &max_size),
             SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(&preferred_rate, &min_rate, &max_rate)));
 
