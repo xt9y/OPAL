@@ -33,6 +33,10 @@ public:
 private:
     std::unique_ptr<CaptureBackend> capture_;
     std::unique_ptr<VideoEncoderBackend> encoder_;
+    StreamOptions stream_options_{};
+    DisplayTarget display_target_{};
+    int bitrate_kbps_ = 1000;
+    bool has_display_target_ = false;
     MediaConfig config_{};
     std::uint64_t config_revision_ = 0;
     bool running_ = false;
