@@ -3,12 +3,53 @@
 #include <string>
 
 namespace opal {
+enum class HostDisplayMode : std::uint8_t {
+    Duplicate = 0,
+    Extend = 1,
+};
+
 struct StreamOptions {
     int max_width=1920;
     int max_height=1080;
     int fps=60;
     bool automatic_fps=false;
+    HostDisplayMode host_display_mode=HostDisplayMode::Duplicate;
+
+    StreamOptions() = default;
+
+    // MEDIA_RECEIVER_READY predates host-display modes. Keep the wire format
+    // backwards compatible by carrying Extend in the otherwise-unused low bit
+    // of the (always even) width. 17x16 is the Extend+native-resolution sentinel.
+    StreamOptions(int wire_width,int wire_height,int frame_rate)
+        : fps(frame_rate)
+    {
+        if (wire_width == 17 && wire_height == 16) {
+            max_width = 0;
+            max_height = 0;
+            host_display_mode = HostDisplayMode::Extend;
+            return;
+        }
+        host_display_mode = (wire_width > 0 && (wire_width & 1))
+            ? HostDisplayMode::Extend : HostDisplayMode::Duplicate;
+        max_width = wire_width > 0 ? (wire_width & ~1) : wire_width;
+        max_height = wire_height;
+    }
 };
+
+inline int stream_wire_width(const StreamOptions& stream)
+{
+    if (stream.host_display_mode != HostDisplayMode::Extend) return stream.max_width;
+    if (stream.max_width == 0 && stream.max_height == 0) return 17;
+    return stream.max_width > 0 ? (stream.max_width | 1) : stream.max_width;
+}
+
+inline int stream_wire_height(const StreamOptions& stream)
+{
+    if (stream.host_display_mode == HostDisplayMode::Extend &&
+        stream.max_width == 0 && stream.max_height == 0)
+        return 16;
+    return stream.max_height;
+}
 
 StreamOptions default_stream_options();
 bool stream_mode_limit(const std::string &mode,int &max_width,int &max_height);
