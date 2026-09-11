@@ -153,6 +153,16 @@ AVPixelFormat av_format(std::uint32_t format)
         case SPA_VIDEO_FORMAT_BGRx: return AV_PIX_FMT_BGR0;
         case SPA_VIDEO_FORMAT_RGBA: return AV_PIX_FMT_RGBA;
         case SPA_VIDEO_FORMAT_RGBx: return AV_PIX_FMT_RGB0;
+        case SPA_VIDEO_FORMAT_xRGB: return AV_PIX_FMT_0RGB;
+        case SPA_VIDEO_FORMAT_xBGR: return AV_PIX_FMT_0BGR;
+        case SPA_VIDEO_FORMAT_ARGB: return AV_PIX_FMT_ARGB;
+        case SPA_VIDEO_FORMAT_ABGR: return AV_PIX_FMT_ABGR;
+        case SPA_VIDEO_FORMAT_xRGB_210LE:
+        case SPA_VIDEO_FORMAT_ARGB_210LE:
+            return AV_PIX_FMT_X2RGB10LE;
+        case SPA_VIDEO_FORMAT_xBGR_210LE:
+        case SPA_VIDEO_FORMAT_ABGR_210LE:
+            return AV_PIX_FMT_X2BGR10LE;
         default: return AV_PIX_FMT_NONE;
     }
 }
@@ -164,8 +174,19 @@ public:
     bool ensure_started(const StreamOptions& stream, const std::string& token_file)
     {
         std::lock_guard<std::mutex> start_lock(start_mu_);
+        if (authorization_lost_.load(std::memory_order_acquire)) return false;
+        if (failed_.load(std::memory_order_acquire)) {
+            cleanup_started_resources();
+            failed_.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                error_.clear();
+                serial_ = 0;
+                layout_ = {};
+            }
+            composite_.clear();
+        }
         if (started_.load(std::memory_order_acquire)) return true;
-        if (failed_.load(std::memory_order_acquire)) return false;
         token_file_ = token_file;
         preferred_width_ = stream.max_width > 0 ? std::clamp(stream.max_width, 16, 7680) : 7680;
         preferred_height_ = stream.max_height > 0 ? std::clamp(stream.max_height, 16, 4320) : 4320;
@@ -255,6 +276,7 @@ public:
     }
 
     bool authorization_lost() const { return authorization_lost_.load(std::memory_order_acquire); }
+    bool failed() const { return failed_.load(std::memory_order_acquire); }
 
     std::string last_error() const
     {
@@ -333,8 +355,7 @@ public:
             ++serial_;
             if (!any_active) {
                 failed_.store(true, std::memory_order_release);
-                authorization_lost_.store(true, std::memory_order_release);
-                if (error_.empty()) error_ = "all selected monitor streams disconnected; rerun OPAL host screen authorization";
+                if (error_.empty()) error_ = "all selected PipeWire monitor streams disconnected";
             }
         }
         cv_.notify_all();
@@ -441,7 +462,7 @@ private:
             if (!monitor.stream) { set_failure("PipeWire monitor stream allocation failed", false); return false; }
             pw_stream_add_listener(monitor.stream, &monitor.listener, &events, &monitor);
 
-            std::array<std::uint8_t, 1024> pod_buffer{};
+            std::array<std::uint8_t, 1536> pod_buffer{};
             spa_pod_builder builder = SPA_POD_BUILDER_INIT(pod_buffer.data(), pod_buffer.size());
             const spa_pod* params[1];
             spa_rectangle default_size{static_cast<std::uint32_t>(preferred_width_), static_cast<std::uint32_t>(preferred_height_)};
@@ -449,10 +470,13 @@ private:
             spa_fraction default_rate{static_cast<std::uint32_t>(fps_), 1}, min_rate{1, 1}, max_rate{240, 1};
             params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
                 SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-                SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRx,
-                    SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBx), SPA_FORMAT_VIDEO_size,
-                SPA_POD_CHOICE_RANGE_Rectangle(&default_size, &min_size, &max_size), SPA_FORMAT_VIDEO_framerate,
-                SPA_POD_CHOICE_RANGE_Fraction(&default_rate, &min_rate, &max_rate)));
+                SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(13, SPA_VIDEO_FORMAT_BGRA,
+                    SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBx,
+                    SPA_VIDEO_FORMAT_xRGB, SPA_VIDEO_FORMAT_xBGR, SPA_VIDEO_FORMAT_ARGB, SPA_VIDEO_FORMAT_ABGR,
+                    SPA_VIDEO_FORMAT_xRGB_210LE, SPA_VIDEO_FORMAT_xBGR_210LE,
+                    SPA_VIDEO_FORMAT_ARGB_210LE, SPA_VIDEO_FORMAT_ABGR_210LE),
+                SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&default_size, &min_size, &max_size),
+                SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(&default_rate, &min_rate, &max_rate)));
             const std::uint32_t target = monitor.pipewire_serial != 0 ? PW_ID_ANY : monitor.node_id;
             const int rc = pw_stream_connect(monitor.stream, PW_DIRECTION_INPUT, target,
                 static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
@@ -476,7 +500,7 @@ private:
         auto* monitor = static_cast<MonitorCapture*>(data);
         if (!monitor || id != SPA_PARAM_Format || !param) return;
         spa_video_info_raw info{};
-        if (spa_format_video_raw_parse(param, &info) < 0) return;
+        if (spa_format_video_raw_parse(param, &info) < 0 || av_format(info.format) == AV_PIX_FMT_NONE) return;
         monitor->raw_info = info;
         if (!monitor->stream || !info.size.width || !info.size.height) return;
         const int stride = static_cast<int>(info.size.width) * 4;
@@ -869,6 +893,11 @@ struct NativePipeWireVideoCapture::Impl {
                 if (pipewire_hub().authorization_lost()) {
                     auto reason = pipewire_hub().last_error();
                     if (reason.empty()) reason = "Linux screen authorization lost; rerun OPAL host screen authorization";
+                    set_error(reason); break;
+                }
+                if (pipewire_hub().failed()) {
+                    auto reason = pipewire_hub().last_error();
+                    if (reason.empty()) reason = "Linux PipeWire capture failed";
                     set_error(reason); break;
                 }
                 continue;
