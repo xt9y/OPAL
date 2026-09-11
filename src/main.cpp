@@ -150,13 +150,13 @@ Commands:
   opal [--mode duplicate|extend] [--resolution max|1080p|1440p|4k] [--fps 15-240]
                                             Connect with temporary stream/display overrides
   opal restart [--mode duplicate|extend] [--resolution max|1080p|1440p|4k] [--fps 15-240]
-                                            Reconnect client with temporary overrides
+                                            Fully stop then reconnect/restart with overrides
   opal select                               Select a saved host and show connection details
   opal list                                 Alias for opal select
   opal new                                  Run OPAL setup / add another host
   opal remove                               Remove a saved host
-  opal stop                                 Stop OPAL host services
-  opal restart                              Restart host service or reconnect client
+  opal stop                                 Stop the complete OPAL runtime
+  opal restart                              Fully stop then restart/reconnect OPAL
   opal clean                                Remove OPAL state
   opal doctor                               Check local OPAL requirements
   opal version                              Show the OPAL version
@@ -199,7 +199,7 @@ static bool parse_host_display_mode(const std::string& value, opal::HostDisplayM
     return false;
 }
 
-static int run_stream_flags(int argc, char** argv, int first_argument = 1)
+static int run_stream_flags(int argc, char** argv, int first_argument = 1, bool restart_runtime = false)
 {
     opal::StreamOptions stream;
     for (int i = first_argument; i < argc; ++i) {
@@ -231,7 +231,7 @@ static int run_stream_flags(int argc, char** argv, int first_argument = 1)
             return 2;
         }
     }
-    return opal::interactive_run(stream);
+    return restart_runtime ? opal::interactive_restart(stream) : opal::interactive_run(stream);
 }
 
 int main(int argc, char** argv)
@@ -256,13 +256,11 @@ int main(int argc, char** argv)
 #if defined(_WIN32)
         if (!windows_prepare_host_lifecycle()) return 1;
 #endif
-        const int result = opal::host_service(false);
-        if (result == 0) std::cout << "OPAL host stopped.\n";
-        return result;
+        return opal::interactive_stop();
     }
     if (action == "restart") {
         if (argc == 2) return opal::interactive_restart();
-        return run_stream_flags(argc, argv, 2);
+        return run_stream_flags(argc, argv, 2, true);
     }
     if (action == "clean" && argc == 2) {
 #if defined(_WIN32)
