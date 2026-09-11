@@ -149,6 +149,8 @@ Commands:
   opal                                      Wake and connect at up to 1080p / 60 fps
   opal [--mode duplicate|extend] [--resolution max|1080p|1440p|4k] [--fps 15-240]
                                             Connect with temporary stream/display overrides
+  opal restart [--mode duplicate|extend] [--resolution max|1080p|1440p|4k] [--fps 15-240]
+                                            Reconnect client with temporary overrides
   opal select                               Select a saved host and show connection details
   opal list                                 Alias for opal select
   opal new                                  Run OPAL setup / add another host
@@ -197,10 +199,10 @@ static bool parse_host_display_mode(const std::string& value, opal::HostDisplayM
     return false;
 }
 
-static int run_stream_flags(int argc, char** argv)
+static int run_stream_flags(int argc, char** argv, int first_argument = 1)
 {
     opal::StreamOptions stream;
-    for (int i = 1; i < argc; ++i) {
+    for (int i = first_argument; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--mode") {
             if (i + 1 >= argc) {
@@ -258,7 +260,10 @@ int main(int argc, char** argv)
         if (result == 0) std::cout << "OPAL host stopped.\n";
         return result;
     }
-    if (action == "restart" && argc == 2) return opal::interactive_restart();
+    if (action == "restart") {
+        if (argc == 2) return opal::interactive_restart();
+        return run_stream_flags(argc, argv, 2);
+    }
     if (action == "clean" && argc == 2) {
 #if defined(_WIN32)
         if (!windows_prepare_host_lifecycle()) return 1;
