@@ -39,6 +39,7 @@ public:
     NativePipeWireVideoCapture& operator=(const NativePipeWireVideoCapture&)=delete;
     bool start(const StreamOptions& stream,int bitrate_kbps,const std::string& restore_token_file);
     bool next(EncodedMediaUnit& unit,int timeout_ms);
+    bool set_bitrate(int bitrate_kbps);
     bool ended() const;
     std::uint64_t config_revision() const;
     MediaConfig config() const;
