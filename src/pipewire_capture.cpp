@@ -694,7 +694,8 @@ struct NativePipeWireVideoCapture::Impl {
         ~EncoderState() { reset(); }
     };
 
-    int bitrate_kbps = 0;
+    std::atomic<int> bitrate_kbps{0};
+    std::atomic<std::uint64_t> bitrate_generation{0};
     int fps = 60;
     int preferred_width = 7680;
     int preferred_height = 4320;
@@ -717,7 +718,7 @@ struct NativePipeWireVideoCapture::Impl {
         ctx->pix_fmt = format;
         ctx->time_base = AVRational{1, std::max(15, fps)};
         ctx->framerate = AVRational{std::max(15, fps), 1};
-        ctx->bit_rate = static_cast<std::int64_t>(std::max(1000, bitrate_kbps)) * 1000;
+        ctx->bit_rate = static_cast<std::int64_t>(std::max(1000, bitrate_kbps.load(std::memory_order_acquire))) * 1000;
         ctx->gop_size = normal_gop_frames(fps);
         ctx->max_b_frames = 0;
         ctx->thread_count = 1;
@@ -885,6 +886,7 @@ struct NativePipeWireVideoCapture::Impl {
     {
         EncoderState enc;
         std::uint64_t frame_index = 0;
+        std::uint64_t applied_bitrate_generation = bitrate_generation.load(std::memory_order_acquire);
         int width = 0, height = 0;
         AVPixelFormat input = AV_PIX_FMT_NONE;
         while (run.load()) {
@@ -903,10 +905,13 @@ struct NativePipeWireVideoCapture::Impl {
                 continue;
             }
             if (raw.source_dmabuf) saw_dmabuf.store(true);
-            if (!enc.ctx || raw.width != width || raw.height != height || raw.format != input) {
-                { std::lock_guard<std::mutex> lock(mu); config = {}; ++config_rev; }
+            const auto requested_bitrate_generation = bitrate_generation.load(std::memory_order_acquire);
+            const bool bitrate_changed = enc.ctx && requested_bitrate_generation != applied_bitrate_generation;
+            if (!enc.ctx || raw.width != width || raw.height != height || raw.format != input || bitrate_changed) {
+                { std::lock_guard<std::mutex> lock(mu); config = {}; encoded.clear(); ++config_rev; }
                 if (!configure_encoder(enc, raw)) break;
                 width = raw.width; height = raw.height; input = raw.format; frame_index = 0;
+                applied_bitrate_generation = requested_bitrate_generation;
             }
             if (!encode_one(enc, raw, frame_index++)) { set_error("native H.264 encode failed"); break; }
         }
@@ -975,7 +980,8 @@ bool NativePipeWireVideoCapture::start(const StreamOptions& stream, int bitrate_
     stop();
     impl_ = std::make_unique<Impl>();
 #if OPAL_HAVE_NATIVE_PIPEWIRE
-    impl_->bitrate_kbps = std::max(1000, bitrate_kbps);
+    impl_->bitrate_kbps.store(std::max(1000, bitrate_kbps), std::memory_order_release);
+    impl_->bitrate_generation.store(1, std::memory_order_release);
     impl_->fps = std::clamp(stream.fps, 15, 240);
     impl_->preferred_width = stream.max_width > 0 ? std::clamp(stream.max_width, 16, 7680) : 7680;
     impl_->preferred_height = stream.max_height > 0 ? std::clamp(stream.max_height, 16, 4320) : 4320;
@@ -1004,6 +1010,20 @@ bool NativePipeWireVideoCapture::next(EncodedMediaUnit& unit, int timeout_ms)
     unit = std::move(impl_->encoded.back());
     impl_->encoded.clear();
     return !unit.data.empty();
+}
+
+bool NativePipeWireVideoCapture::set_bitrate(int bitrate_kbps)
+{
+#if OPAL_HAVE_NATIVE_PIPEWIRE
+    if (!impl_ || !impl_->run.load(std::memory_order_acquire) || impl_->terminal.load(std::memory_order_acquire)) return false;
+    const int next = std::max(1000, bitrate_kbps);
+    const int previous = impl_->bitrate_kbps.exchange(next, std::memory_order_acq_rel);
+    if (previous != next) impl_->bitrate_generation.fetch_add(1, std::memory_order_acq_rel);
+    return true;
+#else
+    (void)bitrate_kbps;
+    return false;
+#endif
 }
 
 bool NativePipeWireVideoCapture::ended() const { return !impl_ || impl_->terminal.load(); }
