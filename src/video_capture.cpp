@@ -483,10 +483,13 @@ bool VideoCapture::next(EncodedMediaUnit& unit, int timeout_ms)
 
 bool VideoCapture::request_idr()
 {
-    if (impl_ && impl_->direct_active && impl_->direct_video) {
+    if (!impl_) return false;
+    if (impl_->direct_active && impl_->direct_video) {
         impl_->direct_video->request_idr();
         return !impl_->direct_video->ended();
     }
+    if (impl_->native_active)
+        return impl_->native_video.request_idr();
     return false;
 }
 
