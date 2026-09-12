@@ -151,6 +151,25 @@ public:
             return false;
         }
         loop_started_ = true;
+
+        bool negotiated = false;
+        {
+            std::unique_lock<std::mutex> lock(mu_);
+            cv_.wait_for(lock, std::chrono::seconds(2), [&] {
+                return negotiated_ || failed_ || !running_;
+            });
+            negotiated = negotiated_ && running_ && !failed_;
+            if (!negotiated) {
+                if (!error_)
+                    error_ = {PlatformComponent::Capture, PlatformFailure::Unavailable,
+                              "KWin PipeWire stream did not negotiate a supported video format", true};
+                running_ = false;
+            }
+        }
+        if (!negotiated) {
+            stop_resources();
+            return false;
+        }
         return true;
     }
 
@@ -194,6 +213,7 @@ public:
         raw_info_ = {};
         serial_ = 0;
         seen_serial_ = 0;
+        negotiated_ = false;
         failed_ = false;
         error_ = {};
     }
@@ -244,7 +264,12 @@ private:
         if (id != SPA_PARAM_Format || !param || !self.stream_) return;
         spa_video_info_raw info{};
         if (spa_format_video_raw_parse(param, &info) < 0 || av_format(info.format) == AV_PIX_FMT_NONE) return;
-        self.raw_info_ = info;
+        {
+            std::lock_guard<std::mutex> lock(self.mu_);
+            self.raw_info_ = info;
+            self.negotiated_ = true;
+        }
+        self.cv_.notify_all();
 
         const int stride = static_cast<int>(info.size.width) * 4;
         const int size = stride * static_cast<int>(info.size.height);
@@ -419,6 +444,7 @@ private:
     std::uint64_t serial_ = 0;
     std::uint64_t seen_serial_ = 0;
     bool running_ = false;
+    bool negotiated_ = false;
     bool failed_ = false;
     PlatformError error_{};
 };
