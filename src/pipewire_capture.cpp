@@ -696,6 +696,7 @@ struct NativePipeWireVideoCapture::Impl {
 
     std::atomic<int> bitrate_kbps{0};
     std::atomic<std::uint64_t> bitrate_generation{0};
+    std::atomic<bool> force_idr{false};
     int fps = 60;
     int preferred_width = 7680;
     int preferred_height = 4320;
@@ -851,6 +852,8 @@ struct NativePipeWireVideoCapture::Impl {
     bool encode_one(EncoderState& enc, const HubRawFrame& raw, std::uint64_t frame_index)
     {
         if (av_frame_make_writable(enc.sw_frame) < 0) return false;
+        const bool request_keyframe = frame_index == 0 || force_idr.exchange(false, std::memory_order_acq_rel);
+        enc.sw_frame->pict_type = request_keyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
         const std::uint8_t* source[4] = {raw.pixels.data(), nullptr, nullptr, nullptr};
         int source_stride[4] = {raw.stride, 0, 0, 0};
         if (sws_scale(enc.sws, source, source_stride, 0, raw.height, enc.sw_frame->data, enc.sw_frame->linesize) <= 0) return false;
@@ -860,6 +863,7 @@ struct NativePipeWireVideoCapture::Impl {
             av_frame_unref(enc.hw_frame);
             if (av_hwframe_get_buffer(enc.ctx->hw_frames_ctx, enc.hw_frame, 0) < 0 || av_hwframe_transfer_data(enc.hw_frame, enc.sw_frame, 0) < 0) return false;
             enc.hw_frame->pts = enc.sw_frame->pts;
+            enc.hw_frame->pict_type = enc.sw_frame->pict_type;
             submit = enc.hw_frame;
         }
         if (avcodec_send_frame(enc.ctx, submit) < 0) return false;
@@ -982,6 +986,7 @@ bool NativePipeWireVideoCapture::start(const StreamOptions& stream, int bitrate_
 #if OPAL_HAVE_NATIVE_PIPEWIRE
     impl_->bitrate_kbps.store(std::max(1000, bitrate_kbps), std::memory_order_release);
     impl_->bitrate_generation.store(1, std::memory_order_release);
+    impl_->force_idr.store(false, std::memory_order_release);
     impl_->fps = std::clamp(stream.fps, 15, 240);
     impl_->preferred_width = stream.max_width > 0 ? std::clamp(stream.max_width, 16, 7680) : 7680;
     impl_->preferred_height = stream.max_height > 0 ? std::clamp(stream.max_height, 16, 4320) : 4320;
@@ -1010,6 +1015,17 @@ bool NativePipeWireVideoCapture::next(EncodedMediaUnit& unit, int timeout_ms)
     unit = std::move(impl_->encoded.back());
     impl_->encoded.clear();
     return !unit.data.empty();
+}
+
+bool NativePipeWireVideoCapture::request_idr()
+{
+#if OPAL_HAVE_NATIVE_PIPEWIRE
+    if (!impl_ || !impl_->run.load(std::memory_order_acquire) || impl_->terminal.load(std::memory_order_acquire)) return false;
+    impl_->force_idr.store(true, std::memory_order_release);
+    return true;
+#else
+    return false;
+#endif
 }
 
 bool NativePipeWireVideoCapture::set_bitrate(int bitrate_kbps)
