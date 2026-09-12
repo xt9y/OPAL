@@ -492,8 +492,12 @@ bool VideoCapture::request_idr()
 
 bool VideoCapture::set_bitrate(int bitrate_kbps)
 {
-    if (impl_ && impl_->direct_active && impl_->direct_video)
-        return impl_->direct_video->set_bitrate(bitrate_kbps);
+    if (!impl_) return false;
+    impl_->bitrate_kbps = std::max(1000, bitrate_kbps);
+    if (impl_->direct_active && impl_->direct_video)
+        return impl_->direct_video->set_bitrate(impl_->bitrate_kbps);
+    if (impl_->native_active)
+        return impl_->native_video.set_bitrate(impl_->bitrate_kbps);
     return false;
 }
 
