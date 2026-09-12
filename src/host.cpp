@@ -152,7 +152,7 @@ bool run_peer_session(TailnetHostResult direct,const std::string&host_public_key
             sender_start_thread=std::thread([&,media_keys,media_session_id,media_generation,stream,audio,debug]{
                 MediaDatagramBatchSend batch=[peer_ptr](std::span<const std::span<const std::uint8_t>>wires){return peer_ptr->send_media_datagrams(wires);};
                 if(!sender_ptr->start_native(media_keys,media_session_id,media_generation,stream,audio,[peer_ptr](std::span<const std::uint8_t>wire){return peer_ptr->send_media_datagram(wire);},std::move(batch),[peer_ptr](const std::string&control){return peer_ptr->send_input(control);})){
-                    sender_starting.store(false);if(peer_ptr->running())peer_ptr->send_input("MEDIA_ERROR capture-startup");return;
+                    sender_starting.store(false);return;
                 }
                 sender_started.store(true);sender_starting.store(false);if(debug)sender_ptr->handle_control_line(debug_media_request_line(media_generation,true));
             });
