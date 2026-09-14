@@ -85,9 +85,10 @@ inline int preferred_wake_adapter(const std::vector<WakeAdapterCapability>& adap
     int best_score = -1;
     for (std::size_t i = 0; i < adapters.size(); ++i) {
         const auto& adapter = adapters[i];
-        if (!adapter.connected || !adapter.magic_packet_known || !adapter.magic_packet || !adapter.configured) continue;
+        if (!adapter.magic_packet_known || !adapter.magic_packet || !adapter.configured) continue;
         if (!wake_any_yes(adapter) && !wake_any_unknown(adapter)) continue;
         int score = adapter.link == WakeLink::Ethernet ? 300 : adapter.link == WakeLink::Wifi ? 200 : 100;
+        if (adapter.connected) score += 1000;
         if (adapter.shutdown == WakePowerSupport::Yes) score += 15;
         if (adapter.hibernate == WakePowerSupport::Yes) score += 8;
         if (adapter.sleep == WakePowerSupport::Yes) score += 4;
@@ -120,7 +121,7 @@ inline void print_wake_report(const WakeCapabilityReport& report)
         if (!adapter.limitation.empty()) std::cout << "    note:         " << adapter.limitation << '\n';
     }
     for (const auto& note : report.notes) std::cout << "[info] " << note << '\n';
-    if (report.preferred < 0) std::cout << "Remote wake is unavailable, not configured, has no live network link, or could not be verified.\n";
+    if (report.preferred < 0) std::cout << "Remote wake is unavailable, not configured, or could not be verified.\n";
     else std::cout << "Selected " << report.adapters[static_cast<std::size_t>(report.preferred)].name << " for OPAL remote wake.\n";
 }
 
