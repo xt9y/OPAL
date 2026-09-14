@@ -117,8 +117,8 @@ std::string choose_host(const Ini &hosts,const char *title){auto names=host_name
 std::string saved_connection_id(const Ini&hosts,const std::string&name){auto id=hosts.get(name,"connection_id");if(id.empty())id=hosts.get(name,"rendezvous_id");return id;}
 void print_local_host_credentials(const Paths &p){Ini host;if(!host.load(p.host))return;auto password=normalize_pairing_code(host.get("host","password"));if(password.empty()||!std::filesystem::exists(p.identity_pub))return;auto code=format_connection_code(connection_id_from_public_key(public_key_hex(p.identity_pub)));if(code.empty())return;std::cout<<"Local host\nConnection code: "<<code<<"\nPairing password: "<<password<<"\n";}
 bool wayland_session(){const char*display=std::getenv("WAYLAND_DISPLAY");return display&&*display;}
-std::string detect_mac(){std::error_code ec;for(const auto &entry:std::filesystem::directory_iterator("/sys/class/net",ec)){if(ec)break;auto name=entry.path().filename().string();if(name=="lo")continue;std::ifstream state(entry.path()/"operstate");std::string s;state>>s;if(s!="up"&&s!="unknown")continue;std::ifstream mac(entry.path()/"address");std::string m;mac>>m;if(m.size()==17)return m;}return{};}
-void configure_host_wol(){auto p=Paths::load();Ini host;host.load(p.host);host.set("host","wol","true");auto mac=detect_mac();if(!mac.empty())host.set("host","mac",mac);host.save(p.host);std::cout<<"Wake-on-LAN enabled in OPAL";if(!mac.empty())std::cout<<" (MAC "<<mac<<")";std::cout<<". Ensure WoL is enabled in firmware/NIC settings.\n";}
+void disable_host_wake(){auto p=Paths::load();Ini host;host.load(p.host);host.set("host","wake_requested","false");host.set("host","wol","false");host.set("host","wake_status","DISABLED");if(!host.save(p.host))std::cerr<<"Could not save OPAL wake setting.\n";}
+void configure_host_wol(){auto report=configure_host_wake();print_wake_report(report);auto p=Paths::load();Ini host;host.load(p.host);host.set("host","wake_requested","true");host.set("host","wol",report.preferred>=0?"true":"false");if(report.preferred>=0){const auto&adapter=report.adapters[static_cast<std::size_t>(report.preferred)];if(!adapter.mac.empty())host.set("host","mac",adapter.mac);host.set("host","wake_interface",adapter.name);host.set("host","wake_link",wake_link_name(adapter.link));host.set("host","wake_status",wake_support_level(adapter));host.set("host","wake_persistent",adapter.persistent?"true":"false");host.set("host","wake_sleep",wake_power_name(adapter.sleep));host.set("host","wake_hibernate",wake_power_name(adapter.hibernate));host.set("host","wake_shutdown",wake_power_name(adapter.shutdown));}else{host.set("host","wake_status","UNSUPPORTED");host.set("host","wake_persistent","false");host.set("host","wake_sleep","no");host.set("host","wake_hibernate","no");host.set("host","wake_shutdown","no");}if(!host.save(p.host))std::cerr<<"Could not save OPAL wake capability state.\n";}
 bool configure_host_screens(bool remember){auto p=Paths::load();Ini host;host.load(p.host);host.set("host","remember_screens",remember?"true":"false");if(!host.save(p.host))return false;if(!remember)return true;StreamOptions capture{7680,4320,60};std::string error;const auto token=(p.root/"portal-session.token").string();std::cout<<"Select every monitor OPAL may share. This authorization will be reused automatically.\n";if(!native_pipewire_prepare(capture,token,&error)){std::cerr<<"Could not authorize persistent Linux screen capture"<<(error.empty()?"":": "+error)<<"\n";return false;}std::cout<<"OPAL screen selection saved. Normal reconnect/recovery will reuse it without reopening the chooser.\n";return true;}
 int tracked_client_connect(const std::string&target,const std::string&password,const StreamOptions&stream){auto p=Paths::load();if(!ensure_layout(p))return 1;ClientRuntimeLease lease(p.root);if(!lease.acquire()){std::cerr<<"OPAL client is already running or its runtime state could not be acquired. Use 'opal restart'.\n";return 1;}return client_connect(target,password,stream);}
 int connect_default(const Ini &cfg,const StreamOptions &stream){auto name=cfg.get("opal","default_host");if(name.empty())return-1;auto p=Paths::load();Ini hosts;hosts.load(p.hosts);if(!hosts.get(name,"mac").empty()){std::cout<<"Waking "<<name<<"...\n";(void)wake_named(name);}std::cout<<"Connecting to "<<name<<"...\n";return tracked_client_connect(name,"",stream);}
@@ -131,13 +131,12 @@ int first_setup(const StreamOptions &stream={}){
     if(choice=="1"){
         if(init()!=0||host_setup()!=0)return 1;
         if(!save_role("host"))return 1;
-        if(current_platform()==PlatformKind::Linux){
-            if(wayland_session()){
-                const bool remember=ask_yes_no("Remember selected screens for automatic hosting? [Y/n] ",true);
-                if(!configure_host_screens(remember))return 1;
-            }
-            if(ask_yes_no("Enable Wake-on-LAN support? [Y/n] ",true))configure_host_wol();
+        if(current_platform()==PlatformKind::Linux&&wayland_session()){
+            const bool remember=ask_yes_no("Remember selected screens for automatic hosting? [Y/n] ",true);
+            if(!configure_host_screens(remember))return 1;
         }
+        if(ask_yes_no("Enable remote wake (Wake-on-LAN/WoWLAN)? [Y/n] ",true))configure_host_wol();
+        else disable_host_wake();
         return ensure_host_service();
     }
     if(choice=="2"){if(init()!=0)return 1;auto code=read_line("OPAL connection code: ");std::string id;if(!parse_connection_code(code,id)){std::cerr<<"Invalid OPAL connection code. Expected: XXXX-XXXX-XXXX\n";return 2;}auto name=read_line("Save as [desktop]: ","desktop");if(hosts_add(name,code)!=0||!save_role("client",name))return 1;return tracked_client_connect(name,"",stream);}return 0;
