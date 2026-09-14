@@ -68,9 +68,10 @@ inline std::string wake_support_level(const WakeAdapterCapability& adapter)
 {
     if (!adapter.magic_packet_known) return "UNVERIFIED";
     if (!adapter.magic_packet) return "UNSUPPORTED";
+    if (!adapter.configured) return "NOT CONFIGURED";
     if (adapter.sleep == WakePowerSupport::No && adapter.hibernate == WakePowerSupport::No &&
         adapter.shutdown == WakePowerSupport::No) return "UNSUPPORTED";
-    if (adapter.configured && adapter.persistent && adapter.sleep == WakePowerSupport::Yes &&
+    if (adapter.persistent && adapter.sleep == WakePowerSupport::Yes &&
         adapter.hibernate == WakePowerSupport::Yes && adapter.shutdown == WakePowerSupport::Yes)
         return "FULL SUPPORT";
     if (wake_any_yes(adapter)) return "PARTIAL SUPPORT";
@@ -83,7 +84,7 @@ inline int preferred_wake_adapter(const std::vector<WakeAdapterCapability>& adap
     int best_score = -1;
     for (std::size_t i = 0; i < adapters.size(); ++i) {
         const auto& adapter = adapters[i];
-        if (!adapter.magic_packet_known || !adapter.magic_packet) continue;
+        if (!adapter.magic_packet_known || !adapter.magic_packet || !adapter.configured) continue;
         if (!wake_any_yes(adapter) && !wake_any_unknown(adapter)) continue;
         int score = adapter.link == WakeLink::Ethernet ? 300 : adapter.link == WakeLink::Wifi ? 200 : 100;
         if (adapter.connected) score += 20;
@@ -91,7 +92,6 @@ inline int preferred_wake_adapter(const std::vector<WakeAdapterCapability>& adap
         if (adapter.hibernate == WakePowerSupport::Yes) score += 8;
         if (adapter.sleep == WakePowerSupport::Yes) score += 4;
         if (adapter.persistent) score += 3;
-        if (adapter.configured) score += 2;
         if (score > best_score) { best_score = score; best = static_cast<int>(i); }
     }
     return best;
@@ -119,7 +119,7 @@ inline void print_wake_report(const WakeCapabilityReport& report)
         if (!adapter.limitation.empty()) std::cout << "    note:         " << adapter.limitation << '\n';
     }
     for (const auto& note : report.notes) std::cout << "[info] " << note << '\n';
-    if (report.preferred < 0) std::cout << "Remote wake is unavailable or could not be verified with the detected hardware/configuration.\n";
+    if (report.preferred < 0) std::cout << "Remote wake is unavailable, not configured, or could not be verified with the detected hardware/configuration.\n";
     else std::cout << "Selected " << report.adapters[static_cast<std::size_t>(report.preferred)].name << " for OPAL remote wake.\n";
 }
 
