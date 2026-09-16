@@ -3,6 +3,7 @@
 #include <opal/config.hpp>
 #include <opal/connection_code.hpp>
 #include <opal/crypto.hpp>
+#include <opal/edge_mouse.hpp>
 #include <opal/input.hpp>
 #include <opal/low_latency_thread.hpp>
 #include <opal/session.hpp>
@@ -42,6 +43,7 @@ void release_held(SessionSupervisor&session,HeldInputState&held,unsigned long&ge
 int sdl_button_to_opal(std::uint8_t button){return button>=1&&button<=3?static_cast<int>(button):0;}
 std::string pointer_command_for(SessionSupervisor&session,int x,int y,int width,int height){return video_pointer_command(x,y,width,height,session.remote_width(),session.remote_height());}
 bool send_pointer(SessionSupervisor&session,int x,int y,int width,int height){auto command=pointer_command_for(session,x,y,width,height);return command.empty()||session.send_input(command);}
+bool send_relative(SessionSupervisor&session,double dx,double dy){auto command=raw_motion_command(dx,dy);return command.empty()||session.send_input(command);}
 bool send_key_event(SessionSupervisor&session,HeldInputState&held,unsigned long&generation,int scancode,bool down,bool&run,bool&release_capture){
     sync_generation(session,held,generation);
     const int code=static_cast<int>(wire_keycode_from_sdl_scancode(scancode));
@@ -81,7 +83,7 @@ private:
 };
 void run_sdl_control(SessionSupervisor&session,VideoPresenter&presenter,ClientClipboardBridge&clipboard){
     prioritize_low_latency_thread();
-    HeldInputState held;unsigned long generation=session.control_generation();bool run=true,captured=true;auto size=presenter.window_size();float mouse_x=0.f,mouse_y=0.f;(void)SDL_GetMouseState(&mouse_x,&mouse_y);int virtual_x=std::clamp(static_cast<int>(std::lround(mouse_x)),0,std::max(0,size.first-1)),virtual_y=std::clamp(static_cast<int>(std::lround(mouse_y)),0,std::max(0,size.second-1));captured=presenter.set_mouse_capture(true);send_pointer(session,virtual_x,virtual_y,size.first,size.second);
+    HeldInputState held;EdgeMouseTracker edge;unsigned long generation=session.control_generation();bool run=true,captured=true;auto size=presenter.window_size();float mouse_x=0.f,mouse_y=0.f;(void)SDL_GetMouseState(&mouse_x,&mouse_y);int virtual_x=std::clamp(static_cast<int>(std::lround(mouse_x)),0,std::max(0,size.first-1)),virtual_y=std::clamp(static_cast<int>(std::lround(mouse_y)),0,std::max(0,size.second-1));edge.reset(virtual_x,virtual_y,size.first,size.second);captured=presenter.set_mouse_capture(true);send_pointer(session,virtual_x,virtual_y,size.first,size.second);
     while(run&&session.running()){
         bool did_work=false,pointer_dirty=false;
         size=presenter.window_size();
@@ -89,20 +91,33 @@ void run_sdl_control(SessionSupervisor&session,VideoPresenter&presenter,ClientCl
         for(int processed=0;processed<kClientEventBurst&&SDL_PollEvent(&event);++processed){
             did_work=true;sync_generation(session,held,generation);bool release_capture=false;
             if(event.type==SDL_EVENT_QUIT||event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED){run=false;break;}
-            if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST){release_held(session,held,generation);captured=false;pointer_dirty=false;(void)presenter.set_mouse_capture(false);continue;}
-            if(event.type==SDL_EVENT_KEY_DOWN||event.type==SDL_EVENT_KEY_UP){if(event.key.repeat)continue;const bool down=event.type==SDL_EVENT_KEY_DOWN;if(!send_key_event(session,held,generation,static_cast<int>(event.key.scancode),down,run,release_capture)&&!session.running())run=false;if(release_capture){release_held(session,held,generation);captured=false;pointer_dirty=false;(void)presenter.set_mouse_capture(false);}continue;}
+            if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST){release_held(session,held,generation);captured=false;pointer_dirty=false;(void)presenter.set_mouse_capture(false);edge.reset(virtual_x,virtual_y,size.first,size.second);continue;}
+            if(event.type==SDL_EVENT_KEY_DOWN||event.type==SDL_EVENT_KEY_UP){if(event.key.repeat)continue;const bool down=event.type==SDL_EVENT_KEY_DOWN;if(!send_key_event(session,held,generation,static_cast<int>(event.key.scancode),down,run,release_capture)&&!session.running())run=false;if(release_capture){release_held(session,held,generation);captured=false;pointer_dirty=false;if(edge.relative())if(SDL_Window*window=SDL_GetMouseFocus())SDL_WarpMouseInWindow(window,static_cast<float>(virtual_x),static_cast<float>(virtual_y));(void)presenter.set_mouse_capture(false);edge.reset(virtual_x,virtual_y,size.first,size.second);}continue;}
             if(size.first<=0||size.second<=0)continue;
-            if(event.type==SDL_EVENT_MOUSE_MOTION){virtual_x=std::clamp(static_cast<int>(std::lround(event.motion.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(event.motion.y)),0,size.second-1);if(captured)pointer_dirty=true;continue;}
-            if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN||event.type==SDL_EVENT_MOUSE_BUTTON_UP){const bool down=event.type==SDL_EVENT_MOUSE_BUTTON_DOWN;if(!captured&&down){virtual_x=std::clamp(static_cast<int>(std::lround(event.button.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(event.button.y)),0,size.second-1);captured=presenter.set_mouse_capture(true);pointer_dirty=false;send_pointer(session,virtual_x,virtual_y,size.first,size.second);continue;}if(!captured)continue;const int button=sdl_button_to_opal(event.button.button);if(button){const bool pointer_ok=send_pointer(session,virtual_x,virtual_y,size.first,size.second);pointer_dirty=false;if(down)held.press_button(button);else held.release_button(button);const bool ok=pointer_ok&&session.send_input("BUTTON "+std::to_string(button)+" "+(down?"1":"0"));if(!ok&&!session.running())run=false;}continue;}
-            if(event.type==SDL_EVENT_MOUSE_WHEEL&&captured){if(pointer_dirty){if(!send_pointer(session,virtual_x,virtual_y,size.first,size.second)&&!session.running())run=false;pointer_dirty=false;}float y=event.wheel.y;if(event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED)y=-y;const int step=y>0.f?1:(y<0.f?-1:0);if(step&&!session.send_input("WHEEL "+std::to_string(step))&&!session.running())run=false;continue;}
+            if(event.type==SDL_EVENT_MOUSE_MOTION){
+                if(!captured){virtual_x=std::clamp(static_cast<int>(std::lround(event.motion.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(event.motion.y)),0,size.second-1);edge.reset(virtual_x,virtual_y,size.first,size.second);continue;}
+                const auto motion=edge.move(event.motion.x,event.motion.y,event.motion.xrel,event.motion.yrel,size.first,size.second);
+                if(!motion.relative){virtual_x=std::clamp(static_cast<int>(std::lround(motion.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(motion.y)),0,size.second-1);pointer_dirty=true;continue;}
+                if(motion.enter_relative){
+                    if(pointer_dirty){if(!send_pointer(session,virtual_x,virtual_y,size.first,size.second)&&!session.running())run=false;pointer_dirty=false;}
+                    SDL_Window*window=SDL_GetWindowFromID(event.motion.windowID);
+                    if(!window||!SDL_SetWindowRelativeMouseMode(window,true)){edge.reset(event.motion.x,event.motion.y,size.first,size.second);virtual_x=std::clamp(static_cast<int>(std::lround(event.motion.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(event.motion.y)),0,size.second-1);pointer_dirty=true;continue;}
+                }
+                virtual_x=std::clamp(static_cast<int>(std::lround(motion.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(motion.y)),0,size.second-1);
+                if(!send_relative(session,motion.dx,motion.dy)&&!session.running())run=false;
+                if(motion.leave_relative){if(SDL_Window*window=SDL_GetWindowFromID(event.motion.windowID)){SDL_WarpMouseInWindow(window,static_cast<float>(motion.x),static_cast<float>(motion.y));if(!SDL_SetWindowRelativeMouseMode(window,false)&&debug_enabled())std::cerr<<"OPAL edge mouse relative release failed: "<<SDL_GetError()<<"\n";}}
+                continue;
+            }
+            if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN||event.type==SDL_EVENT_MOUSE_BUTTON_UP){const bool down=event.type==SDL_EVENT_MOUSE_BUTTON_DOWN;if(!captured&&down){virtual_x=std::clamp(static_cast<int>(std::lround(event.button.x)),0,size.first-1);virtual_y=std::clamp(static_cast<int>(std::lround(event.button.y)),0,size.second-1);edge.reset(virtual_x,virtual_y,size.first,size.second);captured=presenter.set_mouse_capture(true);pointer_dirty=false;send_pointer(session,virtual_x,virtual_y,size.first,size.second);continue;}if(!captured)continue;const int button=sdl_button_to_opal(event.button.button);if(button){const bool pointer_ok=edge.relative()?true:send_pointer(session,virtual_x,virtual_y,size.first,size.second);pointer_dirty=false;if(down)held.press_button(button);else held.release_button(button);const bool ok=pointer_ok&&session.send_input("BUTTON "+std::to_string(button)+" "+(down?"1":"0"));if(!ok&&!session.running())run=false;}continue;}
+            if(event.type==SDL_EVENT_MOUSE_WHEEL&&captured){if(pointer_dirty&&!edge.relative()){if(!send_pointer(session,virtual_x,virtual_y,size.first,size.second)&&!session.running())run=false;pointer_dirty=false;}float y=event.wheel.y;if(event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED)y=-y;const int step=y>0.f?1:(y<0.f?-1:0);if(step&&!session.send_input("WHEEL "+std::to_string(step))&&!session.running())run=false;continue;}
         }
-        if(pointer_dirty&&run&&session.running()){if(!send_pointer(session,virtual_x,virtual_y,size.first,size.second)&&!session.running())run=false;}
+        if(pointer_dirty&&run&&session.running()&&!edge.relative()){if(!send_pointer(session,virtual_x,virtual_y,size.first,size.second)&&!session.running())run=false;}
         if(!run||!session.running())break;
         DecodedVideoFrame frame{};if(session.take_latest_video(frame)){did_work=true;if(!present_frame(session,presenter,frame)){std::cerr<<"OPAL presenter failed error="<<SDL_GetError()<<"\n";break;}}
         clipboard.pump(session);
         if(!did_work)std::this_thread::yield();
     }
-    release_held(session,held,generation);(void)presenter.set_mouse_capture(false);
+    release_held(session,held,generation);if(edge.relative())if(SDL_Window*window=SDL_GetMouseFocus())SDL_WarpMouseInWindow(window,static_cast<float>(virtual_x),static_cast<float>(virtual_y));(void)presenter.set_mouse_capture(false);
 }
 int error_code_for(const std::string&message){if(message.find("identity")!=std::string::npos)return 3;if(message.find("authentication")!=std::string::npos||message.find("pairing")!=std::string::npos)return 4;if(message.find("Tailscale")!=std::string::npos||message.find("tailnet")!=std::string::npos)return 2;return 1;}
 std::string saved_connection_id(const Ini&hosts,const std::string&name){auto id=hosts.get(name,"connection_id");if(id.empty())id=hosts.get(name,"rendezvous_id");return id;}
