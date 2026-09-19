@@ -245,6 +245,9 @@ int main(int argc, char** argv)
     const std::string action = argv[1];
     if (action == "--internal-host-daemon" && argc == 2) return opal::host_daemon();
     if (action == "--internal-bridge-run" && argc == 2) return opal::run_bridge(47992);
+#if defined(__linux__)
+    if (action == "--internal-wake-config" && argc == 4) return opal::configure_linux_wake_admin(argv[2], argv[3]);
+#endif
     if (action == "--internal-host-setup" && argc == 2) return opal::host_setup();
     if (action == "--internal-host-run" && argc == 2) return opal::host_run();
     if (action == "--internal-connect" && argc >= 3 && argc <= 4)
